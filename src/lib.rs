@@ -5,6 +5,7 @@ pub mod cache;
 pub mod cli;
 pub mod crates;
 pub mod date;
+pub mod go;
 pub mod http;
 pub mod lockfile;
 pub mod model;

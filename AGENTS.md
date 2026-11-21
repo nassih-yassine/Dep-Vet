@@ -29,7 +29,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 188 unit + 49 end-to-end tests
+cargo test --locked                      # 205 unit + 55 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -56,6 +56,7 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 | `src/registry.rs` | npm packument fetch + parsing, download counts, repo URL normalization |
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
 | `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |
+| `src/go.rs` | deps.dev Go module index, versions, publish times, deprecation |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -95,6 +96,12 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **Go can check almost nothing structural.** No install hooks, owner list,
+  downloads, or repository in the module index: `Profile::GO` disables all four
+  and the report says `not checked`. Go advisories still work through OSV.
+- **deps.dev wants the module path case-preserved and slash-encoded** as one
+  segment (`github.com%2FBurntSushi%2Ftoml`). The proxy's `!`-escaping is for
+  proxy.golang.org only; do not use it here.
 - **crates.io execution is not checkable.** The API has no file list, so
   `build.rs` cannot be detected; `Profile::CRATES` disables execution and the
   report says `not checked`. Do not infer build scripts from metadata.
@@ -185,6 +192,6 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Go, tree-wide advisory lookups, and non-npm lockfiles (PyPI, Cargo, yarn,
+Tree-wide advisory lookups, and non-npm lockfiles (PyPI, Cargo, Go, yarn,
 pnpm, bun). Roadmap only: do not describe these as existing in
 code, README, or help text.

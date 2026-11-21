@@ -343,6 +343,49 @@ pub const POPULAR_CRATES: &[&str] = &[
     "zeroize",
 ];
 
+/// Provisional Go module seed. Full module paths, lowercase so the comparison
+/// stays case-insensitive; pkg.go.dev links are case-insensitive redirects.
+pub const POPULAR_GO: &[&str] = &[
+    "github.com/aws/aws-sdk-go-v2",
+    "github.com/docker/docker",
+    "github.com/gin-gonic/gin",
+    "github.com/go-chi/chi/v5",
+    "github.com/go-sql-driver/mysql",
+    "github.com/gofiber/fiber/v2",
+    "github.com/golang-jwt/jwt/v5",
+    "github.com/golang/protobuf",
+    "github.com/google/uuid",
+    "github.com/gorilla/mux",
+    "github.com/hashicorp/terraform",
+    "github.com/hashicorp/vault",
+    "github.com/jackc/pgx/v5",
+    "github.com/jmoiron/sqlx",
+    "github.com/labstack/echo/v4",
+    "github.com/lib/pq",
+    "github.com/mattn/go-sqlite3",
+    "github.com/prometheus/client_golang",
+    "github.com/redis/go-redis/v9",
+    "github.com/rs/zerolog",
+    "github.com/shopspring/decimal",
+    "github.com/sirupsen/logrus",
+    "github.com/spf13/cobra",
+    "github.com/spf13/pflag",
+    "github.com/spf13/viper",
+    "github.com/stretchr/testify",
+    "github.com/urfave/cli/v2",
+    "go.uber.org/atomic",
+    "go.uber.org/zap",
+    "golang.org/x/crypto",
+    "golang.org/x/net",
+    "golang.org/x/sync",
+    "golang.org/x/text",
+    "google.golang.org/grpc",
+    "google.golang.org/protobuf",
+    "k8s.io/api",
+    "k8s.io/client-go",
+    "sigs.k8s.io/controller-runtime",
+];
+
 /// A popular name that `name` is suspiciously close to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suspect<'a> {
@@ -482,6 +525,21 @@ mod tests {
         assert_eq!(sorted.len(), POPULAR_CRATES.len(), "duplicate crate names");
         for name in ["serde", "tokio", "clap", "rand"] {
             assert!(POPULAR_CRATES.contains(&name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn go_seed_is_clean() {
+        let mut sorted = POPULAR_GO.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), POPULAR_GO.len(), "duplicate Go modules");
+        for name in [
+            "github.com/gin-gonic/gin",
+            "golang.org/x/net",
+            "k8s.io/client-go",
+        ] {
+            assert!(POPULAR_GO.contains(&name), "missing {name}");
         }
     }
 

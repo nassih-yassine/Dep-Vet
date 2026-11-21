@@ -37,6 +37,30 @@ impl PackageSpec {
         Ok(Self { name, version })
     }
 
+    /// Go module reference: `module/path` or `module/path@v1.2.3`. Module paths
+    /// are case-sensitive; uppercase is preserved for the API but folded for
+    /// typosquat comparison.
+    pub fn parse_go(input: &str) -> Result<Self, SpecError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(SpecError::Empty);
+        }
+        let (name, version) = match trimmed.split_once('@') {
+            Some((name, version)) => (name, Some(version)),
+            None => (trimmed, None),
+        };
+        validate_go_module(name)?;
+        let version = match version {
+            Some(version) => Some(validate_version(version)?),
+            None => None,
+        };
+        // npm's name rules forbid slashes, so build directly after validation.
+        Ok(Self {
+            name: name.to_string(),
+            version,
+        })
+    }
+
     /// crates.io reference: `name` or `name@1.2.3`. Crate names are ASCII
     /// letters, digits, `-` and `_`.
     pub fn parse_crates(input: &str) -> Result<Self, SpecError> {
@@ -128,6 +152,25 @@ fn validate_name(name: &str) -> Result<(), SpecError> {
     Ok(())
 }
 
+fn validate_go_module(name: &str) -> Result<(), SpecError> {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '~' | '-' | '/');
+    if name.is_empty() {
+        return Err(SpecError::Empty);
+    }
+    if name.len() > 300 {
+        return Err(SpecError::TooLong);
+    }
+    let first_segment = name.split('/').next().unwrap_or_default();
+    let has_domain = first_segment.contains('.');
+    let bad_segments = name
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..");
+    if !has_domain || bad_segments || !name.chars().all(allowed) {
+        return Err(SpecError::InvalidName(name.to_string()));
+    }
+    Ok(())
+}
+
 fn validate_pypi_name(name: &str) -> Result<(), SpecError> {
     let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
     if name.is_empty() {
@@ -188,6 +231,7 @@ pub enum Ecosystem {
     Pypi,
     #[serde(rename = "crates")]
     CratesIo,
+    Go,
 }
 
 impl Ecosystem {
@@ -196,6 +240,7 @@ impl Ecosystem {
             Self::Npm => "npm",
             Self::Pypi => "pypi",
             Self::CratesIo => "crates",
+            Self::Go => "go",
         }
     }
 
@@ -205,6 +250,7 @@ impl Ecosystem {
             Self::Npm => "npm",
             Self::Pypi => "PyPI",
             Self::CratesIo => "crates.io",
+            Self::Go => "Go",
         }
     }
 }
@@ -221,6 +267,7 @@ impl std::fmt::Display for Ecosystem {
 pub struct Profile {
     pub execution: bool,
     pub maintainers: bool,
+    pub repository: bool,
     pub downloads: bool,
     pub deprecation: bool,
     pub typosquat: bool,
@@ -231,6 +278,7 @@ impl Profile {
     pub const NPM: Self = Self {
         execution: true,
         maintainers: true,
+        repository: true,
         downloads: true,
         deprecation: true,
         typosquat: true,
@@ -242,6 +290,7 @@ impl Profile {
     pub const PYPI: Self = Self {
         execution: true,
         maintainers: false,
+        repository: true,
         downloads: false,
         deprecation: true,
         typosquat: true,
@@ -253,6 +302,19 @@ impl Profile {
     pub const CRATES: Self = Self {
         execution: false,
         maintainers: true,
+        repository: true,
+        downloads: false,
+        deprecation: true,
+        typosquat: true,
+        freshness: true,
+    };
+
+    /// Go modules carry no install hooks, owner list, download figure, or
+    /// repository link in the module index.
+    pub const GO: Self = Self {
+        execution: false,
+        maintainers: false,
+        repository: false,
         downloads: false,
         deprecation: true,
         typosquat: true,
@@ -266,6 +328,9 @@ impl Profile {
         }
         if !self.maintainers {
             missing.push("maintainers");
+        }
+        if !self.repository {
+            missing.push("repository");
         }
         if !self.downloads {
             missing.push("downloads");
@@ -563,6 +628,53 @@ mod tests {
         assert_eq!(Ecosystem::Npm.osv_name(), "npm");
         assert_eq!(Ecosystem::Pypi.osv_name(), "PyPI");
         assert_eq!(Ecosystem::CratesIo.osv_name(), "crates.io");
+        assert_eq!(Ecosystem::Go.osv_name(), "Go");
+    }
+
+    #[test]
+    fn parses_go_modules_with_versions_and_suffixes() {
+        assert_eq!(
+            PackageSpec::parse_go("github.com/gin-gonic/gin").unwrap(),
+            spec("github.com/gin-gonic/gin", None)
+        );
+        assert_eq!(
+            PackageSpec::parse_go("github.com/gin-gonic/gin@v1.9.1").unwrap(),
+            spec("github.com/gin-gonic/gin", Some("v1.9.1"))
+        );
+        assert_eq!(
+            PackageSpec::parse_go("github.com/user/repo/v2@v2.0.0").unwrap(),
+            spec("github.com/user/repo/v2", Some("v2.0.0"))
+        );
+        assert_eq!(
+            PackageSpec::parse_go("github.com/user/repo@v0.0.0-20240101120000-abcdef123456")
+                .unwrap()
+                .version
+                .as_deref(),
+            Some("v0.0.0-20240101120000-abcdef123456")
+        );
+        assert_eq!(
+            PackageSpec::parse_go("github.com/BurntSushi/toml")
+                .unwrap()
+                .name,
+            "github.com/BurntSushi/toml"
+        );
+    }
+
+    #[test]
+    fn rejects_go_modules_that_could_escape_the_url() {
+        for input in [
+            "gin",
+            "foo/bar",
+            "../etc/passwd",
+            "github.com/../evil",
+            "github.com/user/repo/",
+            "github.com/user//repo",
+            "github.com/user/re po",
+            "github.com/user/repo?x=1",
+            "github.com/user/repo@",
+        ] {
+            assert!(PackageSpec::parse_go(input).is_err(), "accepted {input:?}");
+        }
     }
 
     #[test]
