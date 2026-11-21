@@ -88,6 +88,11 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   "advisory without a summary" for every real advisory.
 - **Advisory failure is an INFO finding**, not silence and not exit 3. "We
   could not check" must never read as "nothing found".
+- **Typosquat candidates = seed ∪ base-lockfile names.** `closest()` takes the
+  caller's local list; in `lock`, pass base lockfile names so a new package one
+  edit from something already installed is flagged with "already in your
+  lockfile". A name that is itself in the seed is never flagged for resembling
+  a local one (`preact` vs `react`) — keep that guard and its test.
 - **Lockfile audits run 4 packages at a time.** `MAX_CONCURRENT_AUDITS` in
   `main.rs` bounds the burst; output order still follows the sorted diff, and
   per-package failures stay in `errors`.

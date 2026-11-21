@@ -162,46 +162,61 @@ pub struct Suspect<'a> {
     pub distance: usize,
     /// True when the names differ only by lookalike characters (`0`/`o`, `rn`/`m`).
     pub homoglyph: bool,
+    /// True when the candidate came from the caller's lockfile, not the seed.
+    pub local: bool,
 }
 
 /// Finds the closest popular name, ignoring exact matches.
 ///
 /// A real popular package is never a suspect of itself, so an exact match
 /// returns `None` instead of a distance-0 hit.
-pub fn closest<'a>(name: &str, popular: &'a [&'a str]) -> Option<Suspect<'a>> {
+/// Finds the closest name among the seed and the caller's own dependencies.
+///
+/// `local` is the set of package names already trusted by the caller (the
+/// base lockfile). A package that is itself well known is never flagged for
+/// resembling something nearby: `preact` is not a typo of `react`.
+pub fn closest<'a>(name: &str, popular: &'a [&'a str], local: &'a [String]) -> Option<Suspect<'a>> {
     let needle = name.to_ascii_lowercase();
     // Names this short sit within two edits of half the registry; reporting
     // them is pure noise.
     if needle.chars().count() < MIN_NAME_LEN {
         return None;
     }
-    if popular.iter().any(|candidate| *candidate == needle) {
+    let known = popular.iter().any(|candidate| *candidate == needle)
+        || local
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&needle));
+    if known {
         return None;
     }
 
     let normalized = normalize(name);
     popular
         .iter()
-        .filter(|candidate| {
-            needle.len() >= MIN_NAME_LEN && candidate.chars().count() >= MIN_NAME_LEN
-        })
-        .map(|candidate| {
-            let homoglyph = normalize(candidate) == normalized && *candidate != needle;
+        .map(|candidate| (*candidate, false))
+        .chain(local.iter().map(|candidate| (candidate.as_str(), true)))
+        .filter(|(candidate, _)| candidate.chars().count() >= MIN_NAME_LEN)
+        .map(|(candidate, local)| {
+            let folded = candidate.to_ascii_lowercase();
+            let homoglyph = normalize(candidate) == normalized && folded != needle;
             let distance = if homoglyph {
                 0
             } else {
-                levenshtein(&needle, candidate)
+                levenshtein(&needle, &folded)
             };
             Suspect {
                 candidate,
                 distance,
                 homoglyph,
+                local,
             }
         })
         .filter(|suspect| suspect.distance <= 2)
         .min_by(|a, b| {
             a.distance
                 .cmp(&b.distance)
+                // On a tie, the dependency you already trust is more actionable.
+                .then_with(|| b.local.cmp(&a.local))
                 .then_with(|| a.candidate.cmp(b.candidate))
         })
 }
@@ -273,13 +288,13 @@ mod tests {
 
     #[test]
     fn exact_popular_name_is_not_a_suspect() {
-        assert_eq!(closest("express", POPULAR), None);
-        assert_eq!(closest("Express", POPULAR), None);
+        assert_eq!(closest("express", POPULAR, &[]), None);
+        assert_eq!(closest("Express", POPULAR, &[]), None);
     }
 
     #[test]
     fn detects_single_edit_typosquat() {
-        let suspect = closest("expres", POPULAR).unwrap();
+        let suspect = closest("expres", POPULAR, &[]).unwrap();
         assert_eq!(suspect.candidate, "express");
         assert_eq!(suspect.distance, 1);
         assert!(!suspect.homoglyph);
@@ -287,14 +302,14 @@ mod tests {
 
     #[test]
     fn detects_two_edit_typosquat() {
-        let suspect = closest("expresss", POPULAR).unwrap();
+        let suspect = closest("expresss", POPULAR, &[]).unwrap();
         assert_eq!(suspect.candidate, "express");
         assert_eq!(suspect.distance, 1);
     }
 
     #[test]
     fn detects_digit_homoglyph() {
-        let suspect = closest("1odash", POPULAR).unwrap();
+        let suspect = closest("1odash", POPULAR, &[]).unwrap();
         assert_eq!(suspect.candidate, "lodash");
         assert!(suspect.homoglyph);
         assert_eq!(suspect.distance, 0);
@@ -303,33 +318,55 @@ mod tests {
     #[test]
     fn detects_multi_char_homoglyph() {
         // "rn" folds to "m", so "mornent" normalizes to "moment".
-        let suspect = closest("mornent", POPULAR).unwrap();
+        let suspect = closest("mornent", POPULAR, &[]).unwrap();
         assert_eq!(suspect.candidate, "moment");
         assert!(suspect.homoglyph);
         assert_eq!(suspect.distance, 0);
     }
 
     #[test]
+    fn finds_a_typosquat_of_a_local_dependency() {
+        let local = vec!["cross-env".to_string()];
+        let suspect = closest("crossenv", POPULAR, &local).unwrap();
+        assert_eq!(suspect.candidate, "cross-env");
+        assert!(suspect.local);
+        assert_eq!(suspect.distance, 1);
+    }
+
+    #[test]
+    fn local_dependency_matching_is_case_insensitive() {
+        let local = vec!["Cross-Env".to_string()];
+        assert_eq!(closest("cross-env", POPULAR, &local), None);
+    }
+
+    #[test]
+    fn a_known_package_is_not_a_typo_of_a_similar_local_one() {
+        // preact is in the seed; react in the lockfile must not make it a hit.
+        let local = vec!["react".to_string()];
+        assert_eq!(closest("preact", POPULAR, &local), None);
+    }
+
+    #[test]
     fn short_names_are_not_flagged() {
-        assert_eq!(closest("ms", POPULAR), None);
-        assert_eq!(closest("tmpl", POPULAR), None);
+        assert_eq!(closest("ms", POPULAR, &[]), None);
+        assert_eq!(closest("tmpl", POPULAR, &[]), None);
     }
 
     #[test]
     fn unrelated_name_has_no_suspect() {
-        assert_eq!(closest("zzzzzzzzzzzzzzzz", POPULAR), None);
-        assert_eq!(closest("dep-vet", POPULAR), None);
+        assert_eq!(closest("zzzzzzzzzzzzzzzz", POPULAR, &[]), None);
+        assert_eq!(closest("dep-vet", POPULAR, &[]), None);
     }
 
     #[test]
     fn prefers_the_closest_candidate() {
-        let suspect = closest("reactx", POPULAR).unwrap();
+        let suspect = closest("reactx", POPULAR, &[]).unwrap();
         assert_eq!(suspect.candidate, "react");
     }
 
     #[test]
     fn empty_name_is_not_a_suspect() {
-        assert_eq!(closest("", POPULAR), None);
+        assert_eq!(closest("", POPULAR, &[]), None);
     }
 
     #[test]

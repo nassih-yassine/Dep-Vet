@@ -62,7 +62,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     match &cli.command {
         Command::Npm { package, json } => {
             let spec = PackageSpec::parse(package)?;
-            let report = auditor.audit(&spec, now_seconds())?;
+            let report = auditor.audit(&spec, &[], now_seconds())?;
 
             let output = if *json {
                 render_json(&report)?
@@ -92,6 +92,12 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             let current = lockfile::read(path)?;
             let base_packages = lockfile::at_ref(path, base)?;
             let added = lockfile::added(&current, &base_packages);
+            // What the user already trusts: typosquats of these names matter
+            // more than distance to a seed list.
+            let local: Vec<String> = base_packages
+                .iter()
+                .map(|package| package.name.to_ascii_lowercase())
+                .collect();
 
             let now = now_seconds();
             let mut new_packages = Vec::new();
@@ -99,6 +105,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
 
             // Borrow for the worker closures; `move` then captures a Copy reference.
             let auditor = &auditor;
+            let local = &local;
             for batch in added.chunks(MAX_CONCURRENT_AUDITS) {
                 let outcomes: Vec<Result<PackageReport, LockFetchError>> =
                     std::thread::scope(|scope| {
@@ -118,9 +125,11 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                                             package: package.spec(),
                                             message: error.to_string(),
                                         })?;
-                                        auditor.audit(&spec, now).map_err(|error| LockFetchError {
-                                            package: package.spec(),
-                                            message: error.to_string(),
+                                        auditor.audit(&spec, local, now).map_err(|error| {
+                                            LockFetchError {
+                                                package: package.spec(),
+                                                message: error.to_string(),
+                                            }
                                         })
                                     }),
                                 )
@@ -178,13 +187,24 @@ impl Auditor {
         }
     }
 
-    fn audit(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, RegistryError> {
+    fn audit(
+        &self,
+        spec: &PackageSpec,
+        local: &[String],
+        now: i64,
+    ) -> Result<PackageReport, RegistryError> {
         let meta = self.registry.fetch(spec)?;
         let downloads = self.registry.weekly_downloads(&meta.name);
         // Advisories are best effort: a failure is reported as an INFO
         // finding, never as "no known vulnerabilities".
         let advisories = self.osv.query(&meta.name, &meta.version).ok();
-        Ok(signals::report(meta, downloads, advisories.as_ref(), now))
+        Ok(signals::report(
+            meta,
+            downloads,
+            advisories.as_ref(),
+            local,
+            now,
+        ))
     }
 }
 

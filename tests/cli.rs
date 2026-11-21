@@ -1051,3 +1051,61 @@ fn lock_audits_all_new_packages_in_sorted_order() {
         );
     }
 }
+
+#[test]
+fn lock_flags_a_typosquat_of_an_existing_dependency() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("express", "5.1.0"), ("cross-env", "7.0.3")]),
+    );
+    repo.commit("base");
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[
+            ("express", "5.1.0"),
+            ("cross-env", "7.0.3"),
+            ("crossenv", "0.0.2-security"),
+        ]),
+    );
+
+    let suspicious = PackageFixture {
+        version: "0.0.2-security",
+        ..PackageFixture::clean("crossenv")
+    };
+    let registry = registry_with(&[suspicious], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "name is close to a package you already use",
+        ))
+        .stdout(predicate::str::contains("already in your lockfile"));
+}
+
+#[test]
+fn lock_does_not_flag_a_known_package_similar_to_an_installed_one() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("react", "19.0.0")]));
+    repo.commit("base");
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("react", "19.0.0"), ("preact", "10.25.0")]),
+    );
+
+    let preact = PackageFixture {
+        version: "10.25.0",
+        ..PackageFixture::clean("preact")
+    };
+    let registry = registry_with(&[preact], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("typosquat").not());
+}
