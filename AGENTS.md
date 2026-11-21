@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 291 unit + 89 end-to-end tests
+cargo test --locked                      # 301 unit + 93 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -81,6 +81,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/jsr.rs` | JSR meta/package APIs, repository, archived flag |
 | `src/rubygems.rs` | RubyGems versions, timestamps, source URL, yank flag |
 | `src/nuget.rs` | NuGet flat container, registration pages, times, deprecation |
+| `src/maven.rs` | Maven Central search: versions, timestamps |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -121,6 +122,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **Maven has no lockfile.** `dep-vet maven group:artifact[@version]` audits a
+  single coordinate via the Central search API (timestamps are milliseconds).
+  No owners, downloads, repository, or deprecation exist; `Profile::MAVEN`
+  disables all four. There is no tree to audit until a Maven lockfile format
+  ships, so do not claim one.
 - **NuGet basics.** IDs are case-insensitive, so URLs lowercase them but the
   canonical name keeps the caller's casing for OSV. Registration pages may be
   inline or linked (`@id`); both are handled and best-effort. `1900-01-01` is
@@ -240,6 +246,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   every Berry audit exits 3.
 - **`.depvet.toml` denies unknown keys.** A typo like `[[allows]]` must fail the
   run, not silently allow nothing.
+- **NuGet and Maven names keep the caller's casing.** URLs lowercase NuGet ids;
+  OSV matches the published casing (or `group:artifact`), so lowercasing the
+  stored name broke advisory lookups once.
 - **Aliases resolve to the real package.** For `"x": "npm:real-pkg@1"`, npm
   keys the path `node_modules/x` but stores `"name": "real-pkg"` in the entry.
   Use `Entry::name` first and fall back to the path segment; auditing the alias
@@ -296,5 +305,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Other ecosystems (Maven) and remaining lockfile formats. Roadmap only: do not
-describe these as existing in code, README, or help text.
+Remaining ecosystems and lockfile formats. Roadmap only: do not describe these
+as existing in code, README, or help text.

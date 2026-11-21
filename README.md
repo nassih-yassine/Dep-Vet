@@ -28,7 +28,7 @@
 ---
 
 `npm install` runs code, and so does a Python sdist build. `dep-vet` reads
-public registry metadata and OSV advisories for **npm, PyPI, crates.io, Go modules, JSR, RubyGems, and NuGet**, then tells you
+public registry metadata and OSV advisories for **npm, PyPI, crates.io, Go modules, JSR, RubyGems, NuGet, and Maven**, then tells you
 what a package will do at that moment: whether it runs install-time code, how
 old it is, who published this version, whether its name is one typo away from a
 package you trust, what vulnerabilities apply to this exact version, and whether
@@ -411,15 +411,17 @@ clean.
 
 ## Scope and limits
 
-- **npm, PyPI, crates.io, Go, JSR, RubyGems, and NuGet**, for both `audit` and
-  `lock`, including
+- **npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, and Maven**, for both
+  `audit` and `lock`, including
   `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`, `poetry.lock`, and
   `uv.lock`, `Gemfile.lock`, `packages.lock.json`. JSR has no advisory source,
   so JSR reports say advisory coverage is unavailable. RubyGems has no owner
   list, weekly downloads, or install-time file data; yanked versions disappear
   from its API, so asking for one reports "not found" rather than "yanked".
   NuGet exposes no owners, downloads, repository, or build-time file data; its
-  1900-01-01 "unknown" publish dates are ignored.
+  1900-01-01 "unknown" publish dates are ignored. Maven Central has no owners,
+  downloads, repository, or deprecation concept, and no standard lockfile, so
+  `dep-vet maven` only vets a single coordinate.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the
@@ -440,7 +442,7 @@ clean.
   skipped. Lockfile audits run 4 packages at a time.
 - The npm popular-name list is download-ranked; a weekly workflow runs
   `scripts/refresh-popular-npm.py`, opens a bot PR, and auto-merges after CI.
-  PyPI, crates.io, Go, JSR, RubyGems, and NuGet seeds are curated.
+  PyPI, crates.io, Go, JSR, RubyGems, NuGet, and Maven seeds are curated.
 
 ## Development
 
@@ -503,7 +505,7 @@ did.
 
 ## Roadmap
 
-1. Other ecosystems (Maven) and remaining lockfile formats.
+1. Remaining ecosystems and lockfile formats (e.g. Gradle, Composer).
 
 ## License
 

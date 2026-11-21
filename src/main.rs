@@ -10,6 +10,7 @@ use dep_vet::go::{GoClient, GoError};
 use dep_vet::http::HttpClient;
 use dep_vet::jsr::{JsrClient, JsrError};
 use dep_vet::lockfile;
+use dep_vet::maven::{MavenClient, MavenError};
 use dep_vet::model::Ecosystem;
 use dep_vet::model::{
     AuditReport, LockFetchError, LockReport, PackageReport, PackageSpec, Profile,
@@ -78,6 +79,13 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
             let mut report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            allowlist.apply(&mut report);
+            emit_package(cli, *json, &report)
+        }
+
+        Command::Maven { package, json } => {
+            let spec = PackageSpec::parse_maven(package)?;
+            let mut report = auditor.audit_maven(&spec, now_seconds())?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
@@ -232,6 +240,7 @@ struct Auditor {
     jsr: JsrClient,
     gems: GemClient,
     nuget: NugetClient,
+    maven: MavenClient,
     osv: OsvClient,
 }
 
@@ -245,6 +254,7 @@ impl Auditor {
             jsr: JsrClient::from_env(Arc::clone(http)),
             gems: GemClient::from_env(Arc::clone(http)),
             nuget: NugetClient::from_env(Arc::clone(http)),
+            maven: MavenClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
         }
     }
@@ -270,6 +280,23 @@ impl Auditor {
             advisories.as_ref(),
             local,
             Profile::NPM,
+            now,
+        ))
+    }
+
+    fn audit_maven(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, MavenError> {
+        let meta = self.maven.fetch(spec)?;
+        let advisories = self
+            .osv
+            .query(Ecosystem::Maven, &meta.name, &meta.version)
+            .ok();
+        Ok(signals::report(
+            meta,
+            Ecosystem::Maven,
+            None,
+            advisories.as_ref(),
+            &[],
+            Profile::MAVEN,
             now,
         ))
     }
@@ -433,6 +460,7 @@ fn spec_for(
         Ecosystem::Jsr => PackageSpec::parse_jsr(&format!("{name}@{version}")),
         Ecosystem::RubyGems => PackageSpec::parse_gem(&format!("{name}@{version}")),
         Ecosystem::NuGet => PackageSpec::parse_nuget(&format!("{name}@{version}")),
+        Ecosystem::Maven => PackageSpec::parse_maven(&format!("{name}@{version}")),
     }
 }
 
@@ -482,6 +510,9 @@ fn audit_packages(
                                 }
                                 Ecosystem::NuGet => {
                                     auditor.audit_nuget(&spec, now).map_err(|e| e.to_string())
+                                }
+                                Ecosystem::Maven => {
+                                    auditor.audit_maven(&spec, now).map_err(|e| e.to_string())
                                 }
                             };
                             audited.map_err(|message| LockFetchError {

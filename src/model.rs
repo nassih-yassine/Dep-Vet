@@ -19,7 +19,7 @@ pub enum SpecError {
     Empty,
     #[error("package name is longer than 214 characters")]
     TooLong,
-    #[error("package name contains characters npm does not allow: {0}")]
+    #[error("package name contains characters the registry does not allow: {0}")]
     InvalidName(String),
     #[error("version or tag contains characters dep-vet will not send to the registry: {0}")]
     InvalidVersion(String),
@@ -35,6 +35,37 @@ impl PackageSpec {
             .map(|version| validate_version(&version))
             .transpose()?;
         Ok(Self { name, version })
+    }
+
+    /// Maven reference: `group:artifact` or `group:artifact@1.2.3`.
+    pub fn parse_maven(input: &str) -> Result<Self, SpecError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(SpecError::Empty);
+        }
+        let (coordinates, version) = match trimmed.split_once('@') {
+            Some((coordinates, version)) => (coordinates, Some(version)),
+            None => (trimmed, None),
+        };
+        let (group, artifact) = coordinates.split_once(':').ok_or_else(|| {
+            SpecError::InvalidName(format!("{coordinates} (expected group:artifact)"))
+        })?;
+        let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+        if group.is_empty()
+            || artifact.is_empty()
+            || !group.chars().all(allowed)
+            || !artifact.chars().all(allowed)
+        {
+            return Err(SpecError::InvalidName(coordinates.to_string()));
+        }
+        let version = match version {
+            Some(version) => Some(validate_version(version)?),
+            None => None,
+        };
+        Ok(Self {
+            name: format!("{group}:{artifact}"),
+            version,
+        })
     }
 
     /// NuGet reference: `Id` or `Id@1.2.3`. IDs are case-insensitive.
@@ -277,6 +308,7 @@ pub enum Ecosystem {
     RubyGems,
     #[serde(rename = "nuget")]
     NuGet,
+    Maven,
 }
 
 impl Ecosystem {
@@ -289,6 +321,7 @@ impl Ecosystem {
             Self::Jsr => "jsr",
             Self::RubyGems => "gem",
             Self::NuGet => "nuget",
+            Self::Maven => "maven",
         }
     }
 
@@ -303,6 +336,7 @@ impl Ecosystem {
             Self::Jsr => "JSR",
             Self::RubyGems => "RubyGems",
             Self::NuGet => "NuGet",
+            Self::Maven => "Maven",
         }
     }
 }
@@ -318,6 +352,10 @@ impl Ecosystem {
             Self::Jsr => format!("https://jsr.io/{name}/{version}"),
             Self::RubyGems => format!("https://rubygems.org/gems/{name}/{version}"),
             Self::NuGet => format!("https://www.nuget.org/packages/{name}/{version}"),
+            Self::Maven => {
+                let (group, artifact) = name.split_once(':').unwrap_or((name, ""));
+                format!("https://search.maven.org/artifact/{group}/{artifact}/{version}/jar")
+            }
         }
     }
 
@@ -331,6 +369,10 @@ impl Ecosystem {
             Self::Jsr => format!("https://jsr.io/{name}"),
             Self::RubyGems => format!("https://rubygems.org/gems/{name}"),
             Self::NuGet => format!("https://www.nuget.org/packages/{name}"),
+            Self::Maven => {
+                let (group, artifact) = name.split_once(':').unwrap_or((name, ""));
+                format!("https://search.maven.org/artifact/{group}/{artifact}")
+            }
         }
     }
 }
@@ -441,6 +483,19 @@ impl Profile {
         repository: false,
         downloads: false,
         deprecation: true,
+        typosquat: true,
+        freshness: true,
+    };
+
+    /// Maven Central exposes no owners, download figure, source repository, or
+    /// build-time data, and has no deprecation concept.
+    pub const MAVEN: Self = Self {
+        execution: false,
+        maintainers: false,
+        advisories: true,
+        repository: false,
+        downloads: false,
+        deprecation: false,
         typosquat: true,
         freshness: true,
     };
@@ -792,6 +847,24 @@ mod tests {
         assert_eq!(Ecosystem::Go.osv_name(), "Go");
         assert_eq!(Ecosystem::RubyGems.osv_name(), "RubyGems");
         assert_eq!(Ecosystem::NuGet.osv_name(), "NuGet");
+    }
+
+    #[test]
+    fn parses_maven_coordinates() {
+        assert_eq!(
+            PackageSpec::parse_maven("org.slf4j:slf4j-api").unwrap(),
+            spec("org.slf4j:slf4j-api", None)
+        );
+        assert_eq!(
+            PackageSpec::parse_maven("org.slf4j:slf4j-api@2.0.17").unwrap(),
+            spec("org.slf4j:slf4j-api", Some("2.0.17"))
+        );
+        for input in ["slf4j-api", "org.slf4j/thing", "a:b@", "@/x", "a b:c"] {
+            assert!(
+                PackageSpec::parse_maven(input).is_err(),
+                "accepted {input:?}"
+            );
+        }
     }
 
     #[test]
