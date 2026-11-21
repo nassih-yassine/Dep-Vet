@@ -253,6 +253,57 @@ struct TreeView<'a> {
     color: bool,
 }
 
+/// One actionable block for a whole tree, worst verdict first. Clean packages
+/// are absent, so this never reads as an "out of date" list.
+fn render_tree_advice(packages: &[PackageReport]) -> Option<String> {
+    let mut advised: Vec<&PackageReport> = packages
+        .iter()
+        .filter(|package| !package.upgrades.is_empty())
+        .collect();
+    if advised.is_empty() {
+        return None;
+    }
+    advised.sort_by(|left, right| {
+        right
+            .verdict()
+            .cmp(&left.verdict())
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let mut out = String::from("\n  what to do\n\n");
+    for package in advised {
+        for upgrade in &package.upgrades {
+            let subject = format!("{} {}", package.name, package.version);
+            let action = if let Some(replacement) = &upgrade.replace_with {
+                format!("→ {replacement}")
+            } else if let Some(fixed) = upgrade.fixed.first() {
+                let mut line = format!("→ {fixed}");
+                if !upgrade.fixes.is_empty() {
+                    let shown: Vec<&str> =
+                        upgrade.fixes.iter().take(3).map(String::as_str).collect();
+                    let extra = upgrade.fixes.len().saturating_sub(shown.len());
+                    line.push_str(&format!("   fixes {}", shown.join(", ")));
+                    if extra > 0 {
+                        line.push_str(&format!(" (+{extra})"));
+                    }
+                }
+                if leading_number(fixed) != leading_number(&package.version) {
+                    line.push_str("   (major jump, may break)");
+                }
+                line
+            } else if upgrade.fix_unknown {
+                "→ fix unknown".to_string()
+            } else if let Some(newest) = &upgrade.newest {
+                format!("no fixed version published; newest {newest}")
+            } else {
+                "no fixed version published".to_string()
+            };
+            out.push_str(&format!("    {subject:<40} {action}\n"));
+        }
+    }
+    Some(out)
+}
+
 fn render_tree(view: TreeView<'_>) -> String {
     let mut out = format!("{}\n\n", view.header);
 
@@ -302,6 +353,10 @@ fn render_tree(view: TreeView<'_>) -> String {
             out.push_str(&format!("    {}: {}\n", error.package, error.message));
         }
         out.push_str("  this report is incomplete\n");
+    }
+
+    if let Some(block) = render_tree_advice(view.packages) {
+        out.push_str(&block);
     }
 
     out.push_str(&format!(
@@ -670,6 +725,44 @@ mod tests {
         assert_eq!(value["errors"][0]["package"], "ghost@1.0.0");
         assert_eq!(value["exit_code"], 3);
         assert!(render_audit_human(&audit, false).contains("incomplete"));
+    }
+
+    #[test]
+    fn the_tree_block_lists_worst_first_and_skips_clean_packages() {
+        let mut lock = lock_report();
+        let mut high = report(vec![finding(Severity::High)]);
+        high.name = "log4j-core".to_string();
+        high.version = "2.14.1".to_string();
+        high.upgrades = vec![upgrade(&["2.17.1"], None)];
+        let mut warn = report(vec![finding(Severity::Warn)]);
+        warn.name = "crossenv".to_string();
+        warn.version = "0.0.2-security".to_string();
+        warn.upgrades = vec![crate::model::Upgrade {
+            fixed: Vec::new(),
+            fix_unknown: false,
+            newest: None,
+            fixes: Vec::new(),
+            replace_with: Some("cross-env".to_string()),
+        }];
+        let clean = report(vec![]);
+        lock.new_packages = vec![clean, warn, high];
+
+        let text = render_lock_human(&lock, false);
+        let block = text.find("what to do").expect("missing block");
+        let high_at = text[block..].find("log4j-core").expect("high line");
+        let warn_at = text[block..].find("crossenv").expect("warn line");
+        assert!(high_at < warn_at, "{text}");
+        assert!(text[block..].contains("2.17.1"), "{text}");
+        assert!(text[block..].contains("cross-env"), "{text}");
+        assert!(!text[block..].contains("evil-pkg"), "{text}");
+    }
+
+    #[test]
+    fn a_tree_without_advice_has_no_block() {
+        let mut lock = lock_report();
+        lock.new_packages = vec![report(Vec::new())];
+        let text = render_lock_human(&lock, false);
+        assert!(!text.contains("what to do"), "{text}");
     }
 
     #[test]
