@@ -149,8 +149,10 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   Do not replace approval with `gh workflow run`: a dispatched check does not
   attach to the PR's rollup and auto-merge waits forever.
   Repo settings required: Actions may create pull requests
-  (`can_approve_pull_request_reviews=true`), auto-merge enabled, and the job has
-  `actions: write`. If auto-merge is off, the PR waits for a human.
+  (`can_approve_pull_request_reviews=true`), auto-merge enabled,
+  `delete_branch_on_merge=true` (auto-merge does not honor `--delete-branch`
+  from the workflow), and the job has `actions: write`. If auto-merge is off,
+  the PR waits for a human.
   Do not commit generated data by hand outside the script.
 - **Advisories are deduplicated by alias.** OSV lists one issue as PYSEC, GHSA,
   and CVE records. `dedupe` unions records whose id/alias sets overlap, keeps the
