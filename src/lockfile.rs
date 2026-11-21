@@ -55,6 +55,7 @@ pub enum Format {
     NugetLock,
     Composer,
     Gradle,
+    Pipfile,
 }
 
 impl Format {
@@ -67,6 +68,7 @@ impl Format {
             Self::NugetLock => crate::model::Ecosystem::NuGet,
             Self::Composer => crate::model::Ecosystem::Composer,
             Self::Gradle => crate::model::Ecosystem::Maven,
+            Self::Pipfile => crate::model::Ecosystem::Pypi,
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
@@ -93,6 +95,7 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         "gradle.lockfile" | "buildscript-gradle.lockfile" | "settings-gradle.lockfile" => {
             Ok(Format::Gradle)
         }
+        "Pipfile.lock" => Ok(Format::Pipfile),
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
         "poetry.lock" => Ok(Format::Poetry),
@@ -113,6 +116,7 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
         Format::NugetLock => parse_nuget_lock(body),
         Format::Composer => parse_composer_lock(body),
         Format::Gradle => Ok(parse_gradle(body)),
+        Format::Pipfile => parse_pipfile(body),
         Format::Pip => Ok(parse_pip(body)),
         Format::Poetry => parse_poetry(body),
         Format::Uv => parse_uv(body),
@@ -625,6 +629,43 @@ fn parse_gemfile(body: &str) -> LockContents {
     finish(packages, skipped)
 }
 
+/// Pipfile.lock stores `default` and `develop` tables whose entries hold a
+/// pinned `version` (`==1.2.3`) or a non-registry reference (path, git, URL).
+fn parse_pipfile(body: &str) -> Result<LockContents, LockError> {
+    let lockfile: PipfileLock =
+        serde_json::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    let entries = lockfile
+        .default
+        .into_iter()
+        .chain(lockfile.develop)
+        .collect::<Vec<_>>();
+
+    for (name, entry) in entries {
+        let Some(raw) = entry.version else {
+            skipped.push((name, "not a registry version".to_string()));
+            continue;
+        };
+        let version = raw.trim().trim_start_matches("==").trim();
+        if version.is_empty() || version == "*" || !version.chars().all(lock_version_char) {
+            skipped.push((name, "not a registry version".to_string()));
+        } else {
+            packages.push(LockedPackage {
+                name,
+                version: version.to_string(),
+            });
+        }
+    }
+
+    Ok(finish(packages, skipped))
+}
+
+fn lock_version_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+' | '!')
+}
+
 /// Gradle's dependency lockfile is `group:artifact:version=configurations` per
 /// line. The `empty=` line lists configurations with no dependencies, and the
 /// header is comments.
@@ -900,6 +941,20 @@ fn finish(mut packages: Vec<LockedPackage>, skipped: Vec<(String, String)>) -> L
         skipped,
         notes: Vec::new(),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct PipfileLock {
+    #[serde(default)]
+    default: std::collections::BTreeMap<String, PipfileEntry>,
+    #[serde(default)]
+    develop: std::collections::BTreeMap<String, PipfileEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PipfileEntry {
+    #[serde(default)]
+    version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1369,6 +1424,35 @@ DEPENDENCIES
     fn nuget_lock_rejects_malformed_json() {
         assert!(matches!(
             parse(Format::NugetLock, "{ nope"),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn pipfile_lock_reads_default_and_develop_pins() {
+        let body = r#"{
+            "_meta": { "hash": { "sha256": "abc" } },
+            "default": {
+                "requests": { "version": "==2.32.3", "hashes": ["sha256:x"] },
+                "local-pkg": { "path": "." },
+                "any-version": { "version": "*" }
+            },
+            "develop": {
+                "pytest": { "version": "==8.3.3" }
+            }
+        }"#;
+        let contents = parse(Format::Pipfile, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![package("pytest", "8.3.3"), package("requests", "2.32.3")]
+        );
+        assert_eq!(contents.skipped.len(), 2);
+    }
+
+    #[test]
+    fn pipfile_lock_rejects_malformed_json() {
+        assert!(matches!(
+            parse(Format::Pipfile, "{ nope"),
             Err(LockError::Malformed(_))
         ));
     }

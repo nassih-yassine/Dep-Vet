@@ -1633,6 +1633,40 @@ fn audit_reads_requirements_and_reports_unpinned_entries() {
 }
 
 #[test]
+fn audit_reads_pipfile_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("Pipfile.lock"),
+        r#"{
+            "_meta": { "hash": { "sha256": "abc" } },
+            "default": {
+                "flask": { "version": "==3.1.0", "hashes": ["sha256:x"] },
+                "local-pkg": { "path": "." }
+            },
+            "develop": {}
+        }"#,
+    )
+    .unwrap();
+
+    let registry = pypi_registry("flask", PYPI_WHEEL);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "Pipfile.lock", "--json"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(value["packages"][0]["name"], "flask");
+    assert_eq!(value["packages"][0]["version"], "3.1.0");
+    assert_eq!(value["errors"][0]["package"], "local-pkg");
+}
+
+#[test]
 fn lock_diffs_a_cargo_lock_against_a_ref() {
     let repo = Repo::new();
     repo.write(

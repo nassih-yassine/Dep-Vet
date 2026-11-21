@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 319 unit + 97 end-to-end tests
+cargo test --locked                      # 325 unit + 98 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -128,6 +128,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **Pipfile.lock is JSON, not TOML.** `default` and `develop` entries hold
+  `version: "==1.2.3"`. A missing/`*` version or a path/git/URL entry is
+  reported as an error (an incomplete tree exits 3), matching `poetry.lock`;
+  do not silently drop them.
 - **Gradle locking is Maven.** `gradle.lockfile` lines are
   `group:artifact:version=configurations`; the `empty=` line and `#` comments
   are skipped, and `buildscript-gradle.lockfile` / `settings-gradle.lockfile`

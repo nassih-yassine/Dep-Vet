@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Pipenv:** `Pipfile.lock` audits the `default` and `develop` pins through
+  PyPI. Path, git, and URL references and `*` versions are reported as
+  unchecked rather than ignored.
+
 ## 0.6.0 — 2026-11-21
 
 - **One retry for flaky networks.** A timeout or dropped connection is retried
