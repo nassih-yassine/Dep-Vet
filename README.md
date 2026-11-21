@@ -132,6 +132,7 @@ code. A missing reason or an unknown finding id is a configuration error
 ```sh
 dep-vet audit package-lock.json      # npm
 dep-vet audit requirements.txt       # PyPI, exact pins only
+dep-vet audit Pipfile.lock           # PyPI via Pipenv
 dep-vet audit Cargo.lock             # crates.io
 dep-vet audit go.mod                 # Go
 dep-vet audit poetry.lock            # PyPI via Poetry
@@ -156,6 +157,7 @@ What each format contributes, and what it cannot:
 |---|---|---|
 | `package-lock.json` v2/v3 | every `node_modules` entry | v1 lockfiles (upgrade with `npm install`) |
 | `requirements*.txt` | `name==version` pins, extras stripped | unpinned lines, URLs, `-r`/`-e` options |
+| `Pipfile.lock` | `default` and `develop` pins | path/git/URL entries, `*` versions |
 | `Cargo.lock` | registry packages | git dependencies (not on crates.io) |
 | `go.mod` | `require` entries, blocks and single lines | unreadable require lines; `replace` is ignored |
 | `poetry.lock` | PyPI packages | git/path/URL sources |
@@ -418,8 +420,8 @@ clean.
 - **npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven, and Composer**, for
   both `audit` and `lock`, including
   `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`, `poetry.lock`, and
-  `uv.lock`, `Gemfile.lock`, `packages.lock.json`, `composer.lock`,
-  `gradle.lockfile`. JSR has no advisory source,
+  `uv.lock`, `Pipfile.lock`, `Gemfile.lock`, `packages.lock.json`,
+  `composer.lock`, `gradle.lockfile`. JSR has no advisory source,
   so JSR reports say advisory coverage is unavailable. RubyGems has no owner
   list, weekly downloads, or install-time file data; yanked versions disappear
   from its API, so asking for one reports "not found" rather than "yanked".
