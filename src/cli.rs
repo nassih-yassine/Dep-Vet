@@ -70,6 +70,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Audit every package installed by a lockfile
+    Audit {
+        /// Path to package-lock.json
+        lockfile: std::path::PathBuf,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -133,6 +143,18 @@ mod tests {
                 assert!(!json);
             }
             _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
+    fn parses_audit_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "audit", "package-lock.json"]).unwrap();
+        match cli.command {
+            Command::Audit { lockfile, json } => {
+                assert_eq!(lockfile, std::path::PathBuf::from("package-lock.json"));
+                assert!(!json);
+            }
+            _ => panic!("expected audit command"),
         }
     }
 

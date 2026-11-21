@@ -361,6 +361,32 @@ pub struct LockReport {
     pub errors: Vec<LockFetchError>,
 }
 
+/// A whole lockfile, audited in place. No base revision, no diff.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditReport {
+    pub lockfile: String,
+    pub packages: Vec<PackageReport>,
+    pub errors: Vec<LockFetchError>,
+}
+
+impl AuditReport {
+    pub fn verdict(&self) -> Severity {
+        self.packages
+            .iter()
+            .map(PackageReport::verdict)
+            .max()
+            .unwrap_or(Severity::Info)
+    }
+
+    pub fn exit_code(&self) -> u8 {
+        if self.errors.is_empty() {
+            self.verdict().exit_code()
+        } else {
+            TOOL_ERROR_EXIT_CODE
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LockFetchError {
     pub package: String,

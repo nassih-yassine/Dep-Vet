@@ -11,13 +11,16 @@ use dep_vet::http::HttpClient;
 use dep_vet::lockfile;
 use dep_vet::model::Ecosystem;
 use dep_vet::model::{
-    LockFetchError, LockReport, PackageReport, PackageSpec, Profile,
+    AuditReport, LockFetchError, LockReport, PackageReport, PackageSpec, Profile,
     TOOL_ERROR_EXIT_CODE as TOOL_ERROR,
 };
 use dep_vet::osv::OsvClient;
 use dep_vet::pypi::{PypiClient, PypiError};
 use dep_vet::registry::{RegistryClient, RegistryError};
-use dep_vet::report::{render_human, render_json, render_lock_human, render_lock_json};
+use dep_vet::report::{
+    render_audit_human, render_audit_json, render_human, render_json, render_lock_human,
+    render_lock_json,
+};
 use dep_vet::signals;
 
 /// Packages audited at once. Each one can fan out to a few OSV detail
@@ -93,6 +96,27 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             emit_package(cli, *json, &report)
         }
 
+        Command::Audit {
+            lockfile: path,
+            json,
+        } => {
+            let packages = lockfile::read(path)?;
+            // No tree context: every package would otherwise look suspicious
+            // to every other one. The seed list is the comparison set.
+            let (reports, errors) = audit_packages(&auditor, &packages, &[], now_seconds());
+            let report = AuditReport {
+                lockfile: path.display().to_string(),
+                packages: reports,
+                errors,
+            };
+            let output = if *json {
+                render_audit_json(&report)?
+            } else {
+                render_audit_human(&report, use_color(cli))
+            };
+            emit(&output, report.exit_code())
+        }
+
         Command::Lock {
             lockfile: path,
             base,
@@ -108,64 +132,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 .map(|package| package.name.to_ascii_lowercase())
                 .collect();
 
-            let now = now_seconds();
-            let mut new_packages = Vec::new();
-            let mut errors = Vec::new();
-
-            // Borrow for the worker closures; `move` then captures a Copy reference.
-            let auditor = &auditor;
-            let local = &local;
-            for batch in added.chunks(MAX_CONCURRENT_AUDITS) {
-                let outcomes: Vec<Result<PackageReport, LockFetchError>> =
-                    std::thread::scope(|scope| {
-                        let handles: Vec<_> = batch
-                            .iter()
-                            .map(|package| {
-                                (
-                                    package,
-                                    scope.spawn(move || {
-                                        // Lockfile contents are still input:
-                                        // validate before they become a URL.
-                                        let spec = PackageSpec::new(
-                                            package.name.clone(),
-                                            Some(package.version.clone()),
-                                        )
-                                        .map_err(|error| LockFetchError {
-                                            package: package.spec(),
-                                            message: error.to_string(),
-                                        })?;
-                                        auditor.audit_npm(&spec, local, now).map_err(|error| {
-                                            LockFetchError {
-                                                package: package.spec(),
-                                                message: error.to_string(),
-                                            }
-                                        })
-                                    }),
-                                )
-                            })
-                            .collect();
-
-                        handles
-                            .into_iter()
-                            .map(|(package, handle)| {
-                                handle.join().unwrap_or_else(|_| {
-                                    Err(LockFetchError {
-                                        package: package.spec(),
-                                        message: "audit worker panicked".to_string(),
-                                    })
-                                })
-                            })
-                            .collect()
-                    });
-
-                for outcome in outcomes {
-                    match outcome {
-                        Ok(report) => new_packages.push(report),
-                        // One unpublished dependency must not hide the rest.
-                        Err(error) => errors.push(error),
-                    }
-                }
-            }
+            let (new_packages, errors) = audit_packages(&auditor, &added, &local, now_seconds());
 
             let report = LockReport {
                 lockfile: path.display().to_string(),
@@ -292,6 +259,69 @@ impl Auditor {
             now,
         ))
     }
+}
+
+fn audit_packages(
+    auditor: &Auditor,
+    packages: &[lockfile::LockedPackage],
+    local: &[String],
+    now: i64,
+) -> (Vec<PackageReport>, Vec<LockFetchError>) {
+    let mut reports = Vec::new();
+    let mut errors = Vec::new();
+
+    for batch in packages.chunks(MAX_CONCURRENT_AUDITS) {
+        let outcomes: Vec<Result<PackageReport, LockFetchError>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|package| {
+                    (
+                        package,
+                        scope.spawn(move || {
+                            // Lockfile contents are still input: validate
+                            // before they become a URL.
+                            let spec = PackageSpec::new(
+                                package.name.clone(),
+                                Some(package.version.clone()),
+                            )
+                            .map_err(|error| LockFetchError {
+                                package: package.spec(),
+                                message: error.to_string(),
+                            })?;
+                            auditor
+                                .audit_npm(&spec, local, now)
+                                .map_err(|error| LockFetchError {
+                                    package: package.spec(),
+                                    message: error.to_string(),
+                                })
+                        }),
+                    )
+                })
+                .collect();
+
+            handles
+                .into_iter()
+                .map(|(package, handle)| {
+                    handle.join().unwrap_or_else(|_| {
+                        Err(LockFetchError {
+                            package: package.spec(),
+                            message: "audit worker panicked".to_string(),
+                        })
+                    })
+                })
+                .collect()
+        });
+
+        for outcome in outcomes {
+            match outcome {
+                Ok(report) => reports.push(report),
+                // One unpublished dependency must not hide the rest.
+                Err(error) => errors.push(error),
+            }
+        }
+    }
+
+    (reports, errors)
 }
 
 fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result<u8> {
