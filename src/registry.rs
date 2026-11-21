@@ -6,17 +6,16 @@
 //! public registry.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::sync::Arc;
 
 use serde::Deserialize;
 
 use crate::date;
+use crate::http::{HttpClient, HttpError};
 use crate::model::{InstallScript, PackageSpec};
 
 const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
 const DEFAULT_DOWNLOADS: &str = "https://api.npmjs.org/downloads/point";
-/// Packuments for very large packages exceed ureq's 10 MB default.
-const MAX_BODY_BYTES: u64 = 64 * 1024 * 1024;
 const INSTALL_HOOKS: [&str; 3] = ["preinstall", "install", "postinstall"];
 
 /// Everything dep-vet needs to know about one resolved package version.
@@ -49,27 +48,27 @@ pub enum RegistryError {
 }
 
 pub struct RegistryClient {
-    agent: ureq::Agent,
+    http: Arc<HttpClient>,
     registry_base: String,
     downloads_base: String,
 }
 
 impl RegistryClient {
-    pub fn from_env() -> Self {
+    pub fn from_env(http: Arc<HttpClient>) -> Self {
         let registry =
             std::env::var("DEPVET_REGISTRY_BASE").unwrap_or_else(|_| DEFAULT_REGISTRY.to_string());
         let downloads = std::env::var("DEPVET_DOWNLOADS_BASE")
             .unwrap_or_else(|_| DEFAULT_DOWNLOADS.to_string());
-        Self::with_bases(registry, downloads)
+        Self::new(http, registry, downloads)
     }
 
-    pub fn with_bases(registry_base: impl Into<String>, downloads_base: impl Into<String>) -> Self {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(20)))
-            .user_agent(concat!("dep-vet/", env!("CARGO_PKG_VERSION")))
-            .build();
+    pub fn new(
+        http: Arc<HttpClient>,
+        registry_base: impl Into<String>,
+        downloads_base: impl Into<String>,
+    ) -> Self {
         Self {
-            agent: ureq::Agent::new_with_config(config),
+            http,
             registry_base: registry_base.into(),
             downloads_base: downloads_base.into(),
         }
@@ -85,15 +84,14 @@ impl RegistryClient {
 
     pub fn fetch(&self, spec: &PackageSpec) -> Result<PackageMeta, RegistryError> {
         let url = self.package_url(&spec.name);
-        let body = match self.get(&url) {
+        let body = match self.http.get(&url) {
             Ok(body) => body,
-            Err(FetchError::Status(404 | 403)) => {
+            Err(HttpError::Status {
+                status: 404 | 403, ..
+            }) => {
                 return Err(RegistryError::PackageNotFound(spec.name.clone()));
             }
-            Err(FetchError::Status(code)) => {
-                return Err(RegistryError::Http(format!("{url} returned HTTP {code}")));
-            }
-            Err(FetchError::Io(message)) => return Err(RegistryError::Http(message)),
+            Err(error) => return Err(RegistryError::Http(error.to_string())),
         };
         parse_packument(spec, &body, &url)
     }
@@ -105,7 +103,7 @@ impl RegistryClient {
             self.downloads_base.trim_end_matches('/'),
             encode_name(name)
         );
-        let body = self.get(&url).ok()?;
+        let body = self.http.get(&url).ok()?;
         #[derive(Deserialize)]
         struct Downloads {
             downloads: u64,
@@ -114,24 +112,6 @@ impl RegistryClient {
             .ok()
             .map(|downloads| downloads.downloads)
     }
-
-    fn get(&self, url: &str) -> Result<String, FetchError> {
-        match self.agent.get(url).call() {
-            Ok(mut response) => response
-                .body_mut()
-                .with_config()
-                .limit(MAX_BODY_BYTES)
-                .read_to_string()
-                .map_err(|error| FetchError::Io(error.to_string())),
-            Err(ureq::Error::StatusCode(code)) => Err(FetchError::Status(code)),
-            Err(error) => Err(FetchError::Io(error.to_string())),
-        }
-    }
-}
-
-enum FetchError {
-    Status(u16),
-    Io(String),
 }
 
 /// Scoped names travel as one path segment: `@scope%2Fname`.

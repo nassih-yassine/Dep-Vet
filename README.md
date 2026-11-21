@@ -25,10 +25,11 @@
 
 ---
 
-`npm install` runs code. `dep-vet` reads public registry metadata and tells you
-what a package will do at that moment: whether it runs install scripts, how old
-it is, who published this version, whether its name is one typo away from a
-popular package, and whether it is deprecated. Every finding links to the raw
+`npm install` runs code. `dep-vet` reads public registry metadata and OSV
+advisories, then tells you what a package will do at that moment: whether it
+runs install scripts, how old it is, who published this version, whether its
+name is one typo away from a popular package, what vulnerabilities apply to this
+exact version, and whether it is deprecated. Every finding links to the raw
 evidence it came from.
 
 ```console
@@ -86,8 +87,8 @@ dep-vet npm @types/node          # scoped names
 ```
 
 Vetting is read-only: `dep-vet` never installs the package, never writes a
-lockfile, and never executes package code. It fetches the registry packument and
-the weekly download count, then applies local rules.
+lockfile, and never executes package code. It fetches the registry packument,
+the weekly download count, and the OSV advisory list, then applies local rules.
 
 ### Exit codes
 
@@ -140,24 +141,47 @@ Timestamps are Unix seconds. `verdict` and `exit_code` are derived from the
 findings, so consumers do not re-implement the severity rules. JSON output never
 contains the wordmark or ANSI colors.
 
+### Cache
+
+Responses are cached in SQLite at `~/.cache/dep-vet/http-cache.db` (or
+`$XDG_CACHE_HOME/dep-vet`). A warm run makes zero network calls:
+
+```console
+$ time dep-vet npm lodash@4.17.15
+real    0m0.009s
+```
+
+Entries live for 24 hours. A network failure or 5xx falls back to the stale
+entry, so a warmed cache keeps working offline; a 404 never falls back, because
+a deleted package must not look alive. `--no-cache` bypasses the cache for one
+run.
+
+| Variable | Effect |
+|---|---|
+| `DEPVET_CACHE_DIR` | Where the cache database lives |
+| `DEPVET_CACHE_TTL_SECONDS` | Entry lifetime, default `86400` |
+| `DEPVET_NO_CACHE` | Disable the cache entirely |
+
 ### Color
 
 Color is enabled only on a terminal. `--no-color` and `NO_COLOR` turn it off,
 `FORCE_COLOR` turns it on.
 
-### Registry overrides
+### Registry and API overrides
 
 For mirrors, proxies, and tests:
 
 ```sh
 DEPVET_REGISTRY_BASE=https://registry.npmjs.org dep-vet npm express
 DEPVET_DOWNLOADS_BASE=https://api.npmjs.org/downloads/point dep-vet npm express
+DEPVET_OSV_BASE=https://api.osv.dev dep-vet npm express
 ```
 
 ## Signals
 
 | Signal | Severity | Meaning |
 |--------|----------|---------|
+| Advisories | High/Warn/Info from OSV | Known vulnerabilities for this exact version, one finding per advisory, linking to its OSV record and CVE aliases. An advisory whose details cannot be fetched still surfaces as a warning. If OSV is unreachable, the report says so as an INFO finding instead of implying the package is clean. |
 | Install scripts | WARN, HIGH when combined | `preinstall`/`install`/`postinstall` run during `npm install`. Combined with a fresh package, an unexpected publisher, or a typosquat name, this is the shape of a supply-chain attack. |
 | Typosquat | HIGH at ≤1 edit or homoglyph, WARN at 2 | Levenshtein distance to a curated list of popular names, after folding lookalikes (`1`/`l`, `0`/`o`, `rn`/`m`). Names shorter than 4 characters are skipped to avoid noise. |
 | Fresh package | WARN | First publish less than 7 days ago: no track record. |
@@ -174,11 +198,12 @@ raw source does not ship.
 - **npm only.** Bun, pnpm, and yarn install from the same registry, so package
   vetting is accurate for them; lockfile commands and manager-specific script
   policy are not implemented.
-- Not a CVE scanner. OSV advisories are the next feature, not this release.
+- **Advisories describe this version, not your tree.** dep-vet does not walk
+  transitive dependencies; it answers for the package you named.
 - Not an SBOM generator or a Dependabot replacement.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
-- No cache yet: each run makes two HTTP requests. The cache is the current
-  work in progress.
+- One batch query plus one request per advisory on a cold cache; bounded at 25
+  advisories per run.
 - The popular-name list is a curated seed, not a download ranking.
 
 ## Development
@@ -212,6 +237,9 @@ handling, and output are exercised end to end.
 src/cli.rs        clap surface
 src/model.rs      PackageSpec, Severity, Finding, PackageReport
 src/registry.rs   packument fetch + parsing, download counts
+src/osv.rs        advisory IDs from querybatch, details per advisory
+src/http.rs       one agent, body limit, cache read/write policy
+src/cache.rs      SQLite cache with TTL and stale fallback
 src/signals.rs    the rules: metadata in, findings out
 src/typosquat.rs  Levenshtein, homoglyph folding, popular-name seed
 src/branding.rs   the wordmark in --help and interactive reports
@@ -226,12 +254,11 @@ did.
 
 ## Roadmap
 
-1. OSV advisories via `POST /v1/querybatch`, grouped by severity.
-2. Offline cache (SQLite) so repeated and CI runs do not refetch.
-3. `dep-vet lock <lockfile>`: diff new dependencies against a base ref.
-4. GitHub Action wrapping `lock` with a sticky PR comment.
-5. Popular-name list built from download counts instead of a seed.
-6. PyPI and crates.io.
+1. `dep-vet lock <lockfile>`: diff new dependencies against a base ref.
+2. GitHub Action wrapping `lock` with a sticky PR comment.
+3. Popular-name list built from download counts instead of a seed.
+4. PyPI and crates.io.
+5. Advisory lookups for the whole installed tree, not one package.
 
 ## License
 
