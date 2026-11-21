@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **NuGet signature presence.** `inspect nuget` reports a `.signature.p7s` entry
+  as present-and-unverified; absence stays silent.
 - **Attestations are checked against the artifact.** For npm, dep-vet reads the
   published attestation and compares its subject digest with the tarball
   checksum; a mismatch is HIGH. It also reports the SLSA predicate's claimed

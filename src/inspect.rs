@@ -465,6 +465,18 @@ mod tests {
     }
 
     #[test]
+    fn a_nuget_signature_is_reported_as_presence_only() {
+        let mut prepared = prepared(&[("lib/a.cs", "class A {}")], &[]);
+        prepared.extracted.signature_file = true;
+        let report = build_report(Ecosystem::NuGet, &package_spec("1.0.0"), prepared, &[]);
+        assert_eq!(report.package_signature, Some("present"));
+        assert!(
+            crate::report::render_inspection_human(&report, false)
+                .contains("signature    file present (not verified)")
+        );
+    }
+
+    #[test]
     fn a_changed_install_script_is_high_risk() {
         let old = prepared(
             &[(
@@ -568,6 +580,10 @@ pub struct InspectionReport {
     pub integrity: String,
     pub files_scanned: usize,
     pub files_skipped: usize,
+    /// `present` when the archive carries a NuGet `.signature.p7s`. The
+    /// signature is never verified, and absence is not reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_signature: Option<&'static str>,
     pub findings: Vec<crate::rules::RuleFinding>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_checked: Vec<String>,
@@ -638,6 +654,7 @@ pub fn build_report(
         integrity,
         files_scanned: prepared.extracted.files.len(),
         files_skipped: prepared.extracted.skipped_binary + prepared.extracted.skipped_unsafe,
+        package_signature: prepared.extracted.signature_file.then_some("present"),
         findings,
         not_checked,
     }

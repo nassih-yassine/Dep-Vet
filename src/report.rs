@@ -277,6 +277,9 @@ pub fn render_inspection_human(report: &crate::inspect::InspectionReport, color:
             report.files_scanned, report.files_skipped
         ),
     );
+    if report.package_signature.is_some() {
+        push_field(&mut out, "signature", "file present (not verified)");
+    }
     if !report.not_checked.is_empty() {
         push_field(&mut out, "not checked", &report.not_checked.join(", "));
     }

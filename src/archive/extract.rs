@@ -36,6 +36,8 @@ pub struct Extracted {
     pub skipped_unsafe: usize,
     /// Paths of entries that looked binary; kept for diffs, capped.
     pub binaries: Vec<String>,
+    /// A NuGet `.signature.p7s` entry exists. Presence only, never verified.
+    pub signature_file: bool,
     pub truncated: bool,
 }
 
@@ -181,6 +183,13 @@ fn read_text(
         out.truncated = true;
         return Ok(());
     }
+    if path
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case(".signature.p7s"))
+    {
+        out.signature_file = true;
+    }
     if buffer.contains(&0) {
         out.skipped_binary += 1;
         if out.binaries.len() < 200 {
@@ -235,6 +244,26 @@ mod tests {
             builder.append(&header, &[][..]).unwrap();
         }
         builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn a_nuget_signature_entry_is_noted_without_being_verified() {
+        let unsigned = zip_bytes(&[("lib/net8.0/a.dll", b"text")]);
+        assert!(
+            !extract(ArchiveKind::Zip, &unsigned, Limits::default())
+                .unwrap()
+                .signature_file
+        );
+
+        let signed = zip_bytes(&[
+            ("lib/net8.0/a.dll", b"text"),
+            (".signature.p7s", b"\x00\x01signature"),
+        ]);
+        assert!(
+            extract(ArchiveKind::Zip, &signed, Limits::default())
+                .unwrap()
+                .signature_file
+        );
     }
 
     fn zip_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {

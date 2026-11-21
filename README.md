@@ -223,6 +223,10 @@ dep-vet inspect maven org.slf4j:slf4j-api@2.0.17   # sources jar when published
 dep-vet inspect nuget Newtonsoft.Json@12.0.1      # compiled: reports that
 ```
 
+For NuGet, a `.signature.p7s` entry is reported as `signature: file present
+(not verified)`. That is presence, not a valid signature, and unsigned packages
+simply omit the line.
+
 Nothing is executed and nothing is extracted to disk. Downloads with a known
 checksum are cached for 30 days and re-verified before use; unverified archives
 are never cached, and `--no-cache` always re-downloads. Limits are 25 MB

@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 477 unit + 121 end-to-end tests
+cargo test --locked                      # 479 unit + 122 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -289,11 +289,14 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `DIFF-INSTALL-SCRIPTS-001` compares parsed npm install hooks (WARN, HIGH when
   `signals::risky_install_command` matches). Added binaries become
   `DIFF-NEW-BINARY-001` INFO from `Extracted.binaries` (capped at 200); they are
-  never scanned as text. Both specs must
-  name the same package with exact versions. The same `.depvet.toml` carries
-  `[inspect]` limits and `disabled_rules`; unknown rule ids and zero caps are
-  configuration errors (exit 3), and `disabled_rules` is applied to both
-  `inspect` and `diff`. Verified archives are cached under
+  never scanned as text. Both specs must name the same package with exact
+  versions. A NuGet `.signature.p7s` entry sets `Extracted.signature_file`,
+  which renders as `signature: file present (not verified)` and JSON
+  `package_signature`; absence is not reported, and the signature itself is
+  never checked. The same `.depvet.toml` carries `[inspect]` limits and
+  `disabled_rules`; unknown rule ids and zero caps are configuration errors
+  (exit 3), and `disabled_rules` is applied to both `inspect` and `diff`.
+  Verified archives are cached under
   `~/.cache/dep-vet/archives/` keyed by their checksum, re-verified on every
   load, swept after 30 days; unverified archives are never cached, and
   `--no-cache` bypasses the lookup. Never cache a file whose checksum did not

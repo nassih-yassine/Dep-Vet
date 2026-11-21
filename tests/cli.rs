@@ -2303,6 +2303,18 @@ fn a_lookalike_more_popular_than_its_target_is_clean() {
     );
 }
 
+fn zip_archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Cursor;
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (path, bytes) in files {
+        writer.start_file(*path, options).unwrap();
+        writer.write_all(bytes).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
 fn tar_gz(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
         Vec::new(),
@@ -2462,6 +2474,34 @@ fn diff_flags_a_changed_install_script_and_a_new_binary() {
         .expect("missing binary finding");
     assert_eq!(binary["file"], "native/addon.node");
     assert_eq!(binary["severity"], "info");
+}
+
+#[test]
+fn inspect_notes_a_nuget_signature_file_without_verifying_it() {
+    let nupkg = zip_archive(&[
+        ("lib/net8.0/A.dll", b"compiled"),
+        (".signature.p7s", b"\x00\x01signature"),
+    ]);
+    let registry = MockRegistry::start_with(move |_base| {
+        let mut routes = HashMap::new();
+        routes.insert(
+            "/v3-flatcontainer/foo/1.0.0/foo.1.0.0.nupkg".to_string(),
+            (200, nupkg.clone()),
+        );
+        routes
+    });
+
+    let output = registry
+        .command()
+        .args(["inspect", "nuget", "Foo@1.0.0", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["package_signature"], "present");
+    assert_eq!(value["integrity"], "unverified");
 }
 
 #[test]
