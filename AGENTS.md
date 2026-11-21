@@ -29,6 +29,21 @@ These override convenience. Do not shortcut them.
 6. Every finding must cite evidence with a URL. A rule that cannot be linked
    does not ship, and no LLM belongs in a verdict.
 
+## Dogfooding
+
+CI runs `dep-vet audit Cargo.lock` on this repository (the `dogfood` job). Any
+finding fails the build, including warnings. When it fires:
+
+1. Fix the dependency if possible (replacing `serde_yaml_ng` removed
+   `unsafe-libyaml`).
+2. If the risk is accepted, add a `.depvet.toml` entry **with a reason**; the
+   report keeps showing it as `[ALLOWED]`.
+3. If it is a false positive, fix the rule and add a regression test. Legitimate
+   crates close to another seed entry (`inotify`/`notify`, `rustix`/`rustls`,
+   `shlex`/`sqlx`) are pinned in `legitimate_neighbours_are_not_suspects`.
+
+Never make the job non-blocking to get a merge through.
+
 ## Commands
 
 ```sh

@@ -12,6 +12,25 @@ permissions:
   contents: read
 
 jobs:
+  dogfood:
+    # dep-vet audits its own dependencies. Catches unmaintained crates and
+    # registry signals before users do; a real finding fails the build, and a
+    # reviewed exception goes in .depvet.toml with a reason.
+    if: github.event_name != 'pull_request' || github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache dep-vet responses
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/dep-vet
+          key: dep-vet-${{ hashFiles('Cargo.lock') }}
+          restore-keys: dep-vet-
+
+      - name: Audit this repository's dependencies
+        run: cargo run --quiet --locked -- audit Cargo.lock
+
   test:
     # PRs opened by GITHUB_TOKEN need a human approval to run their
     # pull_request workflow, which blocks auto-merge. Skip that duplicate; the

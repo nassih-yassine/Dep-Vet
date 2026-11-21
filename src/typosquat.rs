@@ -446,6 +446,18 @@ mod tests {
     }
 
     #[test]
+    fn legitimate_neighbours_are_not_suspects() {
+        // Real crates that sit one or two edits from another seed entry.
+        for name in ["inotify", "rustix", "shlex", "notify", "rustls", "sqlx"] {
+            assert_eq!(
+                closest(name, POPULAR_CRATES, &[]),
+                None,
+                "{name} must be a known candidate"
+            );
+        }
+    }
+
+    #[test]
     fn exact_popular_name_is_not_a_suspect() {
         assert_eq!(closest("express", popular_npm(), &[]), None);
         assert_eq!(closest("Express", popular_npm(), &[]), None);
