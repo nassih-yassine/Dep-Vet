@@ -817,6 +817,7 @@ impl Finding {
             | "fresh-version"
             | "maintainer-check-unavailable"
             | "attestation-source-mismatch"
+            | "advisories-stale"
             | "no-repository" => Confidence::Medium,
             _ => Confidence::Medium,
         }

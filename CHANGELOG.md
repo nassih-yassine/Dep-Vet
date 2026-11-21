@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Stale advisory data is bounded and disclosed.** OSV answers served from
+  cache after a failed refresh are refused beyond 24 hours, and anything served
+  within that window adds an INFO `advisories-stale` finding with its age. The
+  five-minute advisory TTL now follows `DEPVET_OSV_BASE`, so self-hosted
+  mirrors and tests get the same policy.
 - **Rule evasions closed.** Comment detection is now a per-language stripper
   that keeps code after `*/` and does not mistake `https://` for a comment;
   patterns run over whole files so calls split across lines match; and source

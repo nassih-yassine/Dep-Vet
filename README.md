@@ -573,7 +573,11 @@ real    0m0.009s
 Entries live for 24 hours and are deleted after 30 days, so the database stays
 bounded (large packuments are stored whole). A network failure, 5xx, or 429
 falls back to the stale entry, so a warmed cache keeps working offline; a 404
-never falls back, because a deleted package must not look alive. `--no-cache`
+never falls back, because a deleted package must not look alive. Advisory
+answers are the exception: they are used only up to 24 hours past their fetch
+time, and serving one adds an INFO `advisories-stale` finding with its age. An
+older advisory answer is refused, so the normal "advisory check unavailable"
+finding appears instead of week-old data passing as today's. `--no-cache`
 bypasses the cache for one run. A cache written by an older schema is dropped
 instead of misread.
 

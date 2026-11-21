@@ -61,6 +61,23 @@ pub fn report(
             if list.hidden > 0 {
                 findings.push(advisories_hidden(list.hidden));
             }
+            if let Some(age) = list.stale_seconds {
+                findings.push(Finding {
+                    id: "advisories-stale",
+                    severity: Severity::Info,
+                    title: "advisory data is stale".to_string(),
+                    detail: format!(
+                        "served from a {} old cache after a failed refresh; newer advisories may be missing",
+                        human_age(age)
+                    ),
+                    allowed: false,
+                    evidence: vec![Evidence {
+                        label: "advisory source".to_string(),
+                        value: meta.registry_url.clone(),
+                        url: Some(meta.registry_url.clone()),
+                    }],
+                });
+            }
         }
         None if !profile.advisories => findings.push(advisory_coverage_missing(ecosystem)),
         None => findings.push(advisory_check_unavailable()),
@@ -342,6 +359,18 @@ fn suspect_for<'a>(
         return None;
     }
     typosquat::closest(&meta.name, seed_for(ecosystem), local)
+}
+
+fn human_age(seconds: i64) -> String {
+    if seconds >= 3600 {
+        let hours = seconds / 3600;
+        format!("{hours} hour{}", if hours == 1 { "" } else { "s" })
+    } else if seconds >= 60 {
+        let minutes = seconds / 60;
+        format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
+    } else {
+        format!("{seconds} seconds")
+    }
 }
 
 /// Case, trailing slash, and `.git` do not make two repository URLs different.
@@ -954,6 +983,7 @@ mod tests {
         let list = AdvisoryList {
             advisories: vec![fixed_advisory("GHSA-a", &["1.2.3", "2.0.1"])],
             hidden: 0,
+            stale_seconds: None,
         };
 
         let report = advice_report(meta, Some(&list));
@@ -974,6 +1004,7 @@ mod tests {
         let list = AdvisoryList {
             advisories: vec![fixed_advisory("GHSA-a", &[])],
             hidden: 0,
+            stale_seconds: None,
         };
 
         let report = advice_report(meta, Some(&list));
@@ -996,6 +1027,7 @@ mod tests {
                 details_missing: true,
             }],
             hidden: 0,
+            stale_seconds: None,
         };
 
         let report = advice_report(meta(), Some(&list));
@@ -1020,6 +1052,7 @@ mod tests {
                 },
             ],
             hidden: 0,
+            stale_seconds: None,
         };
 
         let report = advice_report(meta(), Some(&list));
@@ -1036,6 +1069,7 @@ mod tests {
         let list = AdvisoryList {
             advisories: vec![fixed_advisory("GHSA-a", &["2.0.0"])],
             hidden: 0,
+            stale_seconds: None,
         };
 
         let report = advice_report(meta, Some(&list));
@@ -1514,6 +1548,7 @@ mod tests {
         let list = AdvisoryList {
             advisories: vec![fixed_advisory("GHSA-a", &["2.0.0"])],
             hidden: 0,
+            stale_seconds: None,
         };
 
         let report = advice_report(meta, Some(&list));
@@ -1969,6 +2004,7 @@ mod tests {
         AdvisoryList {
             advisories,
             hidden: 0,
+            stale_seconds: None,
         }
     }
 
@@ -2019,6 +2055,7 @@ mod tests {
         let advisories = AdvisoryList {
             advisories: vec![advisory("GHSA-eeee", Severity::Warn)],
             hidden: 15,
+            stale_seconds: None,
         };
         let report = report(
             meta(),

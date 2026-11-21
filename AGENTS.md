@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 493 unit + 124 end-to-end tests
+cargo test --locked                      # 496 unit + 124 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -111,8 +111,8 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **Findings carry rule-level confidence.** `Finding::confidence()` maps the
   finding id to high/medium/low and is serialized next to `severity` by
   `report::serialize_findings`. Advisories and install scripts are high;
-  typosquats, publisher changes, added dependencies, dormancy, and missing
-  checks are medium. Adding a finding id means adding it to this mapping and to
+  typosquats, publisher changes, added dependencies, dormancy, stale advisory
+  data, and missing checks are medium. Adding a finding id means adding it to this mapping and to
   `KNOWN_FINDINGS`; the allowlist completeness test covers the latter.
 - **The cache policy is deliberate.** Fresh entry skips the network; stale
   entries are used for network errors, 5xx, and 429; a 404 never falls back, or
@@ -130,8 +130,14 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   Tests for failed requests therefore take a few hundred milliseconds; do not
   remove the sleeps to make them fast.
 - **Advisories use a five-minute TTL.** `http.rs` picks `ADVISORY_TTL_SECONDS`
-  for `api.osv.dev` keys; everything else uses `DEPVET_CACHE_TTL_SECONDS`
-  (24h default). A day-old advisory is the one staleness that matters.
+  when the key contains the configured OSV base (`DEPVET_OSV_BASE`, default
+  `https://api.osv.dev`), not a literal host; everything else uses
+  `DEPVET_CACHE_TTL_SECONDS` (24h default). `cached` returns
+  `(body, Source)` so callers can tell `Fresh` from `Network` from
+  `Stale { age_seconds }`. Advisory stale fallback stops at
+  `ADVISORY_MAX_STALE_SECONDS` (24h); past it the error is returned so the
+  existing "advisory check unavailable" INFO fires. Serving stale advisory data
+  adds INFO `advisories-stale` with its human age.
 - **Cache lifecycle:** entries older than `RETENTION_SECONDS` (30 days) are
   deleted on open, and `PRAGMA user_version` drops the table when the schema
   changes. Never add a column without bumping `SCHEMA_VERSION`.

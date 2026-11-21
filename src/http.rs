@@ -25,6 +25,22 @@ pub enum HttpError {
     Network { url: String, message: String },
 }
 
+/// Where a response came from. `Stale` is only produced after a transient
+/// failure, never for a 404.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Cached and still inside its TTL.
+    Fresh,
+    /// Fetched over the network just now.
+    Network,
+    /// Served from cache because the refresh failed.
+    Stale { age_seconds: i64 },
+}
+
+/// Advisory answers older than this are refused outright, so a week-old
+/// advisory cache cannot masquerade as today's answer.
+pub const ADVISORY_MAX_STALE_SECONDS: i64 = 24 * 60 * 60;
+
 /// Initial attempt plus two retries.
 pub const MAX_ATTEMPTS: u32 = 3;
 /// Advisories change hourly; a day-old answer is the one staleness that matters.
@@ -55,6 +71,9 @@ pub struct HttpClient {
     agent: ureq::Agent,
     /// Mutex so the client stays `Send + Sync` for future parallel fetches.
     cache: Option<Mutex<Cache>>,
+    /// Configured OSV base, so tests and self-hosted mirrors get the advisory
+    /// TTL and stale cap instead of the literal api.osv.dev.
+    advisory_base: String,
 }
 
 impl HttpClient {
@@ -68,6 +87,10 @@ impl HttpClient {
     }
 
     pub fn with_cache(cache: Option<Cache>) -> Self {
+        Self::with_cache_and_base(cache, advisory_base_from_env())
+    }
+
+    pub fn with_cache_and_base(cache: Option<Cache>, advisory_base: String) -> Self {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(20)))
             // Statuses are data here: 404, 429, and 5xx carry meaning and
@@ -78,11 +101,13 @@ impl HttpClient {
         Self {
             agent: ureq::Agent::new_with_config(config),
             cache: cache.map(Mutex::new),
+            advisory_base,
         }
     }
 
     pub fn get(&self, url: &str) -> Result<String, HttpError> {
         self.cached(url, || self.fetch_get(url))
+            .map(|(body, _)| body)
     }
 
     /// Raw response for callers that must stream a body (archives). Statuses
@@ -120,6 +145,15 @@ impl HttpClient {
     }
 
     pub fn post_json(&self, url: &str, body: &serde_json::Value) -> Result<String, HttpError> {
+        self.post_json_with_source(url, body).map(|(body, _)| body)
+    }
+
+    /// Advisories need the source to disclose stale data.
+    pub fn post_json_with_source(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<(String, Source), HttpError> {
         let key = format!("POST {url}\n{body}");
         self.cached(&key, || self.fetch_post(url, body))
     }
@@ -128,18 +162,19 @@ impl HttpClient {
         &self,
         key: &str,
         mut fetch: impl FnMut() -> Result<String, HttpError>,
-    ) -> Result<String, HttpError> {
+    ) -> Result<(String, Source), HttpError> {
         let now = now_seconds();
+        let advisory = self.is_advisory(key);
         if let Some(cache) = &self.cache
             && let Ok(cache) = cache.lock()
         {
-            let ttl = if is_advisory(key) {
+            let ttl = if advisory {
                 ADVISORY_TTL_SECONDS
             } else {
                 cache.ttl_seconds()
             };
             if let Ok(Some(body)) = cache.fresh_with(key, now, ttl) {
-                return Ok(body);
+                return Ok((body, Source::Fresh));
             }
         }
 
@@ -162,15 +197,18 @@ impl HttpClient {
                 {
                     let _ = cache.put(key, &body, now);
                 }
-                Ok(body)
+                Ok((body, Source::Network))
             }
             Err(error) => {
                 if error.is_transient()
                     && let Some(cache) = &self.cache
                     && let Ok(cache) = cache.lock()
-                    && let Ok(Some(body)) = cache.stale(key)
+                    && let Ok(Some((body, age_seconds))) = cache.stale_with_age(key, now)
                 {
-                    return Ok(body);
+                    if advisory && age_seconds > ADVISORY_MAX_STALE_SECONDS {
+                        return Err(error);
+                    }
+                    return Ok((body, Source::Stale { age_seconds }));
                 }
                 Err(error)
             }
@@ -219,8 +257,14 @@ fn read_response(
     read_body(&mut response, url)
 }
 
-fn is_advisory(key: &str) -> bool {
-    key.contains("api.osv.dev")
+fn advisory_base_from_env() -> String {
+    std::env::var("DEPVET_OSV_BASE").unwrap_or_else(|_| "https://api.osv.dev".to_string())
+}
+
+impl HttpClient {
+    fn is_advisory(&self, key: &str) -> bool {
+        key.contains(self.advisory_base.trim_end_matches('/'))
+    }
 }
 
 fn parse_retry_after(value: &str) -> Option<u64> {
@@ -279,7 +323,8 @@ mod tests {
         let body = http
             .cached("k", || panic!("network must not be used on a cache hit"))
             .unwrap();
-        assert_eq!(body, "cached");
+        assert_eq!(body.0, "cached");
+        assert_eq!(body.1, Source::Fresh);
     }
 
     #[test]
@@ -288,8 +333,9 @@ mod tests {
         cache.put("k", "stale", now_seconds() - 3600).unwrap();
         let http = HttpClient::with_cache(Some(cache));
 
-        let body = http.cached("k", || Err(network_error())).unwrap();
+        let (body, source) = http.cached("k", || Err(network_error())).unwrap();
         assert_eq!(body, "stale");
+        assert!(matches!(source, Source::Stale { .. }));
     }
 
     #[test]
@@ -307,7 +353,7 @@ mod tests {
                 })
             })
             .unwrap();
-        assert_eq!(body, "stale");
+        assert_eq!(body.0, "stale");
     }
 
     #[test]
@@ -325,7 +371,67 @@ mod tests {
                 })
             })
             .unwrap();
-        assert_eq!(body, "stale");
+        assert_eq!(body.0, "stale");
+    }
+
+    fn advisory_key() -> &'static str {
+        "POST https://api.osv.dev/v1/querybatch\n{\"queries\":[]}"
+    }
+
+    #[test]
+    fn a_two_hour_old_advisory_is_served_and_labelled_stale() {
+        let (_directory, cache) = cache(60);
+        cache
+            .put(advisory_key(), "old-advisories", now_seconds() - 2 * 3600)
+            .unwrap();
+        let http = HttpClient::with_cache(Some(cache));
+
+        let (body, source) = http
+            .cached(advisory_key(), || Err(network_error()))
+            .unwrap();
+        assert_eq!(body, "old-advisories");
+        match source {
+            Source::Stale { age_seconds } => {
+                assert!((7100..=7300).contains(&age_seconds), "{age_seconds}")
+            }
+            other => panic!("expected stale, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_three_day_old_advisory_is_refused() {
+        let (_directory, cache) = cache(60);
+        cache
+            .put(advisory_key(), "ancient", now_seconds() - 3 * 24 * 3600)
+            .unwrap();
+        let http = HttpClient::with_cache(Some(cache));
+
+        assert!(
+            http.cached(advisory_key(), || Err(network_error()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_configured_osv_base_gets_the_advisory_policy() {
+        let (_first, store) = cache(60);
+        let key = "POST https://osv.test/v1/querybatch\n{}";
+        store
+            .put(key, "ancient", now_seconds() - 25 * 3600)
+            .unwrap();
+        let http = HttpClient::with_cache_and_base(Some(store), "https://osv.test".to_string());
+
+        // Past 24h the advisory stale cap applies: refused, not served.
+        assert!(http.cached(key, || Err(network_error())).is_err());
+
+        // Six minutes old is past the five-minute advisory TTL: the network is
+        // consulted even though the general TTL would still consider it fresh.
+        let (_second, store) = cache(3600);
+        store.put(key, "cached", now_seconds() - 360).unwrap();
+        let http = HttpClient::with_cache_and_base(Some(store), "https://osv.test".to_string());
+        let (body, source) = http.cached(key, || Ok("network".to_string())).unwrap();
+        assert_eq!(body, "network");
+        assert_eq!(source, Source::Network);
     }
 
     #[test]
@@ -362,7 +468,8 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(body, "recovered");
+        assert_eq!(body.0, "recovered");
+        assert_eq!(body.1, Source::Network);
         assert_eq!(attempts, 2);
     }
 
@@ -412,7 +519,8 @@ mod tests {
                 Ok("live".to_string())
             })
             .unwrap();
-        assert_eq!(first, "live");
+        assert_eq!(first.0, "live");
+        assert_eq!(first.1, Source::Network);
 
         {
             let cache = http.cache.as_ref().unwrap().lock().unwrap();
@@ -424,7 +532,7 @@ mod tests {
                 Ok("refetched".to_string())
             })
             .unwrap();
-        assert_eq!(again, "refetched");
+        assert_eq!(again.0, "refetched");
         assert_eq!(calls, 2);
     }
 
@@ -444,7 +552,8 @@ mod tests {
                 panic!("metadata should still be fresh")
             })
             .unwrap();
-        assert_eq!(body, "cached");
+        assert_eq!(body.0, "cached");
+        assert_eq!(body.1, Source::Fresh);
     }
 
     #[test]
@@ -474,19 +583,20 @@ mod tests {
                 }
             })
             .unwrap();
-        assert_eq!(body, "recovered");
+        assert_eq!(body.0, "recovered");
 
         let again = http
             .cached("k", || panic!("the retried body should be cached"))
             .unwrap();
-        assert_eq!(again, "recovered");
+        assert_eq!(again.0, "recovered");
     }
 
     #[test]
     fn without_cache_every_call_fetches() {
         let http = HttpClient::with_cache(None);
         let body = http.cached("k", || Ok("fresh".to_string())).unwrap();
-        assert_eq!(body, "fresh");
+        assert_eq!(body.0, "fresh");
+        assert_eq!(body.1, Source::Network);
     }
 
     #[test]
@@ -495,11 +605,11 @@ mod tests {
         let http = HttpClient::with_cache(Some(cache));
 
         let body = http.cached("k", || Ok("network".to_string())).unwrap();
-        assert_eq!(body, "network");
+        assert_eq!(body.0, "network");
         let again = http
             .cached("k", || panic!("second read should be cached"))
             .unwrap();
-        assert_eq!(again, "network");
+        assert_eq!(again.0, "network");
     }
 
     #[test]

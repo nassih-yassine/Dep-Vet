@@ -35,6 +35,9 @@ const MAX_CONCURRENT_FETCHES: usize = 8;
 pub struct AdvisoryList {
     pub advisories: Vec<Advisory>,
     pub hidden: usize,
+    /// How old the cached advisory answer was when it was served after a
+    /// failed refresh. `None` means the answer is fresh.
+    pub stale_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -146,7 +149,11 @@ impl OsvClient {
                 }))
                 .collect::<Vec<_>>()
         });
-        let response = self.http.post_json(&url, &body)?;
+        let (response, source) = self.http.post_json_with_source(&url, &body)?;
+        let stale_seconds = match source {
+            crate::http::Source::Stale { age_seconds } => Some(age_seconds),
+            _ => None,
+        };
         // Cap before hydrating: the cap exists to bound detail requests.
         let capped: Vec<(Vec<String>, usize)> = parse_batch_ids(&response)?
             .into_iter()
@@ -162,7 +169,10 @@ impl OsvClient {
             }
         }
         let bodies = self.fetch_bodies(&unique);
-        check_len(lists_from(chunk, capped, &bodies), chunk.len())
+        check_len(
+            lists_from(chunk, capped, &bodies, stale_seconds),
+            chunk.len(),
+        )
     }
 
     /// Raw advisory bodies keyed by id. A failed fetch is `None`, which becomes
@@ -228,6 +238,7 @@ fn lists_from(
     queries: &[OsvQuery],
     ids: Vec<(Vec<String>, usize)>,
     bodies: &std::collections::HashMap<String, Option<String>>,
+    stale_seconds: Option<i64>,
 ) -> Vec<AdvisoryList> {
     queries
         .iter()
@@ -244,6 +255,7 @@ fn lists_from(
             AdvisoryList {
                 advisories: dedupe(advisories),
                 hidden,
+                stale_seconds,
             }
         })
         .collect()
@@ -542,7 +554,7 @@ mod tests {
         let mut bodies = std::collections::HashMap::new();
         bodies.insert("GHSA-shared".to_string(), Some(record.to_string()));
 
-        let lists = lists_from(&queries, ids, &bodies);
+        let lists = lists_from(&queries, ids, &bodies, None);
         assert_eq!(
             lists[0].advisories[0].fixed_versions,
             vec!["2.0.0".to_string()]

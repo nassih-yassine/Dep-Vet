@@ -87,13 +87,22 @@ impl Cache {
 
     /// Entry regardless of age, for network-failure fallback.
     pub fn stale(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        Ok(self
+            .stale_with_age(key, now_seconds())?
+            .map(|(body, _)| body))
+    }
+
+    /// A stale entry with how long ago it was fetched, so a caller can refuse
+    /// advice that is too old or say exactly how old it is.
+    pub fn stale_with_age(&self, key: &str, now: i64) -> rusqlite::Result<Option<(String, i64)>> {
         self.connection
             .query_row(
-                "SELECT body FROM http_cache WHERE key = ?1",
+                "SELECT body, fetched_at FROM http_cache WHERE key = ?1",
                 (key,),
-                |row| row.get(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
             )
             .optional()
+            .map(|entry| entry.map(|(body, fetched_at)| (body, (now - fetched_at).max(0))))
     }
 
     pub fn ttl_seconds(&self) -> i64 {
