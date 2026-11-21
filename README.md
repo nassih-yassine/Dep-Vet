@@ -563,7 +563,7 @@ derived `verdict`/`exit_code`.
 ### Cache
 
 Responses are cached in SQLite at `~/.cache/dep-vet/http-cache.db` (or
-`$XDG_CACHE_HOME/dep-vet`). A warm run makes zero network calls:
+`$XDG_CACHE_HOME/dep-vet`; on Windows, `%LOCALAPPDATA%\dep-vet`). A warm run makes zero network calls:
 
 ```console
 $ time dep-vet npm lodash@4.17.15

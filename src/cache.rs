@@ -120,13 +120,27 @@ impl Cache {
 }
 
 pub fn cache_directory() -> Option<PathBuf> {
-    if let Some(directory) = std::env::var_os("DEPVET_CACHE_DIR") {
+    cache_directory_from(|name| std::env::var_os(name), cfg!(windows))
+}
+
+/// Platform rules as one pure function, so the Windows branch is testable on
+/// every OS. `windows` is injected instead of read from `cfg!`.
+fn cache_directory_from(
+    get: impl Fn(&str) -> Option<std::ffi::OsString>,
+    windows: bool,
+) -> Option<PathBuf> {
+    if let Some(directory) = get("DEPVET_CACHE_DIR") {
         return Some(PathBuf::from(directory));
     }
-    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+    if let Some(xdg) = get("XDG_CACHE_HOME") {
         return Some(PathBuf::from(xdg).join("dep-vet"));
     }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache").join("dep-vet"))
+    if windows && let Some(local) = get("LOCALAPPDATA") {
+        return Some(PathBuf::from(local).join("dep-vet"));
+    }
+    get("HOME")
+        .or_else(|| if windows { get("USERPROFILE") } else { None })
+        .map(|home| PathBuf::from(home).join(".cache").join("dep-vet"))
 }
 
 fn ttl_from_env() -> i64 {
@@ -152,6 +166,48 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let cache = Cache::open(directory.path().join("cache.db"), 60).unwrap();
         (directory, cache)
+    }
+
+    #[test]
+    fn windows_uses_localappdata_and_ignores_it_elsewhere() {
+        use std::ffi::OsString;
+        let only_local = |name: &str| match name {
+            "LOCALAPPDATA" => Some(OsString::from("C:/Users/me/AppData/Local")),
+            _ => None,
+        };
+        assert_eq!(
+            cache_directory_from(only_local, true),
+            Some(PathBuf::from("C:/Users/me/AppData/Local").join("dep-vet"))
+        );
+        assert_eq!(
+            cache_directory_from(only_local, false),
+            None,
+            "LOCALAPPDATA is a Windows variable"
+        );
+    }
+
+    #[test]
+    fn explicit_and_xdg_directories_win_platform_defaults() {
+        use std::ffi::OsString;
+        let env = |name: &str| match name {
+            "DEPVET_CACHE_DIR" => Some(OsString::from("/tmp/explicit")),
+            "XDG_CACHE_HOME" => Some(OsString::from("/tmp/xdg")),
+            "LOCALAPPDATA" => Some(OsString::from("C:/local")),
+            "HOME" => Some(OsString::from("/home/me")),
+            _ => None,
+        };
+        assert_eq!(
+            cache_directory_from(env, true),
+            Some(PathBuf::from("/tmp/explicit"))
+        );
+        let xdg_only = |name: &str| match name {
+            "XDG_CACHE_HOME" => Some(OsString::from("/tmp/xdg")),
+            _ => None,
+        };
+        assert_eq!(
+            cache_directory_from(xdg_only, true),
+            Some(PathBuf::from("/tmp/xdg").join("dep-vet"))
+        );
     }
 
     #[test]

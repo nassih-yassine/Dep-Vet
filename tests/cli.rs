@@ -3491,6 +3491,7 @@ fn audit_reads_deno_lock_and_audits_jsr_entries() {
     assert_eq!(value["errors"].as_array().unwrap().len(), 0);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn watch_reruns_after_the_lockfile_changes() {
     use std::io::{BufRead, BufReader};
@@ -3555,6 +3556,7 @@ fn watch_reruns_after_the_lockfile_changes() {
     let _ = child.wait();
 }
 
+#[cfg(unix)]
 fn stub_dep_vet(exit_code: i32) -> (tempfile::TempDir, std::path::PathBuf) {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
@@ -3569,6 +3571,7 @@ fn stub_dep_vet(exit_code: i32) -> (tempfile::TempDir, std::path::PathBuf) {
     (directory, log)
 }
 
+#[cfg(unix)]
 fn run_pre_commit(
     repo: &Repo,
     stub_dir: &std::path::Path,
@@ -3591,6 +3594,7 @@ fn run_pre_commit(
         .unwrap()
 }
 
+#[cfg(unix)]
 #[test]
 fn pre_commit_runs_only_for_staged_lockfiles() {
     let repo = Repo::new();
@@ -3612,6 +3616,7 @@ fn pre_commit_runs_only_for_staged_lockfiles() {
     assert!(calls.contains("audit package-lock.json"), "{calls}");
 }
 
+#[cfg(unix)]
 #[test]
 fn pre_commit_blocks_on_high_risk_and_passes_warnings() {
     let repo = Repo::new();

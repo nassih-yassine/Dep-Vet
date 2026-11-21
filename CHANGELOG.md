@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Windows and macOS.** The cache honours `%LOCALAPPDATA%` on Windows, nested
+  lockfiles are read with forward-slash git paths and `--end-of-options`, refs
+  that look like flags are refused, and CI now runs the test suite on ubuntu,
+  macOS, and Windows. Shell- and inotify-dependent tests are gated.
 - **The Action survives read-only tokens.** Inputs flow through quoted `env:`
   values, the report is written to the step summary before commenting, a
   read-only token (Dependabot/fork PRs) emits a warning instead of failing, and
