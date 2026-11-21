@@ -35,6 +35,15 @@ cargo fmt --check
 
 Clippy warnings are errors. Do not commit unformatted code.
 
+A tracked pre-push hook (`.githooks/pre-push`) runs fmt, clippy, and tests.
+Enable it once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Do not push with `--no-verify` to get past a failure; fix the failure.
+
 ## Layout
 
 | File | Owns |

@@ -159,6 +159,17 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
+Enable the pre-push gate once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+It runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
+`cargo test` before anything leaves the machine. It checks the working tree, so
+an unformatted scratch edit also blocks the push — commit or revert first.
+`git push --no-verify` bypasses it, and should stay rare enough to notice.
+
 Tests never touch the public registry. `tests/cli.rs` starts a local HTTP server
 and points the binary at it through `DEPVET_REGISTRY_BASE`, so encoding, status
 handling, and output are all exercised end to end.
