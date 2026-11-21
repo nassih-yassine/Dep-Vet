@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 316 unit + 96 end-to-end tests
+cargo test --locked                      # 319 unit + 97 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -123,6 +123,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **Gradle locking is Maven.** `gradle.lockfile` lines are
+  `group:artifact:version=configurations`; the `empty=` line and `#` comments
+  are skipped, and `buildscript-gradle.lockfile` / `settings-gradle.lockfile`
+  map to the same parser. The ecosystem is Maven, so audits reuse `audit_maven`.
+  A project without dependency locking has no file: never infer versions from
+  build scripts.
 - **Composer has two endpoints.** `repo.packagist.org/p2/{vendor}/{name}.json`
   lists versions and times (minified entries may omit fields); the package
   endpoint at `packagist.org/packages/...` adds maintainers and the abandoned

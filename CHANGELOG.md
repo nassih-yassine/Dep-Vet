@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Gradle:** `gradle.lockfile`, `buildscript-gradle.lockfile`, and
+  `settings-gradle.lockfile` are audited through the Maven ecosystem. Projects
+  that do not enable dependency locking have no file, so there is nothing to
+  check and nothing is guessed.
+
 ## 0.5.0 — 2026-11-21
 
 - **Composer:** `dep-vet composer vendor/package[@version]` and `composer.lock`

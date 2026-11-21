@@ -143,6 +143,7 @@ dep-vet audit deno.lock              # Deno: npm and JSR entries
 dep-vet audit Gemfile.lock           # RubyGems
 dep-vet audit packages.lock.json     # NuGet
 dep-vet audit composer.lock          # Composer
+dep-vet audit gradle.lockfile        # Gradle dependency locking
 ```
 
 Vets **every** package the lockfile installs, not just the diff, and reports the
@@ -166,6 +167,7 @@ What each format contributes, and what it cannot:
 | `Gemfile.lock` | remote `GEM` specs | `PATH`/`GIT` sections; yanked versions are absent from the API |
 | `packages.lock.json` | resolved dependencies for every target framework | unresolved entries; project references |
 | `composer.lock` | `packages` and `packages-dev` | dev-only advisories are still reported |
+| `gradle.lockfile` | `group:artifact:version` lines, including `buildscript-`/`settings-` variants | unlocked configurations; Gradle without dependency locking |
 
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
@@ -416,8 +418,8 @@ clean.
 - **npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven, and Composer**, for
   both `audit` and `lock`, including
   `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`, `poetry.lock`, and
-  `uv.lock`, `Gemfile.lock`, `packages.lock.json`, `composer.lock`. JSR has no
-  advisory source,
+  `uv.lock`, `Gemfile.lock`, `packages.lock.json`, `composer.lock`,
+  `gradle.lockfile`. JSR has no advisory source,
   so JSR reports say advisory coverage is unavailable. RubyGems has no owner
   list, weekly downloads, or install-time file data; yanked versions disappear
   from its API, so asking for one reports "not found" rather than "yanked".
@@ -440,6 +442,9 @@ clean.
   the package you named, `dep-vet lock` for the `name@version` pairs a change
   adds, and `dep-vet audit` for every installed package — never for the
   transitive install scripts a package would execute.
+- **Gradle needs dependency locking.** `gradle.lockfile` (and its `buildscript-`
+  and `settings-` variants) is audited as Maven coordinates; a build that never
+  ran `--write-locks` has no file to check, and dep-vet will not invent one.
 - Not an SBOM generator or a Dependabot replacement.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
 - One batch query plus one request per advisory on a cold cache, at most 8 in

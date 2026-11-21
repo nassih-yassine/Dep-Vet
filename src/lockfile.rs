@@ -54,6 +54,7 @@ pub enum Format {
     Gemfile,
     NugetLock,
     Composer,
+    Gradle,
 }
 
 impl Format {
@@ -65,6 +66,7 @@ impl Format {
             Self::Gemfile => crate::model::Ecosystem::RubyGems,
             Self::NugetLock => crate::model::Ecosystem::NuGet,
             Self::Composer => crate::model::Ecosystem::Composer,
+            Self::Gradle => crate::model::Ecosystem::Maven,
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
@@ -88,6 +90,9 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         "Gemfile.lock" => Ok(Format::Gemfile),
         "packages.lock.json" => Ok(Format::NugetLock),
         "composer.lock" => Ok(Format::Composer),
+        "gradle.lockfile" | "buildscript-gradle.lockfile" | "settings-gradle.lockfile" => {
+            Ok(Format::Gradle)
+        }
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
         "poetry.lock" => Ok(Format::Poetry),
@@ -107,6 +112,7 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
         Format::Gemfile => Ok(parse_gemfile(body)),
         Format::NugetLock => parse_nuget_lock(body),
         Format::Composer => parse_composer_lock(body),
+        Format::Gradle => Ok(parse_gradle(body)),
         Format::Pip => Ok(parse_pip(body)),
         Format::Poetry => parse_poetry(body),
         Format::Uv => parse_uv(body),
@@ -613,6 +619,45 @@ fn parse_gemfile(body: &str) -> LockContents {
                 name: name.to_string(),
                 version: version.to_string(),
             });
+        }
+    }
+
+    finish(packages, skipped)
+}
+
+/// Gradle's dependency lockfile is `group:artifact:version=configurations` per
+/// line. The `empty=` line lists configurations with no dependencies, and the
+/// header is comments.
+fn parse_gradle(body: &str) -> LockContents {
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for raw in body.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((coordinates, _configurations)) = line.split_once('=') else {
+            skipped.push((line.to_string(), "unreadable Gradle lock line".to_string()));
+            continue;
+        };
+        if coordinates == "empty" {
+            continue;
+        }
+        let mut parts = coordinates.split(':');
+        match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some(group), Some(artifact), Some(version), None)
+                if !group.is_empty() && !artifact.is_empty() && !version.is_empty() =>
+            {
+                packages.push(LockedPackage {
+                    name: format!("{group}:{artifact}"),
+                    version: version.to_string(),
+                });
+            }
+            _ => skipped.push((
+                coordinates.to_string(),
+                "unreadable Gradle coordinates".to_string(),
+            )),
         }
     }
 
@@ -1326,6 +1371,46 @@ DEPENDENCIES
             parse(Format::NugetLock, "{ nope"),
             Err(LockError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn gradle_lock_reads_coordinates_and_skips_empty_configurations() {
+        let body = r#"# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+org.springframework:spring-beans:5.0.5.RELEASE=compileClasspath, runtimeClasspath
+org.springframework:spring-core:5.0.5.RELEASE=compileClasspath, runtimeClasspath
+com.google.guava:guava:28.1-jre=classpath
+empty=annotationProcessor
+"#;
+        let contents = parse(Format::Gradle, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("com.google.guava:guava", "28.1-jre"),
+                package("org.springframework:spring-beans", "5.0.5.RELEASE"),
+                package("org.springframework:spring-core", "5.0.5.RELEASE")
+            ]
+        );
+        assert!(contents.skipped.is_empty());
+    }
+
+    #[test]
+    fn gradle_lock_reports_lines_without_coordinates() {
+        let body = "not-a-lock-line\norg.example:thing=config\n";
+        let contents = parse(Format::Gradle, body).unwrap();
+        assert!(contents.packages.is_empty());
+        assert_eq!(contents.skipped.len(), 2);
+    }
+
+    #[test]
+    fn gradle_lockfile_names_are_recognized() {
+        for name in [
+            "gradle.lockfile",
+            "buildscript-gradle.lockfile",
+            "settings-gradle.lockfile",
+        ] {
+            assert_eq!(detect(Path::new(name)).unwrap(), Format::Gradle, "{name}");
+        }
     }
 
     #[test]
