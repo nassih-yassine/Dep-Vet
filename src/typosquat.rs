@@ -189,7 +189,9 @@ pub const POPULAR_CRATES: &[&str] = &[
     "rustls",
     "serde",
     "serde_json",
+    "sha1",
     "sha2",
+    "sha3",
     "shlex",
     "smallvec",
     "sqlx",
@@ -638,6 +640,16 @@ mod tests {
         assert_eq!(sorted.len(), POPULAR_NUGET.len(), "duplicate NuGet ids");
         for name in ["newtonsoft.json", "serilog", "xunit"] {
             assert!(POPULAR_NUGET.contains(&name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn the_sha_family_is_not_a_typo_of_itself() {
+        for name in ["sha1", "sha2", "sha3"] {
+            assert!(
+                closest(name, POPULAR_CRATES, &[]).is_none(),
+                "{name} must be recognised as a real crate family"
+            );
         }
     }
 

@@ -85,6 +85,31 @@ impl HttpClient {
         self.cached(url, || self.fetch_get(url))
     }
 
+    /// Raw response for callers that must stream a body (archives). Statuses
+    /// are checked here, so a caller still sees `HttpError::Status` on 404.
+    pub fn get_raw(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>, HttpError> {
+        match self.agent.get(url).call() {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                if (200..300).contains(&status) {
+                    Ok(response)
+                } else {
+                    let retry_after = response
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(parse_retry_after);
+                    Err(HttpError::Status {
+                        status,
+                        url: url.to_string(),
+                        retry_after,
+                    })
+                }
+            }
+            Err(error) => Err(network_error(error, url)),
+        }
+    }
+
     pub fn post_json(&self, url: &str, body: &serde_json::Value) -> Result<String, HttpError> {
         let key = format!("POST {url}\n{body}");
         self.cached(&key, || self.fetch_post(url, body))

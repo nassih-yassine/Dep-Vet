@@ -12,13 +12,19 @@ if [ -z "$changed" ]; then
     exit 0
 fi
 
-lockfiles=$(printf '%s\n' "$changed" | grep -E '(^|/)(package-lock\.json|bun\.lock|pnpm-lock\.yaml|yarn\.lock|deno\.lock|Cargo\.lock|go\.mod|requirements[^/]*\.txt|poetry\.lock|uv\.lock)$' || true)
+lockfiles=$(printf '%s\n' "$changed" | grep -E '(^|/)(package-lock\.json|bun\.lock|pnpm-lock\.yaml|yarn\.lock|deno\.lock|Cargo\.lock|go\.mod|requirements[^/]*\.txt|poetry\.lock|uv\.lock|Pipfile\.lock|Gemfile\.lock|packages\.lock\.json|packages\.config|composer\.lock|(buildscript-|settings-)?gradle\.lockfile)$' || true)
 if [ -z "$lockfiles" ]; then
     exit 0
 fi
 
 run_dep_vet() {
-    if command -v dep-vet >/dev/null 2>&1; then
+    # Prefer this checkout's build: a stale binary on PATH must not judge new
+    # signals or new seeds with old rules.
+    if [ -x target/debug/dep-vet ] && { [ ! -x target/release/dep-vet ] || [ target/debug/dep-vet -nt target/release/dep-vet ]; }; then
+        target/debug/dep-vet "$@"
+    elif [ -x target/release/dep-vet ]; then
+        target/release/dep-vet "$@"
+    elif command -v dep-vet >/dev/null 2>&1; then
         dep-vet "$@"
     else
         cargo run --quiet -- "$@"

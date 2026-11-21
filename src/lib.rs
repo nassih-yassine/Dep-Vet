@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod allowlist;
+pub mod archive;
 pub mod branding;
 pub mod cache;
 pub mod cli;
@@ -9,6 +10,7 @@ pub mod crates;
 pub mod date;
 pub mod go;
 pub mod http;
+pub mod inspect;
 pub mod jsr;
 pub mod lockfile;
 pub mod maven;

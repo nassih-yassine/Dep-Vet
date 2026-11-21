@@ -56,9 +56,10 @@ cargo fmt --check
 
 Clippy warnings are errors. Do not commit unformatted code.
 
-Two tracked hooks live in `.githooks/`: `pre-commit` vets staged lockfiles
-(`lock --base HEAD`, full `audit` for newly added files; blocks on exit 2/3,
-warnings pass), and `pre-push` runs fmt, clippy, and tests. Enable both once per
+Two tracked hooks live in `.githooks/`: `pre-commit` vets staged lockfiles in
+every supported format (`lock --base HEAD`, full `audit` for newly added files;
+blocks on exit 2/3, warnings pass) and prefers this checkout's `target/` build so
+a stale `dep-vet` on PATH cannot judge new rules with an old seed, and `pre-push` runs fmt, clippy, and tests. Enable both once per
 clone:
 
 ```sh
