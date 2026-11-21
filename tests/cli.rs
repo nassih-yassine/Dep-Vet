@@ -462,3 +462,29 @@ fn version_exits_zero() {
         .code(0)
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }
+
+#[test]
+fn help_shows_the_wordmark() {
+    binary()
+        .arg("--help")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains(
+            "dependency risk, checked before install",
+        ))
+        .stdout(predicate::str::contains("####"));
+}
+
+#[test]
+fn piped_output_has_no_wordmark() {
+    let package = PackageFixture::clean("clean-pkg");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["npm", "clean-pkg"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dependency risk").not())
+        .stdout(predicate::str::contains("INFO"));
+}

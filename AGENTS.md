@@ -8,10 +8,11 @@ doc; `docs/brief.md` is the product rationale and evidence.
 
 These override convenience. Do not shortcut them.
 
-1. Feature work happens on its own branch. When the feature is complete and
-   tested, report what changed and stop; merge to `main` only after explicit
-   approval in the conversation. Do not open pull requests — this repo is
-   single-owner and the approval happens here, not on GitHub.
+1. Feature work happens on its own branch. Merge to `main` automatically once the
+   work is complete and `cargo fmt --check`, `cargo clippy --all-targets -- -D
+   warnings`, and `cargo test` all pass. Do not open pull requests. Stop and ask
+   only when a decision would change scope, or when a green build needs a
+   judgement call.
 2. Every change ships with tests. Actively try to break the app: malformed
    registry JSON, future timestamps, path traversal in specs, huge packuments,
    closed pipes, missing fields.
@@ -78,6 +79,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   from npm's search endpoint. Names under 4 chars are intentionally skipped.
 - **`signals.rs` stays pure.** Time enters as `now: i64` (Unix seconds) so
   freshness rules are deterministic in tests.
+- **Branding lives in `src/branding.rs`.** `HELP_HEADER` is a literal copy of
+  the logo because `concat!` only takes literals; a test keeps it in sync with
+  `LOGO_ASCII`. The banner prints only on a terminal, never in JSON or pipes.
 
 ## Not built yet
 

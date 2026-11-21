@@ -1,6 +1,29 @@
-# dep-vet
+<div align="center">
+
+<pre>
+    █                                 █
+    █                                ███
+ ████  ███  ████        █   █  ███    █
+█   █ █   █ █   █  ███  █   █ █   █   █
+█   █ █████ ████        █   █ █████   █
+█   █ █     █            █ █  █       █
+ ████  ███  █             █    ███    ██
+</pre>
 
 **Check a package's risk before it enters your lockfile.**
+
+<p>
+<img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
+<img alt="single static binary" src="https://img.shields.io/badge/binary-static%2C%20no%20runtime-success.svg">
+<img alt="no telemetry" src="https://img.shields.io/badge/telemetry-none-success.svg">
+<img alt="ecosystem npm" src="https://img.shields.io/badge/ecosystem-npm-cb3837.svg">
+</p>
+
+<code>dep-vet npm express@5.3.0</code>
+
+</div>
+
+---
 
 `npm install` runs code. `dep-vet` reads public registry metadata and tells you
 what a package will do at that moment: whether it runs install scripts, how old
@@ -8,7 +31,7 @@ it is, who published this version, whether its name is one typo away from a
 popular package, and whether it is deprecated. Every finding links to the raw
 evidence it came from.
 
-```
+```console
 $ dep-vet npm crossenv
 npm/crossenv@0.0.2-security
 
@@ -31,14 +54,17 @@ npm/crossenv@0.0.2-security
 
 No account, no API key, no telemetry, no score out of 100. One binary.
 
-## Why
+## Why before install
 
-A scanner that runs after the lockfile is written answers "is this vulnerable?".
-The moment that matters is earlier: *should this tarball run on my machine at
-all?* Attacks like the `axios@1.14.1` compromise added a single dependency whose
-only job was a `postinstall` hook, invisible in `package.json` and transitive.
-`dep-vet` puts that fact, plus the package's history, in front of you before you
-type `npm install`.
+| | dep-vet | `npm audit` | Dependabot |
+|---|---|---|---|
+| Question | should this tarball run on my machine? | is an installed version vulnerable? | is an installed dependency outdated or vulnerable? |
+| Moment | before `npm install` | after install | after commit |
+| Input | a package name you are considering | a lockfile | a repository |
+
+The gap is the moment trust is granted. The `axios@1.14.1` compromise added a
+single dependency whose only job was a `postinstall` hook — invisible in
+`package.json`, transitive, and already running by the time an audit exists.
 
 ## Install
 
@@ -51,8 +77,6 @@ cargo install --git https://github.com/nassih-yassine/Dep-Vet.git
 Prebuilt binaries and the GitHub Action are on the roadmap.
 
 ## Usage
-
-### Vet a package
 
 ```sh
 dep-vet npm express              # latest
@@ -113,7 +137,8 @@ dep-vet npm crossenv --json
 ```
 
 Timestamps are Unix seconds. `verdict` and `exit_code` are derived from the
-findings, so consumers do not have to re-implement the severity rules.
+findings, so consumers do not re-implement the severity rules. JSON output never
+contains the wordmark or ANSI colors.
 
 ### Color
 
@@ -129,7 +154,7 @@ DEPVET_REGISTRY_BASE=https://registry.npmjs.org dep-vet npm express
 DEPVET_DOWNLOADS_BASE=https://api.npmjs.org/downloads/point dep-vet npm express
 ```
 
-## What it checks
+## Signals
 
 | Signal | Severity | Meaning |
 |--------|----------|---------|
@@ -144,12 +169,16 @@ DEPVET_DOWNLOADS_BASE=https://api.npmjs.org/downloads/point dep-vet npm express
 Every finding carries evidence, and a finding whose claim cannot be linked to a
 raw source does not ship.
 
-## What it does not do
+## Scope and limits
 
+- **npm only.** Bun, pnpm, and yarn install from the same registry, so package
+  vetting is accurate for them; lockfile commands and manager-specific script
+  policy are not implemented.
 - Not a CVE scanner. OSV advisories are the next feature, not this release.
 - Not an SBOM generator or a Dependabot replacement.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
-- No cache yet: each run makes two HTTP requests. Expected in v0.2.
+- No cache yet: each run makes two HTTP requests. The cache is the current
+  work in progress.
 - The popular-name list is a curated seed, not a download ranking.
 
 ## Development
@@ -173,11 +202,11 @@ It runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
 an unformatted scratch edit also blocks the push — commit or revert first.
 `git push --no-verify` bypasses it, and should stay rare enough to notice.
 
-Tests never touch the public registry. `tests/cli.rs` starts a local HTTP server
+Tests never touch the public registry: `tests/cli.rs` starts a local HTTP server
 and points the binary at it through `DEPVET_REGISTRY_BASE`, so encoding, status
-handling, and output are all exercised end to end.
+handling, and output are exercised end to end.
 
-Layout:
+### Layout
 
 ```
 src/cli.rs        clap surface
@@ -185,13 +214,15 @@ src/model.rs      PackageSpec, Severity, Finding, PackageReport
 src/registry.rs   packument fetch + parsing, download counts
 src/signals.rs    the rules: metadata in, findings out
 src/typosquat.rs  Levenshtein, homoglyph folding, popular-name seed
+src/branding.rs   the wordmark in --help and interactive reports
 src/report.rs     human and JSON rendering
 src/date.rs       RFC 3339 parsing, no date crate
 src/main.rs       wiring, color choice, exit codes
 ```
 
-Feature work happens on a branch and merges only after review. Bug fixes start
-with a failing test, as the `GitHub Actions` publisher false positive did.
+Feature work happens on a branch and merges once the push gate is green. Bug
+fixes start with a failing test, as the `GitHub Actions` publisher false positive
+did.
 
 ## Roadmap
 
@@ -204,4 +235,4 @@ with a failing test, as the `GitHub Actions` publisher false positive did.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
