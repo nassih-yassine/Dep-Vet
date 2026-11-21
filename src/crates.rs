@@ -80,19 +80,24 @@ impl CratesClient {
         let Some(previous) = meta.release.previous_version.clone() else {
             return;
         };
-        meta.release.dependencies = self.version_dependencies(&meta.name, &meta.version);
-        meta.release.previous_dependencies = self.version_dependencies(&meta.name, &previous);
+        let (Some(current), Some(previous_dependencies)) = (
+            self.version_dependencies(&meta.name, &meta.version),
+            self.version_dependencies(&meta.name, &previous),
+        ) else {
+            return;
+        };
+        meta.release.dependencies = current;
+        meta.release.previous_dependencies = previous_dependencies;
+        meta.release.history_known = true;
     }
 
-    fn version_dependencies(&self, name: &str, version: &str) -> Vec<String> {
+    fn version_dependencies(&self, name: &str, version: &str) -> Option<Vec<String>> {
         let url = format!(
             "{}/api/v1/crates/{name}/{version}/dependencies",
             self.base.trim_end_matches('/')
         );
-        let Ok(body) = self.http.get(&url) else {
-            return Vec::new();
-        };
-        parse_dependencies(&body)
+        let body = self.http.get(&url).ok()?;
+        Some(parse_dependencies(&body))
     }
 }
 
@@ -213,7 +218,17 @@ fn parse_crate(
         candidate_weekly_downloads: None,
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
-            previous_published_at: previous.map(|(_, time)| time),
+            previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            previous_publisher: previous
+                .as_ref()
+                .and_then(|(version, _)| {
+                    response
+                        .versions
+                        .iter()
+                        .find(|release| release.num == *version)
+                })
+                .and_then(|release| release.published_by.as_ref())
+                .map(|user| user.login.clone()),
             ..crate::registry::ReleaseHistory::default()
         },
     })
@@ -335,6 +350,12 @@ mod tests {
             parse_dependencies(body),
             vec!["cc".to_string(), "rand".to_string()]
         );
+    }
+
+    #[test]
+    fn records_the_previous_publisher() {
+        let meta = fetch(SERDE, Some("1.0.229")).unwrap();
+        assert_eq!(meta.release.previous_publisher.as_deref(), Some("oli-obk"));
     }
 
     #[test]

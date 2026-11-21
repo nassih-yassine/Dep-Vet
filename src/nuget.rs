@@ -137,7 +137,12 @@ fn parse_versions(
     let previous = {
         let entries: Vec<(&str, Option<i64>)> = registration
             .iter()
-            .map(|release| (release.version.as_str(), release.published))
+            .map(|release| {
+                (
+                    release.version.as_str(),
+                    release.published.filter(|epoch| *epoch > 0),
+                )
+            })
             .collect();
         crate::registry::previous_release(&entries, &version, published_at)
     };
@@ -176,9 +181,10 @@ fn parse_versions(
         candidate_weekly_downloads: None,
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
-            previous_published_at: previous.map(|(_, time)| time),
+            previous_published_at: previous.as_ref().map(|(_, time)| *time),
             previous_dependencies,
             dependencies: current_dependencies,
+            history_known: previous.is_some(),
             ..crate::registry::ReleaseHistory::default()
         },
     })
@@ -323,6 +329,32 @@ mod tests {
             meta.release.dependencies,
             vec!["Newtonsoft.Json".to_string(), "Serilog".to_string()]
         );
+    }
+
+    #[test]
+    fn the_1900_sentinel_is_not_a_previous_release() {
+        let registration = vec![
+            RegVersion {
+                version: "1.0.0".to_string(),
+                published: date::parse_timestamp("1900-01-01T00:00:00Z"),
+                deprecated: false,
+                dependencies: Vec::new(),
+            },
+            RegVersion {
+                version: "2.0.0".to_string(),
+                published: date::parse_timestamp("2024-03-01T00:00:00Z"),
+                deprecated: false,
+                dependencies: Vec::new(),
+            },
+        ];
+        let meta = parse_versions(
+            &spec("x", Some("2.0.0")),
+            r#"{ "versions": ["1.0.0", "2.0.0"] }"#,
+            &registration,
+            "url",
+        )
+        .unwrap();
+        assert_eq!(meta.release.previous_version, None);
     }
 
     #[test]

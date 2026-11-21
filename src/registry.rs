@@ -57,6 +57,9 @@ pub struct ReleaseHistory {
     pub previous_install_scripts: Vec<InstallScript>,
     pub previous_dependencies: Vec<String>,
     pub dependencies: Vec<String>,
+    /// True when the previous release's shape was actually read. Empty lists
+    /// with this false mean "unknown", never "nothing changed".
+    pub history_known: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -140,11 +143,6 @@ impl RegistryClient {
         let names = [name.to_string()];
         self.weekly_downloads_many(&names).remove(name)
     }
-
-    /// History signals only concern releases this recent; older versions are
-    /// covered by advisories, and fetching their history would cost requests that
-    /// change nothing.
-    pub const HISTORY_WINDOW_DAYS: i64 = 30;
 
     /// Weekly downloads for many packages. The endpoint takes up to 128
     /// comma-separated names; names absent from a response are absent here.
@@ -396,6 +394,7 @@ fn parse_packument(
                 .map(|doc| doc.dependencies.keys().cloned().collect())
                 .unwrap_or_default(),
             dependencies: doc.dependencies.keys().cloned().collect(),
+            history_known: previous_doc.is_some(),
         },
     })
 }
@@ -565,6 +564,22 @@ mod tests {
             }
         }
     }"#;
+
+    #[test]
+    fn a_previous_version_without_a_document_is_unknown_history() {
+        let body = r#"{
+            "name": "partial",
+            "dist-tags": { "latest": "2.0.0" },
+            "time": {
+                "1.0.0": "2024-01-01T00:00:00.000Z",
+                "2.0.0": "2024-02-01T00:00:00.000Z"
+            },
+            "versions": { "2.0.0": { "dependencies": { "a": "1" } } }
+        }"#;
+        let meta = fetch(body, None).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("1.0.0"));
+        assert!(!meta.release.history_known, "no document, no history");
+    }
 
     #[test]
     fn records_the_previous_release_details() {

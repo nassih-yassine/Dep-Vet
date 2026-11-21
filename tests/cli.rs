@@ -1810,6 +1810,111 @@ fn pypi_project(uploaded: &str, previous: &str, requires: Option<&str>) -> Strin
     )
 }
 
+fn crates_crate(current: &str, previous: &str) -> String {
+    format!(
+        r#"{{
+            "crate": {{
+                "name": "recent-crate",
+                "max_version": "1.1.0",
+                "max_stable_version": "1.1.0",
+                "created_at": "{previous}",
+                "repository": "https://github.com/x/y"
+            }},
+            "versions": [
+                {{ "num": "1.1.0", "created_at": "{current}", "yanked": false, "published_by": {{ "login": "a" }} }},
+                {{ "num": "1.0.0", "created_at": "{previous}", "yanked": false, "published_by": {{ "login": "a" }} }}
+            ]
+        }}"#
+    )
+}
+
+#[test]
+fn crates_history_is_fetched_only_for_recent_releases() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/api/v1/crates/recent-crate".to_string(),
+        (200, crates_crate(&days_ago(1), &days_ago(100))),
+    );
+    routes.insert(
+        "/api/v1/crates/recent-crate/owners".to_string(),
+        (200, r#"{"users":[{"login":"a"}]}"#.to_string()),
+    );
+    routes.insert(
+        "/api/v1/crates/recent-crate/1.1.0/dependencies".to_string(),
+        (
+            200,
+            r#"{"dependencies":[{"crate_id":"anyhow","kind":"normal"}]}"#.to_string(),
+        ),
+    );
+    routes.insert(
+        "/api/v1/crates/recent-crate/1.0.0/dependencies".to_string(),
+        (
+            200,
+            r#"{"dependencies":[{"crate_id":"bytes","kind":"normal"}]}"#.to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["crates", "recent-crate@1.1.0", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["id"] == "dependency-added"),
+        "{}",
+        value["findings"]
+    );
+    assert_eq!(
+        registry
+            .requests()
+            .iter()
+            .filter(|path| path.ends_with("/dependencies"))
+            .count(),
+        2
+    );
+
+    let mut old = HashMap::new();
+    old.insert(
+        "/api/v1/crates/recent-crate".to_string(),
+        (200, crates_crate(&days_ago(400), &days_ago(500))),
+    );
+    old.insert(
+        "/api/v1/crates/recent-crate/owners".to_string(),
+        (200, r#"{"users":[{"login":"a"}]}"#.to_string()),
+    );
+    old.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(old);
+    registry
+        .command()
+        .args(["crates", "recent-crate@1.1.0"])
+        .assert()
+        .code(0);
+    assert!(
+        !registry
+            .requests()
+            .iter()
+            .any(|path| path.ends_with("/dependencies")),
+        "history fetched for an old release: {:?}",
+        registry.requests()
+    );
+}
+
 #[test]
 fn pypi_history_is_fetched_only_for_recent_releases() {
     let mut routes = HashMap::new();

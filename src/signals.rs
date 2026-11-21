@@ -352,14 +352,7 @@ pub fn assess(
         .published_at
         .is_some_and(|published| now - published <= HISTORY_WINDOW_DAYS * date::SECONDS_PER_DAY);
 
-    if recent && !meta.release.previous_install_scripts.is_empty()
-        || recent
-            && meta
-                .release
-                .previous_version
-                .as_ref()
-                .is_some_and(|_| !meta.install_scripts.is_empty())
-    {
+    if recent && meta.release.history_known && !meta.install_scripts.is_empty() {
         let previous: std::collections::BTreeMap<&str, &str> = meta
             .release
             .previous_install_scripts
@@ -408,7 +401,7 @@ pub fn assess(
         }
     }
 
-    if recent && meta.release.previous_version.is_some() {
+    if recent && profile.dependencies && meta.release.history_known {
         let added: Vec<&String> = meta
             .release
             .dependencies
@@ -647,9 +640,20 @@ pub fn assess(
 
     // A different existing maintainer shipping a version is normal rotation,
     // not a handoff; only say so when the account is already trusted.
-    if !publisher_mismatch
+    let listed = |name: &str| {
+        !meta.maintainers.is_empty()
+            && meta
+                .maintainers
+                .iter()
+                .any(|maintainer| maintainer.eq_ignore_ascii_case(name))
+    };
+    if profile.maintainers
+        && !publisher_mismatch
         && let (Some(publisher), Some(previous)) =
             (&meta.publisher, &meta.release.previous_publisher)
+        && listed(publisher)
+        && listed(previous)
+        && !is_automation_publisher(publisher)
         && !publisher.eq_ignore_ascii_case(previous)
     {
         findings.push(Finding {
@@ -934,8 +938,23 @@ mod tests {
         let mut meta = meta();
         meta.published_at = Some(NOW - 2 * date::SECONDS_PER_DAY);
         meta.release.previous_version = Some("0.9.0".to_string());
+        meta.release.history_known = true;
         meta.release.previous_published_at = Some(NOW - 200 * date::SECONDS_PER_DAY);
         meta
+    }
+
+    #[test]
+    fn unknown_history_produces_no_transition_findings() {
+        let mut meta = transition();
+        meta.release.history_known = false;
+        meta.install_scripts = vec![InstallScript {
+            name: "postinstall".to_string(),
+            command: "node build.js".to_string(),
+        }];
+        meta.release.dependencies = vec!["chalk".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"install-scripts-changed"));
+        assert!(!ids(&findings).contains(&"dependency-added"));
     }
 
     #[test]
@@ -1307,6 +1326,7 @@ mod tests {
         let mut meta = meta();
         meta.name = "expres".to_string();
         let partial = Profile {
+            dependencies: true,
             typosquat: false,
             ..Profile::NPM
         };
@@ -1322,7 +1342,13 @@ mod tests {
         let report = report(meta(), Ecosystem::Go, None, None, &[], Profile::GO, NOW);
         assert_eq!(
             report.not_checked,
-            vec!["execution", "maintainers", "repository", "downloads"]
+            vec![
+                "execution",
+                "maintainers",
+                "repository",
+                "downloads",
+                "dependency history"
+            ]
         );
         assert!(
             !report
@@ -1457,6 +1483,22 @@ mod tests {
         let finding = finding(&findings, "publisher-changed");
         assert_eq!(finding.severity, Severity::Info);
         assert!(!ids(&findings).contains(&"publisher-not-maintainer"));
+    }
+
+    #[test]
+    fn automation_and_unlisted_accounts_do_not_claim_a_maintainer_change() {
+        let mut automation = meta();
+        automation.publisher = Some("GitHub Actions".to_string());
+        automation.release.previous_publisher = Some("alice".to_string());
+        let findings = assess(&automation, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"publisher-changed"));
+
+        let mut empty = meta();
+        empty.publisher = Some("bob".to_string());
+        empty.maintainers.clear();
+        empty.release.previous_publisher = Some("alice".to_string());
+        let findings = assess(&empty, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"publisher-changed"));
     }
 
     #[test]

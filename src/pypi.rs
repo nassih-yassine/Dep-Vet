@@ -77,22 +77,27 @@ impl PypiClient {
         let Some(previous) = meta.release.previous_version.clone() else {
             return;
         };
-        meta.release.dependencies = self.version_dependencies(&meta.name, &meta.version);
-        meta.release.previous_dependencies = self.version_dependencies(&meta.name, &previous);
+        let (Some(current), Some(previous_dependencies)) = (
+            self.version_dependencies(&meta.name, &meta.version),
+            self.version_dependencies(&meta.name, &previous),
+        ) else {
+            return;
+        };
+        meta.release.dependencies = current;
+        meta.release.previous_dependencies = previous_dependencies;
+        meta.release.history_known = true;
     }
 
-    fn version_dependencies(&self, name: &str, version: &str) -> Vec<String> {
+    fn version_dependencies(&self, name: &str, version: &str) -> Option<Vec<String>> {
         let url = format!(
             "{}/pypi/{name}/{version}/json",
             self.base.trim_end_matches('/')
         );
-        let Ok(body) = self.http.get(&url) else {
-            return Vec::new();
-        };
-        let Ok(project) = serde_json::from_str::<Project>(&body) else {
-            return Vec::new();
-        };
-        dependency_names(project.info.requires_dist.as_deref().unwrap_or_default())
+        let body = self.http.get(&url).ok()?;
+        let project = serde_json::from_str::<Project>(&body).ok()?;
+        Some(dependency_names(
+            project.info.requires_dist.as_deref().unwrap_or_default(),
+        ))
     }
 }
 

@@ -174,6 +174,7 @@ fn parse_metadata(
                 .map(composer_dependencies)
                 .unwrap_or_default(),
             dependencies: composer_dependencies(release),
+            history_known: previous.is_some(),
             ..crate::registry::ReleaseHistory::default()
         },
         first_published_at,
