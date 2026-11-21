@@ -69,6 +69,30 @@ impl GoClient {
     }
 }
 
+/// A tagged release, not a branch pseudo-version or a prerelease. deps.dev
+/// lists commit snapshots like `v1.12.1-0.20261010042035-0f09c3a9b462`, which
+/// are not something to suggest as an upgrade.
+fn is_release(version: &str) -> bool {
+    let lower = version.to_ascii_lowercase();
+    if ["-alpha", "-beta", "-rc", "-pre", "-dev"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return false;
+    }
+    if let Some((_, suffix)) = lower.split_once('-') {
+        let stamp = suffix
+            .trim_start_matches("0.")
+            .split('-')
+            .next()
+            .unwrap_or("");
+        if stamp.len() == 14 && stamp.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+    }
+    true
+}
+
 fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta, GoError> {
     let response: PackageResponse =
         serde_json::from_str(body).map_err(|error| GoError::Decode(error.to_string()))?;
@@ -114,6 +138,7 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
     let latest_version = response
         .versions
         .iter()
+        .filter(|release| is_release(&release.version_key.version))
         .max_by_key(|release| {
             release
                 .published_at
@@ -225,6 +250,20 @@ mod tests {
         assert_eq!(meta.version, "v1.9.1");
         assert_eq!(meta.name, "github.com/gin-gonic/gin");
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn pseudo_versions_and_prereleases_are_not_the_newest_release() {
+        let body = r#"{
+            "packageKey": { "name": "example.com/m" },
+            "versions": [
+                { "versionKey": { "version": "v1.9.0" }, "publishedAt": "2023-01-01T00:00:00Z" },
+                { "versionKey": { "version": "v1.10.0-rc1" }, "publishedAt": "2024-01-01T00:00:00Z" },
+                { "versionKey": { "version": "v1.12.1-0.20261010042035-0f09c3a9b462" }, "publishedAt": "2026-10-10T00:00:00Z" }
+            ]
+        }"#;
+        let meta = fetch(body, Some("v1.9.0")).unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("v1.9.0"));
     }
 
     #[test]
