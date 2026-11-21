@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 343 unit + 100 end-to-end tests
+cargo test --locked                      # 344 unit + 100 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -157,7 +157,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   but no timestamps, so those reports add `freshness` to `not_checked` and carry
   a `review_url` pointing at maven.google.com instead of search.maven.org.
   `PackageMeta.review_url` is the one override the renderer honors; every other
-  ecosystem leaves it `None` and uses `Ecosystem::package_url`.
+  ecosystem leaves it `None` and uses `Ecosystem::package_url`. OSV's Maven
+  index only covers Central, so a Google-sourced report carries an INFO
+  "advisory coverage may be incomplete" note even when OSV returned no hits.
 - **Maven Central 403 is a rate limit, not a missing package.** Sonatype's WAF
   answers 403 when a client bursts the search API; `MavenError::Throttled` says
   so instead of "not found". Tree audits therefore run Maven one package at a

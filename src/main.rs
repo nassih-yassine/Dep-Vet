@@ -317,11 +317,14 @@ impl Auditor {
 
     fn audit_maven(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, MavenError> {
         let meta = self.maven.fetch(spec)?;
+        // A review override means the package came from Google Maven, which
+        // OSV's Maven index does not cover.
+        let google_maven = meta.review_url.is_some();
         let advisories = self
             .osv
             .query(Ecosystem::Maven, &meta.name, &meta.version)
             .ok();
-        Ok(signals::report(
+        let mut report = signals::report(
             meta,
             Ecosystem::Maven,
             None,
@@ -329,7 +332,11 @@ impl Auditor {
             &[],
             Profile::MAVEN,
             now,
-        ))
+        );
+        if google_maven {
+            report.findings.push(signals::advisory_coverage_partial());
+        }
+        Ok(report)
     }
 
     fn audit_nuget(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, NugetError> {
