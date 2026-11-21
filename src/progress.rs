@@ -9,10 +9,23 @@ pub fn line(done: usize, total: usize) -> String {
     format!("  auditing {done}/{total} packages…")
 }
 
+/// Whether a run should draw. A terminal is not enough: CI runners often
+/// allocate a pseudo-TTY, and `TERM=dumb` means the terminal cannot take it.
+pub fn should_draw(is_terminal: bool, ci: bool, term_dumb: bool) -> bool {
+    is_terminal && !ci && !term_dumb
+}
+
 pub struct Progress {
     total: usize,
     done: usize,
     enabled: bool,
+}
+
+impl Drop for Progress {
+    fn drop(&mut self) {
+        // A panic or Ctrl-C must not leave half a line in the terminal.
+        self.clear();
+    }
 }
 
 impl Progress {
@@ -49,8 +62,12 @@ impl Progress {
             return;
         }
         let mut stderr = std::io::stderr();
-        let _ = write!(stderr, "\r{}", line(self.done, self.total));
+        let _ = self.render_to(&mut stderr);
         let _ = stderr.flush();
+    }
+
+    pub(crate) fn render_to(&self, writer: &mut impl Write) -> std::io::Result<()> {
+        write!(writer, "\r{}", line(self.done, self.total))
     }
 
     /// Erase the line so the report starts on a clean terminal.
@@ -58,10 +75,14 @@ impl Progress {
         if !self.enabled {
             return;
         }
-        let width = line(self.done, self.total).chars().count() + 1;
         let mut stderr = std::io::stderr();
-        let _ = write!(stderr, "\r{}\r", " ".repeat(width));
+        let _ = self.clear_to(&mut stderr);
         let _ = stderr.flush();
+    }
+
+    pub(crate) fn clear_to(&self, writer: &mut impl Write) -> std::io::Result<()> {
+        let width = line(self.done, self.total).chars().count() + 1;
+        write!(writer, "\r{}\r", " ".repeat(width))
     }
 }
 
@@ -84,6 +105,32 @@ mod tests {
     fn an_empty_audit_draws_nothing() {
         let progress = Progress::new(0, true);
         assert!(!progress.visible());
+    }
+
+    #[test]
+    fn ci_runners_and_dumb_terminals_do_not_draw() {
+        assert!(should_draw(true, false, false));
+        assert!(!should_draw(false, false, false));
+        assert!(!should_draw(true, true, false), "CI with a pty");
+        assert!(!should_draw(true, false, true), "TERM=dumb");
+    }
+
+    #[test]
+    fn render_and_clear_produce_exact_bytes() {
+        let progress = Progress::new(2, true);
+        let mut buffer = Vec::new();
+        progress.render_to(&mut buffer).unwrap();
+        assert_eq!(
+            String::from_utf8(buffer).unwrap(),
+            "\r  auditing 0/2 packages…"
+        );
+
+        let mut erased = Vec::new();
+        progress.clear_to(&mut erased).unwrap();
+        let text = String::from_utf8(erased).unwrap();
+        assert!(text.starts_with('\r'), "{text:?}");
+        assert!(text.ends_with('\r'), "{text:?}");
+        assert!(text.trim_matches(['\r', ' ']).is_empty(), "{text:?}");
     }
 
     #[test]

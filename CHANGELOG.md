@@ -4,7 +4,7 @@
 
 - **Progress while auditing.** `audit` and `lock` print `auditing N/M packages…`
   on stderr when it is a terminal, then clear the line before the report.
-  Pipes, CI logs, and `--json` are unchanged.
+  Pipes and CI logs are unchanged, and `--json` stdout is untouched.
 
 ## 0.8.0 — 2026-11-21
 
