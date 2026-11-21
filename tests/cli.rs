@@ -1529,3 +1529,145 @@ fn audit_without_a_lockfile_is_a_tool_error() {
         .code(3)
         .stderr(predicate::str::contains("could not read"));
 }
+
+#[test]
+fn audit_reads_cargo_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("Cargo.lock"),
+        r#"version = 3
+
+[[package]]
+name = "serde"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#,
+    )
+    .unwrap();
+
+    let registry = crates_registry(
+        "serde",
+        SERDE_CRATE,
+        Some(r#"{"users":[{"login":"dtolnay"}]}"#),
+    );
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "Cargo.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"][0]["name"], "serde");
+    assert_eq!(value["packages"][0]["ecosystem"], "crates");
+}
+
+#[test]
+fn audit_reads_go_mod() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("go.mod"),
+        "module example.com/app\n\ngo 1.22\n\nrequire github.com/gin-gonic/gin v1.9.1\n",
+    )
+    .unwrap();
+
+    let registry = go_registry(GIN_ROUTE, 200, GIN_MODULE);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "go.mod", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"][0]["name"], "github.com/gin-gonic/gin");
+    assert_eq!(value["packages"][0]["ecosystem"], "go");
+}
+
+#[test]
+fn audit_reads_requirements_and_reports_unpinned_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("requirements.txt"),
+        "flask==3.1.0\nunpinned-pkg\n",
+    )
+    .unwrap();
+
+    let registry = pypi_registry("flask", PYPI_WHEEL);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "requirements.txt", "--json"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"][0]["name"], "flask");
+    assert_eq!(value["errors"][0]["package"], "unpinned-pkg");
+    assert!(
+        value["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not pinned with ==")
+    );
+}
+
+#[test]
+fn lock_diffs_a_cargo_lock_against_a_ref() {
+    let repo = Repo::new();
+    repo.write(
+        "Cargo.lock",
+        r#"version = 3
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#,
+    );
+    repo.commit("base");
+    repo.write(
+        "Cargo.lock",
+        r#"version = 3
+
+[[package]]
+name = "serde"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#,
+    );
+
+    let registry = crates_registry(
+        "serde",
+        SERDE_CRATE,
+        Some(r#"{"users":[{"login":"dtolnay"}]}"#),
+    );
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "Cargo.lock", "--base", "HEAD"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("1 new package"))
+        .stdout(predicate::str::contains("serde@1.0.229"));
+}
+
+#[test]
+fn audit_rejects_unknown_lockfile_formats() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("poetry.lock"), "").unwrap();
+    binary()
+        .current_dir(directory.path())
+        .args(["audit", "poetry.lock"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("unsupported lockfile"));
+}

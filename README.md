@@ -114,14 +114,27 @@ use is flagged. `--no-local` ignores it.
 ### Audit an installed tree
 
 ```sh
-dep-vet audit package-lock.json
+dep-vet audit package-lock.json      # npm
+dep-vet audit requirements.txt       # PyPI, exact pins only
+dep-vet audit Cargo.lock             # crates.io
+dep-vet audit go.mod                 # Go
 ```
 
 Vets **every** package the lockfile installs, not just the diff, and reports the
 worst verdict. A cold run costs one audit per package (four at a time); warm
 caches make a rerun instant. It exits `3` when any package could not be checked.
-Typosquat comparison uses the seed list here: in a whole tree, every dependency
-would resemble some other dependency.
+
+What each format contributes, and what it cannot:
+
+| File | Audited | Reported as incomplete |
+|---|---|---|
+| `package-lock.json` v2/v3 | every `node_modules` entry | v1 lockfiles (upgrade with `npm install`) |
+| `requirements*.txt` | `name==version` pins, extras stripped | unpinned lines, URLs, `-r`/`-e` options |
+| `Cargo.lock` | registry packages | git dependencies (not on crates.io) |
+| `go.mod` | `require` entries, blocks and single lines | unreadable require lines; `replace` is ignored |
+
+Typosquat comparison uses the seed list for a whole tree: every dependency would
+resemble some other dependency.
 
 ### Check a PyPI package
 
@@ -343,10 +356,11 @@ clean.
 
 ## Scope and limits
 
-- **npm, PyPI, crates.io, and Go.** Bun, pnpm, and yarn install from the same
-  npm registry, so npm vetting is accurate for them. `dep-vet lock` parses
-  `package-lock.json` only; there is no `requirements.txt`, `Cargo.lock`, or
-  `go.mod` audit yet.
+- **npm, PyPI, crates.io, and Go**, for both `audit` and `lock`. Bun, pnpm, and
+  yarn install from the same npm registry, so npm vetting is accurate for them,
+  but their own lockfile formats (`bun.lock`, `pnpm-lock.yaml`, `yarn.lock`) are
+  not parsed. Poetry and uv lockfiles are not parsed either; point `audit` at a
+  `requirements.txt` export instead.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the
@@ -399,7 +413,7 @@ handling, and output are exercised end to end.
 ```
 src/cli.rs        clap surface
 src/model.rs      PackageSpec, Severity, Finding, PackageReport
-src/lockfile.rs   package-lock v2/v3 parsing, git-ref diff
+src/lockfile.rs   npm/PyPI/Cargo/Go lockfile parsing, git-ref diff
 src/registry.rs   npm packument fetch + parsing, download counts
 src/pypi.rs       PyPI JSON API, sdist-only detection, yanked releases
 src/crates.rs     crates.io API, owner list, yanked releases
@@ -423,7 +437,7 @@ did.
 
 1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
    against your own dependencies.
-2. Lockfile audits for PyPI, Cargo, and Go.
+2. Lockfile parsing for `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, Poetry, uv.
 
 ## License
 
