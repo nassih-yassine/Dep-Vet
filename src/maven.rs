@@ -229,6 +229,7 @@ fn parse_search(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
+        release: crate::registry::ReleaseHistory::default(),
     })
 }
 
@@ -292,6 +293,7 @@ fn google_meta(
             .rfind(|candidate| !is_prerelease(candidate))
             .or_else(|| versions.last())
             .cloned(),
+        release: crate::registry::ReleaseHistory::default(),
     })
 }
 

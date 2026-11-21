@@ -40,6 +40,20 @@ pub struct PackageMeta {
     pub review_url: Option<String>,
     /// Highest published stable version, when the client can tell.
     pub latest_version: Option<String>,
+    /// The release before the audited one, when the client could tell.
+    pub release: ReleaseHistory,
+}
+
+/// What the previous release looked like. Empty means "no history", never
+/// "nothing changed": signals must not read silence as agreement.
+#[derive(Debug, Clone, Default)]
+pub struct ReleaseHistory {
+    pub previous_version: Option<String>,
+    pub previous_published_at: Option<i64>,
+    pub previous_publisher: Option<String>,
+    pub previous_install_scripts: Vec<InstallScript>,
+    pub previous_dependencies: Vec<String>,
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -319,6 +333,7 @@ fn parse_packument(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
+        release: crate::registry::ReleaseHistory::default(),
     })
 }
 

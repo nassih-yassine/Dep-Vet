@@ -148,6 +148,7 @@ fn parse_metadata(
         name: spec.name.clone(),
         version: release.version.clone(),
         latest_version: Some(latest(&releases).version.clone()),
+        release: crate::registry::ReleaseHistory::default(),
         first_published_at,
         published_at: release.time.as_deref().and_then(date::parse_timestamp),
         maintainers,

@@ -131,6 +131,7 @@ fn parse_crate(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
+        release: crate::registry::ReleaseHistory::default(),
     })
 }
 

@@ -152,6 +152,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
+        release: crate::registry::ReleaseHistory::default(),
     })
 }
 

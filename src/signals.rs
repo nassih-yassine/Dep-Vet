@@ -581,6 +581,7 @@ mod tests {
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
             review_url: None,
             latest_version: None,
+            release: crate::registry::ReleaseHistory::default(),
         }
     }
 
