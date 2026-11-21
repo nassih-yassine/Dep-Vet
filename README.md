@@ -472,7 +472,7 @@ the job on high risk (exit 2) or an incomplete audit (exit 3). Warnings (exit 1)
 pass with the findings visible in the comment. Very long reports are truncated
 in the comment; the full output always lands in the job log.
 
-The action installs the prebuilt binary for the `ref` input (default `v0.7.1`)
+The action installs the prebuilt binary for the `ref` input (default `v0.8.0`)
 and falls back to building from source when that ref has no release. Pinning
 `uses:` alone does not pin the binary: set `ref` to the tag you reviewed.
 
