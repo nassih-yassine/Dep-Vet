@@ -408,8 +408,9 @@ pub fn build_report(
     ecosystem: Ecosystem,
     spec: &PackageSpec,
     prepared: Prepared,
+    disabled_rules: &[String],
 ) -> InspectionReport {
-    let mut findings = crate::rules::scan(&prepared.extracted.files);
+    let mut findings = crate::rules::scan_with(&prepared.extracted.files, disabled_rules);
     let integrity = match &prepared.integrity {
         Integrity::Verified => "verified".to_string(),
         Integrity::Unverified => "unverified".to_string(),
@@ -590,12 +591,13 @@ pub fn build_diff(
     to_spec: &PackageSpec,
     old: &Prepared,
     new: &Prepared,
+    disabled_rules: &[String],
 ) -> DiffReport {
     let (added, removed, modified, unchanged) =
         compare_files(&old.extracted.files, &new.extracted.files);
 
-    let old_findings = crate::rules::scan(&old.extracted.files);
-    let new_findings = crate::rules::scan(&new.extracted.files);
+    let old_findings = crate::rules::scan_with(&old.extracted.files, disabled_rules);
+    let new_findings = crate::rules::scan_with(&new.extracted.files, disabled_rules);
     let key = |finding: &crate::rules::RuleFinding| (finding.rule, finding.file.clone());
     let old_keys: std::collections::HashSet<_> = old_findings.iter().map(key).collect();
     let new_keys: std::collections::HashSet<_> = new_findings.iter().map(key).collect();

@@ -209,7 +209,20 @@ const RULES: &[Rule] = &[
     },
 ];
 
+/// Ids accepted in `[inspect] disabled_rules`. Keep in step with `RULES` and
+/// the combination rules emitted in `scan`.
+pub const COMBO_RULES: &[&str] = &["JS-NET-001", "PY-NET-001", "GO-NET-001"];
+
+pub fn is_known_rule(id: &str) -> bool {
+    RULES.iter().any(|rule| rule.id == id) || COMBO_RULES.contains(&id)
+}
+
 pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
+    scan_with(files, &[])
+}
+
+pub fn scan_with(files: &[ExtractedFile], disabled: &[String]) -> Vec<RuleFinding> {
+    let allowed = |id: &str| !disabled.iter().any(|rule| rule == id);
     let mut findings = Vec::new();
     for file in files {
         let extension = std::path::Path::new(&file.path)
@@ -218,6 +231,9 @@ pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
             .unwrap_or_default()
             .to_ascii_lowercase();
         for rule in RULES {
+            if !allowed(rule.id) {
+                continue;
+            }
             if !rule.extensions.contains(&extension.as_str()) {
                 continue;
             }
@@ -267,7 +283,8 @@ pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
                 references: vec!["https://owasp.org/www-community/attacks/Command_Injection"],
             });
         }
-        if extension == "py"
+        if allowed("PY-NET-001")
+            && extension == "py"
             && any_hit(
                 &file.text,
                 r"\b(import|from)\s+requests\b|\brequests\.(get|post|put|delete|request)\s*\(|\bsocket\.socket\s*\(|urllib\.request\b|\bhttp\.client\b",
@@ -289,7 +306,8 @@ pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
             });
         }
 
-        if extension == "go"
+        if allowed("GO-NET-001")
+            && extension == "go"
             && any_hit(&file.text, r#""net/http"|"net"\b"#)
             && any_hit(&file.text, r"os\.Getenv")
             && let Some((line, evidence)) = first_hit(&file.text, r"os\.Getenv")
@@ -456,6 +474,23 @@ mod tests {
             .find(|finding| finding.rule == "PHP-OBF-001")
             .expect("missing php encoded payload");
         assert_eq!(finding.severity, Severity::High);
+    }
+
+    #[test]
+    fn rule_ids_are_discoverable_and_disableable() {
+        for rule in RULES {
+            assert!(is_known_rule(rule.id), "{}", rule.id);
+        }
+        for rule in COMBO_RULES {
+            assert!(is_known_rule(rule));
+        }
+        assert!(!is_known_rule("NOPE-000"));
+        let findings = scan_with(
+            &[file("lib/x.js", "eval(atob(payload))\n")],
+            &["JS-OBF-001".to_string()],
+        );
+        assert!(findings.iter().all(|finding| finding.rule != "JS-OBF-001"));
+        assert!(findings.iter().any(|finding| finding.rule == "JS-EXEC-001"));
     }
 
     #[test]

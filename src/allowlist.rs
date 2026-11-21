@@ -38,6 +38,24 @@ pub const KNOWN_FINDINGS: &[&str] = &[
 pub struct Allowlist {
     #[serde(default)]
     allow: Vec<AllowEntry>,
+    #[serde(default)]
+    inspect: InspectConfig,
+}
+
+/// Archive-inspection settings from the same `.depvet.toml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspectConfig {
+    #[serde(default)]
+    pub max_download_mb: Option<u64>,
+    #[serde(default)]
+    pub max_total_mb: Option<u64>,
+    #[serde(default)]
+    pub max_entries: Option<usize>,
+    #[serde(default)]
+    pub max_file_mb: Option<u64>,
+    #[serde(default)]
+    pub disabled_rules: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +65,24 @@ struct AllowEntry {
     #[serde(default)]
     finding: Option<String>,
     reason: String,
+}
+
+impl InspectConfig {
+    /// Documented defaults, with the config file able to tighten or loosen
+    /// each cap. Zero is rejected at parse time.
+    pub fn limits(&self) -> crate::archive::Limits {
+        let defaults = crate::archive::Limits::default();
+        let mb = |value: Option<u64>, fallback: u64| {
+            value.map(|mb| mb * 1024 * 1024).unwrap_or(fallback)
+        };
+        crate::archive::Limits {
+            max_compressed: mb(self.max_download_mb, defaults.max_compressed),
+            max_total: mb(self.max_total_mb, defaults.max_total),
+            max_entries: self.max_entries.unwrap_or(defaults.max_entries),
+            max_file: mb(self.max_file_mb, defaults.max_file),
+            max_path: defaults.max_path,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +99,10 @@ pub enum AllowError {
     MissingReason { path: String, package: String },
     #[error("{path}: '{finding}' is not a finding dep-vet emits")]
     UnknownFinding { path: String, finding: String },
+    #[error("{path}: '{rule}' is not an inspection rule")]
+    UnknownRule { path: String, rule: String },
+    #[error("{path}: {field} must be greater than zero")]
+    ZeroLimit { path: String, field: String },
 }
 
 impl Allowlist {
@@ -104,7 +144,37 @@ impl Allowlist {
                 });
             }
         }
+        for rule in &list.inspect.disabled_rules {
+            if !crate::rules::is_known_rule(rule) {
+                return Err(AllowError::UnknownRule {
+                    path: path.display().to_string(),
+                    rule: rule.clone(),
+                });
+            }
+        }
+        for (field, value) in [
+            ("max_download_mb", list.inspect.max_download_mb),
+            ("max_total_mb", list.inspect.max_total_mb),
+            ("max_file_mb", list.inspect.max_file_mb),
+        ] {
+            if value == Some(0) {
+                return Err(AllowError::ZeroLimit {
+                    path: path.display().to_string(),
+                    field: field.to_string(),
+                });
+            }
+        }
+        if list.inspect.max_entries == Some(0) {
+            return Err(AllowError::ZeroLimit {
+                path: path.display().to_string(),
+                field: "max_entries".to_string(),
+            });
+        }
         Ok(list)
+    }
+
+    pub fn inspect(&self) -> &InspectConfig {
+        &self.inspect
     }
 
     /// Downgrades matching findings to INFO, keeps their evidence, and records
@@ -188,6 +258,29 @@ mod tests {
 
     fn allowlist(body: &str) -> Allowlist {
         Allowlist::parse(Path::new(".depvet.toml"), body).unwrap()
+    }
+
+    #[test]
+    fn inspect_settings_apply_and_reject_nonsense() {
+        let path = Path::new(".depvet.toml");
+        let config = Allowlist::parse(
+            path,
+            "[inspect]\nmax_download_mb = 10\nmax_entries = 500\ndisabled_rules = [\"JS-EXEC-001\"]\n",
+        )
+        .unwrap();
+        let limits = config.inspect().limits();
+        assert_eq!(limits.max_compressed, 10 * 1024 * 1024);
+        assert_eq!(limits.max_entries, 500);
+        assert_eq!(config.inspect().disabled_rules, vec!["JS-EXEC-001"]);
+
+        assert!(matches!(
+            Allowlist::parse(path, "[inspect]\nmax_download_mb = 0\n"),
+            Err(AllowError::ZeroLimit { .. })
+        ));
+        assert!(matches!(
+            Allowlist::parse(path, "[inspect]\ndisabled_rules = [\"NOPE-000\"]\n"),
+            Err(AllowError::UnknownRule { .. })
+        ));
     }
 
     #[test]

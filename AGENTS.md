@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 461 unit + 116 end-to-end tests
+cargo test --locked                      # 464 unit + 117 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -286,7 +286,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `diff` compares two extracted releases by content: added/removed/modified
   paths, findings matched by (rule, file) because line numbers shift, and a
   `DIFF-NEW-SCRIPT-001` WARN for added shell/shebang files. Both specs must
-  name the same package with exact versions.
+  name the same package with exact versions. The same `.depvet.toml` carries
+  `[inspect]` limits and `disabled_rules`; unknown rule ids and zero caps are
+  configuration errors (exit 3), and `disabled_rules` is applied to both
+  `inspect` and `diff`.
 - **Release-transition signals are history-based and gated.** `HISTORY_WINDOW_DAYS`
   (30) bounds them: PyPI and crates.io fetch two extra documents only for a
   version inside it. `previous_release` picks by timestamp, never list order.

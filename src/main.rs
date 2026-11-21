@@ -112,7 +112,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 anyhow::bail!("diff needs exact versions on both sides");
             }
             let http = Arc::new(HttpClient::from_env(cli.no_cache));
-            let limits = dep_vet::archive::Limits::default();
+            let limits = allowlist.inspect().limits();
             let old = dep_vet::inspect::inspect_archive(&http, ecosystem, &from_spec, limits)?;
             let new = dep_vet::inspect::inspect_archive(&http, ecosystem, &to_spec, limits)?;
             let report = dep_vet::inspect::build_diff(
@@ -122,6 +122,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 &to_spec,
                 &old,
                 &new,
+                &allowlist.inspect().disabled_rules,
             );
             let output = if *json {
                 dep_vet::report::render_diff_json(&report)?
@@ -140,13 +141,14 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             let ecosystem = inspect_ecosystem(ecosystem)?;
             let spec = inspect_spec(ecosystem, package)?;
             let http = Arc::new(HttpClient::from_env(cli.no_cache));
-            let prepared = dep_vet::inspect::inspect_archive(
-                &http,
+            let limits = allowlist.inspect().limits();
+            let prepared = dep_vet::inspect::inspect_archive(&http, ecosystem, &spec, limits)?;
+            let report = dep_vet::inspect::build_report(
                 ecosystem,
                 &spec,
-                dep_vet::archive::Limits::default(),
-            )?;
-            let report = dep_vet::inspect::build_report(ecosystem, &spec, prepared);
+                prepared,
+                &allowlist.inspect().disabled_rules,
+            );
             let output = if *json {
                 dep_vet::report::render_inspection_json(&report)?
             } else {

@@ -2314,6 +2314,44 @@ fn inspect_reports_a_checksum_mismatch_as_high() {
 }
 
 #[test]
+fn inspect_respects_disabled_rules_from_config() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let archive = tar_gz(&[("lib/install.js", b"eval(atob(payload))\n")]);
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(&archive));
+    let registry = MockRegistry::start_with(|base| {
+        let doc = format!(
+            r#"{{"name":"evil-pkg","version":"1.0.0","dist":{{"tarball":"{base}/evil.tgz","integrity":"sha512-{digest}"}}}}"#
+        );
+        let mut routes = HashMap::new();
+        routes.insert("/evil-pkg/1.0.0".to_string(), (200, doc.into_bytes()));
+        routes.insert("/evil.tgz".to_string(), (200, archive.clone()));
+        routes
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join(".depvet.toml");
+    std::fs::write(
+        &config,
+        "[inspect]\ndisabled_rules = [\"JS-EXEC-001\", \"JS-OBF-001\"]\n",
+    )
+    .unwrap();
+
+    registry
+        .command()
+        .args([
+            "inspect",
+            "npm",
+            "evil-pkg@1.0.0",
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("no findings"));
+}
+
+#[test]
 fn inspect_jsr_is_honestly_unavailable() {
     let registry = MockRegistry::start(HashMap::new());
     registry

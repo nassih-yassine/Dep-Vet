@@ -121,6 +121,20 @@ finding = "typosquat"   # optional; omit to allow every finding
 reason = "internal fork, reviewed 2026-11"
 ```
 
+Archive inspection is configured in the same file:
+
+```toml
+[inspect]
+max_download_mb = 25      # default
+max_total_mb = 100
+max_entries = 10000
+max_file_mb = 5
+disabled_rules = ["PY-IMPORT-001"]
+```
+
+A disabled rule id must be one dep-vet knows, and every cap must be greater than
+zero; a typo is a configuration error (exit `3`), never a silent no-op.
+
 `dep-vet` reads the nearest `.depvet.toml` walking up from the working
 directory, or the file passed to `--config`. An allowed finding stays in the
 report as `[ALLOWED]` with its reason and evidence, and stops affecting the exit
