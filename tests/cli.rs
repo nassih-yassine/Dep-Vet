@@ -831,6 +831,384 @@ fn guard_ignores_commands_after_a_separator() {
     );
 }
 
+fn mcp_session(
+    registry: &MockRegistry,
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    std::io::BufReader<std::process::ChildStdout>,
+) {
+    mcp_session_in(registry, None)
+}
+
+fn mcp_session_in(
+    registry: &MockRegistry,
+    directory: Option<&std::path::Path>,
+) -> (
+    std::process::Child,
+    std::process::ChildStdin,
+    std::io::BufReader<std::process::ChildStdout>,
+) {
+    use std::process::{Command as Process, Stdio};
+    let mut child = Process::new(assert_cmd::cargo::cargo_bin("dep-vet"));
+    child
+        .arg("mcp")
+        .env("DEPVET_REGISTRY_BASE", &registry.base)
+        .env(
+            "DEPVET_DOWNLOADS_BASE",
+            format!("{}/downloads", registry.base),
+        )
+        .env("DEPVET_OSV_BASE", &registry.base)
+        .env("DEPVET_NO_CACHE", "1")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(directory) = directory {
+        child.current_dir(directory);
+    }
+    let mut child = child.spawn().unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    (child, stdin, stdout)
+}
+
+fn mcp_send(stdin: &mut std::process::ChildStdin, value: serde_json::Value) {
+    use std::io::Write;
+    writeln!(stdin, "{value}").unwrap();
+    stdin.flush().unwrap();
+}
+
+fn mcp_read(reader: &mut std::io::BufReader<std::process::ChildStdout>) -> serde_json::Value {
+    use std::io::BufRead;
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap_or_else(|error| panic!("{error}: {line:?}"))
+}
+
+fn mcp_initialize(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut std::io::BufReader<std::process::ChildStdout>,
+) {
+    mcp_send(
+        stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "1"}}
+        }),
+    );
+    let response = mcp_read(reader);
+    assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+    mcp_send(
+        stdin,
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    );
+}
+
+#[test]
+fn mcp_initializes_and_negotiates_a_version() {
+    let registry = registry_with(&[], None);
+    let (mut child, mut stdin, mut reader) = mcp_session(&registry);
+    mcp_initialize(&mut stdin, &mut reader);
+
+    mcp_send(
+        &mut stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "initialize",
+            "params": {"protocolVersion": "1999-01-01", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "1"}}
+        }),
+    );
+    let response = mcp_read(&mut reader);
+    assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(response["result"]["serverInfo"]["name"], "dep-vet");
+
+    mcp_send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}),
+    );
+    let response = mcp_read(&mut reader);
+    assert_eq!(response["result"], serde_json::json!({}));
+
+    mcp_send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "nope"}),
+    );
+    let response = mcp_read(&mut reader);
+    assert_eq!(response["error"]["code"], -32601);
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_sends_no_response_for_notifications_and_rejects_bad_lines() {
+    let registry = registry_with(&[], None);
+    let (mut child, mut stdin, mut reader) = mcp_session(&registry);
+
+    use std::io::Write;
+    writeln!(stdin, "not json").unwrap();
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    )
+    .unwrap();
+    mcp_send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 9, "method": "ping"}),
+    );
+    stdin.flush().unwrap();
+
+    let first = mcp_read(&mut reader);
+    assert_eq!(first["error"]["code"], -32700);
+    let second = mcp_read(&mut reader);
+    assert_eq!(second["id"], 9);
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_lists_three_strict_tools() {
+    let registry = registry_with(&[], None);
+    let (mut child, mut stdin, mut reader) = mcp_session(&registry);
+    mcp_initialize(&mut stdin, &mut reader);
+
+    mcp_send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    );
+    let response = mcp_read(&mut reader);
+    let tools = response["result"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 3);
+    for tool in tools {
+        assert_eq!(tool["inputSchema"]["type"], "object");
+        assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+    }
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+fn mcp_call(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut std::io::BufReader<std::process::ChildStdout>,
+    id: u64,
+    name: &str,
+    arguments: serde_json::Value,
+) -> serde_json::Value {
+    mcp_send(
+        stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments}
+        }),
+    );
+    mcp_read(reader)
+}
+
+#[test]
+fn mcp_vet_package_returns_a_structured_verdict() {
+    let package = PackageFixture::clean("expresss");
+    let registry = registry_with(&[package], None);
+    let (mut child, mut stdin, mut reader) = mcp_session(&registry);
+    mcp_initialize(&mut stdin, &mut reader);
+
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_package",
+        serde_json::json!({"ecosystem": "npm", "name": "expresss"}),
+    );
+    let result = &response["result"];
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["structuredContent"]["exit_code"], 2);
+    assert!(
+        result["structuredContent"]["packages"][0]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["id"] == "typosquat"),
+        "{response}"
+    );
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("typosquat")
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_rejects_bad_tool_arguments_and_unknown_tools() {
+    let registry = registry_with(&[], None);
+    let (mut child, mut stdin, mut reader) = mcp_session(&registry);
+    mcp_initialize(&mut stdin, &mut reader);
+
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_package",
+        serde_json::json!({"ecosystem": "nope", "name": "x"}),
+    );
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        3,
+        "vet_package",
+        serde_json::json!({"ecosystem": "npm"}),
+    );
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        4,
+        "vet_command",
+        serde_json::json!({"command": "x".repeat(70 * 1024)}),
+    );
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        5,
+        "not_a_tool",
+        serde_json::json!({}),
+    );
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_vet_command_reports_unchecked_installs() {
+    let registry = registry_with(&[], None);
+    let (mut child, mut stdin, mut reader) = mcp_session(&registry);
+    mcp_initialize(&mut stdin, &mut reader);
+
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_command",
+        serde_json::json!({"command": "npm install"}),
+    );
+    assert_eq!(response["result"]["structuredContent"]["exit_code"], 3);
+    assert!(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("not checked")
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_vet_lockfile_change_audits_added_packages() {
+    use std::process::Command as Process;
+    let directory = tempfile::tempdir().unwrap();
+    let lock = directory.path().join("package-lock.json");
+    std::fs::write(
+        &lock,
+        r#"{"lockfileVersion":3,"packages":{"":{"name":"app"}}}"#,
+    )
+    .unwrap();
+    let git = |args: &[&str]| {
+        let status = Process::new("git")
+            .args(args)
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.email=test@example.test",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-qm",
+        "base",
+    ]);
+    std::fs::write(
+        &lock,
+        r#"{"lockfileVersion":3,"packages":{"":{"name":"app"},"node_modules/expresss":{"version":"1.0.0"}}}"#,
+    )
+    .unwrap();
+
+    let package = PackageFixture::clean("expresss");
+    let registry = registry_with(&[package], None);
+    let (mut child, mut stdin, mut reader) = mcp_session_in(&registry, Some(directory.path()));
+    mcp_initialize(&mut stdin, &mut reader);
+
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "package-lock.json"}),
+    );
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    assert_eq!(
+        response["result"]["structuredContent"]["exit_code"], 2,
+        "{response}"
+    );
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_refuses_lockfiles_outside_the_working_directory() {
+    let registry = registry_with(&[], None);
+    let (mut child, mut stdin, mut reader) = mcp_session(&registry);
+    mcp_initialize(&mut stdin, &mut reader);
+
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "../../etc/passwd"}),
+    );
+    assert_eq!(response["error"]["code"], -32602, "{response}");
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_print_config_is_ready_to_paste() {
+    let output = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["mcp", "--print-config"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("\"mcpServers\""), "{output}");
+    assert!(output.contains("\"dep-vet\""), "{output}");
+    assert!(output.contains("claude mcp add dep-vet"), "{output}");
+    assert!(output.contains(" mcp"), "{output}");
+}
+
 #[test]
 fn clean_package_exits_zero() {
     let package = PackageFixture::clean("clean-pkg");

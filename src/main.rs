@@ -108,6 +108,8 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     match &cli.command {
         Command::Hook { .. } => unreachable!("handled before config and network"),
 
+        Command::Mcp { print_config } => run_mcp(&auditor, &allowlist, *print_config),
+
         Command::Guard {
             check,
             json,
@@ -898,6 +900,287 @@ fn audit_intent(
             .map_err(|error| error.to_string()),
     };
     result
+}
+
+fn audit_specs(
+    auditor: &Auditor,
+    allowlist: &dep_vet::allowlist::Allowlist,
+    parsed: &dep_vet::intent::ParseOutcome,
+) -> (Vec<PackageReport>, Vec<String>) {
+    let specs: Vec<(Ecosystem, PackageSpec)> = parsed
+        .intents
+        .iter()
+        .flat_map(|intent| {
+            intent
+                .specs
+                .iter()
+                .cloned()
+                .map(move |spec| (intent.ecosystem, spec))
+        })
+        .collect();
+    let now = now_seconds();
+    let mut packages = Vec::new();
+    let mut errors = Vec::new();
+    for batch in specs.chunks(MAX_CONCURRENT_AUDITS) {
+        let outcomes: Vec<Result<PackageReport, String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|(ecosystem, spec)| {
+                    scope.spawn(move || audit_intent(auditor, *ecosystem, spec, now))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err("audit thread panicked".to_string()))
+                })
+                .collect()
+        });
+        for outcome in outcomes {
+            match outcome {
+                Ok(report) => packages.push(report),
+                Err(error) => errors.push(error),
+            }
+        }
+    }
+    for report in &mut packages {
+        allowlist.apply(report);
+    }
+    (packages, errors)
+}
+
+fn run_mcp(
+    auditor: &Auditor,
+    allowlist: &dep_vet::allowlist::Allowlist,
+    print_config: bool,
+) -> anyhow::Result<u8> {
+    if print_config {
+        let executable = std::env::current_exe()?;
+        let path = executable.display().to_string();
+        let snippet = serde_json::json!({
+            "mcpServers": {
+                "dep-vet": {"command": path, "args": ["mcp"]}
+            }
+        });
+        println!("{}", serde_json::to_string_pretty(&snippet)?);
+        println!();
+        println!("claude mcp add dep-vet -- {path} mcp");
+        return Ok(0);
+    }
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    dep_vet::mcp::serve(stdin.lock(), &mut stdout.lock(), |name, arguments| {
+        mcp_call(auditor, allowlist, name, arguments)
+    })?;
+    Ok(0)
+}
+
+fn tool_result(structured: serde_json::Value, text: String) -> serde_json::Value {
+    serde_json::json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": structured,
+        "isError": false
+    })
+}
+
+fn package_summary(report: &PackageReport) -> String {
+    let verdict = report
+        .findings
+        .iter()
+        .map(|finding| finding.severity)
+        .chain(report.advisories.iter().map(|advisory| advisory.severity))
+        .max()
+        .unwrap_or(dep_vet::model::Severity::Info);
+    let mut lines = vec![format!(
+        "{} {}@{}: {} (exit {})",
+        report.name,
+        report.ecosystem,
+        report.version,
+        verdict.label().to_ascii_lowercase(),
+        verdict.exit_code()
+    )];
+    for finding in report.findings.iter().take(3) {
+        let url = finding
+            .evidence
+            .iter()
+            .find_map(|evidence| evidence.url.clone())
+            .unwrap_or_default();
+        lines.push(format!(
+            "- [{}] {} ({}) — {url}",
+            finding.severity.label(),
+            finding.title,
+            finding.id
+        ));
+    }
+    for advisory in report.advisories.iter().take(3) {
+        lines.push(format!(
+            "- [{}] {} — https://osv.dev/vulnerability/{}",
+            advisory.severity.label(),
+            advisory.summary,
+            advisory.id
+        ));
+    }
+    if !report.not_checked.is_empty() {
+        lines.push(format!("not checked: {}", report.not_checked.join(", ")));
+    }
+    lines.push("Direct packages only; transitive dependencies were not checked.".to_string());
+    let mut text = lines.join("\n");
+    if text.len() > 20_000 {
+        text.truncate(20_000);
+        text.push_str("\n_truncated_");
+    }
+    text
+}
+
+fn mcp_call(
+    auditor: &Auditor,
+    allowlist: &dep_vet::allowlist::Allowlist,
+    name: &str,
+    arguments: &serde_json::Value,
+) -> dep_vet::mcp::ToolResult {
+    match name {
+        "vet_package" => {
+            let ecosystem = arguments["ecosystem"]
+                .as_str()
+                .ok_or((-32602, "ecosystem is required".to_string()))
+                .and_then(|value| {
+                    inspect_ecosystem(value).map_err(|error| (-32602, error.to_string()))
+                })?;
+            let package = arguments["name"]
+                .as_str()
+                .ok_or((-32602, "name is required".to_string()))?;
+            let version = arguments["version"].as_str();
+            let raw = match version {
+                Some(version) => {
+                    let separator = if ecosystem == dep_vet::model::Ecosystem::Pypi {
+                        "=="
+                    } else {
+                        "@"
+                    };
+                    format!("{package}{separator}{version}")
+                }
+                None => package.to_string(),
+            };
+            let spec =
+                inspect_spec(ecosystem, &raw).map_err(|error| (-32602, error.to_string()))?;
+            let mut report = audit_intent(auditor, ecosystem, &spec, now_seconds())
+                .map_err(|error| (-32603, error))?;
+            allowlist.apply(&mut report);
+            let text = package_summary(&report);
+            let guard = dep_vet::guard::GuardReport {
+                command: String::new(),
+                parse: dep_vet::intent::ParseOutcome::default(),
+                packages: vec![report],
+                errors: Vec::new(),
+            };
+            let structured: serde_json::Value =
+                serde_json::from_str(&guard.to_json()).unwrap_or_else(|_| serde_json::json!({}));
+            Ok(tool_result(structured, text))
+        }
+        "vet_command" => {
+            let command = arguments["command"]
+                .as_str()
+                .ok_or((-32602, "command is required".to_string()))?;
+            if command.len() > dep_vet::intent::MAX_COMMAND_BYTES {
+                return Err((-32602, "command is too large".to_string()));
+            }
+            let parsed = dep_vet::intent::parse(command);
+            let (packages, errors) = audit_specs(auditor, allowlist, &parsed);
+            let report = dep_vet::guard::GuardReport {
+                command: command.to_string(),
+                parse: parsed,
+                packages,
+                errors,
+            };
+            let structured: serde_json::Value =
+                serde_json::from_str(&report.to_json()).unwrap_or_else(|_| serde_json::json!({}));
+            Ok(tool_result(structured, report.to_human()))
+        }
+        "vet_lockfile_change" => {
+            let lockfile = arguments["lockfile"]
+                .as_str()
+                .ok_or((-32602, "lockfile is required".to_string()))?;
+            let base = arguments["base"].as_str().unwrap_or("HEAD");
+            run_mcp_lockfile(auditor, allowlist, lockfile, base)
+        }
+        _ => Err((-32602, format!("unknown tool '{name}'"))),
+    }
+}
+
+fn mcp_lockfile_path(input: &str) -> Result<std::path::PathBuf, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let cwd = cwd.canonicalize().map_err(|error| error.to_string())?;
+    let candidate = std::path::Path::new(input);
+    let joined = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        cwd.join(candidate)
+    };
+    let resolved = joined.canonicalize().map_err(|error| error.to_string())?;
+    if !resolved.starts_with(&cwd) {
+        return Err("lockfile path is outside the working directory".to_string());
+    }
+    if !resolved.is_file() {
+        return Err("lockfile is not a regular file".to_string());
+    }
+    Ok(resolved)
+}
+
+fn run_mcp_lockfile(
+    auditor: &Auditor,
+    allowlist: &dep_vet::allowlist::Allowlist,
+    lockfile: &str,
+    base: &str,
+) -> dep_vet::mcp::ToolResult {
+    let path = mcp_lockfile_path(lockfile).map_err(|error| (-32602, error))?;
+    let format = lockfile::detect(&path).map_err(|error| (-32603, error.to_string()))?;
+    let working = lockfile::read(&path).map_err(|error| (-32603, error.to_string()))?;
+    let previous = lockfile::at_ref(&path, base).map_err(|error| (-32603, error.to_string()))?;
+    let before: std::collections::HashSet<(String, String)> = previous
+        .packages
+        .iter()
+        .map(|package| (package.name.clone(), package.version.clone()))
+        .collect();
+    let mut added = Vec::new();
+    for package in &working.packages {
+        if !before.contains(&(package.name.clone(), package.version.clone())) {
+            added.push(package.clone());
+        }
+    }
+    let parsed = dep_vet::intent::ParseOutcome::default();
+    let _ = parsed;
+    let raw: Vec<dep_vet::intent::Intent> = added
+        .iter()
+        .map(|package| dep_vet::intent::Intent {
+            ecosystem: format.ecosystem(),
+            kind: dep_vet::intent::IntentKind::Install,
+            specs: spec_for(format.ecosystem(), &package.name, &package.version)
+                .into_iter()
+                .collect(),
+            lockfile: None,
+            source: lockfile.to_string(),
+        })
+        .collect();
+    let parse = dep_vet::intent::ParseOutcome {
+        intents: raw,
+        notes: Vec::new(),
+    };
+    let (packages, errors) = audit_specs(auditor, allowlist, &parse);
+    let report = dep_vet::guard::GuardReport {
+        command: format!("lockfile change: {lockfile} vs {base}"),
+        parse,
+        packages,
+        errors: errors.clone(),
+    };
+    let structured: serde_json::Value =
+        serde_json::from_str(&report.to_json()).unwrap_or_else(|_| serde_json::json!({}));
+    let mut result = tool_result(structured, report.to_human());
+    if !errors.is_empty() {
+        result["isError"] = serde_json::json!(true);
+    }
+    Ok(result)
 }
 
 fn run_guard(

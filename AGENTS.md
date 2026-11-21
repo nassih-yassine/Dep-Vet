@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 531 unit + 147 end-to-end tests
+cargo test --locked                      # 538 unit + 156 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -496,6 +496,15 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   refuses malformed JSON with exit 3 and no write. Writes are atomic
   (sibling temp file then rename). The settings `command` is a shell string; the
   binary path must be absolute and quoted when it has spaces.
+- **MCP stdio is newline-delimited JSON, not LSP framing.** `src/mcp.rs` reads
+  one line per message, rejects lines over 1 MiB, and writes only JSON-RPC
+  objects to stdout; logs and panics go to stderr. Notifications get no
+  response, unknown methods `-32601`, bad arguments `-32602`, tool failures an
+  `isError` result. `serve` takes a `call_tool` closure; tool logic in `main.rs`
+  reuses `audit_intent`/`audit_specs`, validates every ecosystem and spec, caps
+  the command at `intent::MAX_COMMAND_BYTES` and summaries at 20k chars, and
+  canonicalizes lockfiles so they stay under the server's cwd. Never draw the
+  progress bar from this path.
 - **The intent parser is best-effort, not a shell.** It splits on `&& || ; |`
   and newlines outside quotes, follows one `sh -c`, and records a note for every
   install-like command it cannot parse, every URL/VCS/path spec, and every
