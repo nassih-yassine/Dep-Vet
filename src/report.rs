@@ -95,7 +95,14 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
     }
     match report.provenance {
         crate::model::Provenance::Present => {
-            push_field(&mut out, "provenance", "attestation present (not verified)");
+            let label = match report.attestation_subject_matches {
+                Some(true) => {
+                    "attestation present, subject matches this tarball (signature not verified)"
+                }
+                Some(false) => "attestation present but names a different artifact",
+                None => "attestation present (not verified)",
+            };
+            push_field(&mut out, "provenance", label);
         }
         crate::model::Provenance::Missing => {
             push_field(&mut out, "provenance", "not published");
@@ -696,6 +703,7 @@ mod tests {
             repository: Some("https://github.com/alice/evil-pkg".to_string()),
             deprecated: None,
             provenance: crate::model::Provenance::Unavailable,
+            attestation_subject_matches: None,
             advisories: Vec::new(),
             hidden_advisories: 0,
             not_checked: Vec::new(),

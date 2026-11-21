@@ -138,6 +138,7 @@ pub const POPULAR_CRATES: &[&str] = &[
     "cc",
     "chrono",
     "clap",
+    "cmake",
     "config",
     "crossbeam",
     "crossterm",
@@ -731,6 +732,13 @@ mod tests {
     }
 
     #[test]
+    fn cmake_is_not_a_typo_of_image() {
+        // cmake is a real build-tool crate two edits from `image`. It used to
+        // make dep-vet's own `dependency-added` check WARN on zstd-sys.
+        assert_eq!(closest("cmake", POPULAR_CRATES, &[]), None);
+    }
+
+    #[test]
     fn inotify_is_not_a_typo_of_notify() {
         assert_eq!(closest("inotify", POPULAR_CRATES, &[]), None);
     }
@@ -738,7 +746,9 @@ mod tests {
     #[test]
     fn legitimate_neighbours_are_not_suspects() {
         // Real crates that sit one or two edits from another seed entry.
-        for name in ["inotify", "rustix", "shlex", "notify", "rustls", "sqlx"] {
+        for name in [
+            "inotify", "rustix", "shlex", "notify", "rustls", "sqlx", "cmake",
+        ] {
             assert_eq!(
                 closest(name, POPULAR_CRATES, &[]),
                 None,

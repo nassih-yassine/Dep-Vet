@@ -221,6 +221,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         repository,
         deprecated,
         provenance: crate::model::Provenance::Unavailable,
+        attestation_subject_matches: None,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,

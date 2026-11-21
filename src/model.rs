@@ -720,6 +720,10 @@ pub struct PackageReport {
     pub deprecated: Option<String>,
     /// Provenance presence, never a cryptographic verdict.
     pub provenance: Provenance,
+    /// Whether the published attestation names this release's tarball. `None`
+    /// means unattested, unreadable, or not applicable; it is never "verified".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation_subject_matches: Option<bool>,
     pub advisories: Vec<Advisory>,
     /// Advisories skipped after the per-run cap.
     pub hidden_advisories: usize,
@@ -1217,6 +1221,7 @@ mod tests {
             repository: None,
             deprecated: None,
             provenance: crate::model::Provenance::Unavailable,
+            attestation_subject_matches: None,
             advisories: Vec::new(),
             hidden_advisories: 0,
             not_checked: Vec::new(),

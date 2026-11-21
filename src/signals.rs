@@ -92,6 +92,7 @@ pub fn report(
         repository: meta.repository,
         deprecated: meta.deprecated,
         provenance: meta.provenance,
+        attestation_subject_matches: meta.attestation_subject_matches,
         advisories: advisories
             .map(|list| list.advisories.clone())
             .unwrap_or_default(),
@@ -387,6 +388,23 @@ pub fn assess(
                 label: "repository".to_string(),
                 value: current.clone(),
                 url: Some(current.clone()),
+            }],
+        });
+    }
+
+    if meta.attestation_subject_matches == Some(false) {
+        findings.push(Finding {
+            id: "attestation-subject-mismatch",
+            severity: Severity::High,
+            title: "the attestation does not cover this release's tarball".to_string(),
+            detail: "the published attestation names a different artifact, so this \
+                     tarball is not the one that was attested"
+                .to_string(),
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "registry metadata".to_string(),
+                value: meta.registry_url.clone(),
+                url: Some(meta.registry_url.clone()),
             }],
         });
     }
@@ -851,6 +869,7 @@ mod tests {
             repository: Some("https://github.com/alice/some-package".to_string()),
             deprecated: None,
             provenance: crate::model::Provenance::Unavailable,
+            attestation_subject_matches: None,
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
             review_url: None,
             latest_version: None,
@@ -1005,6 +1024,18 @@ mod tests {
     }
 
     #[test]
+    fn adding_a_real_build_tool_is_not_a_typosquat_warning() {
+        let mut meta = transition();
+        meta.release.previous_dependencies = vec![];
+        meta.release.dependencies = vec!["cmake".to_string(), "libzstd-rs-sys".to_string()];
+        let findings = assess(&meta, Ecosystem::CratesIo, &[], &Profile::CRATES, NOW);
+        assert_eq!(
+            finding(&findings, "dependency-added").severity,
+            Severity::Info
+        );
+    }
+
+    #[test]
     fn unknown_history_produces_no_transition_findings() {
         let mut meta = transition();
         meta.release.history_known = false;
@@ -1132,6 +1163,26 @@ mod tests {
             !ids(&assess(&unknown, Ecosystem::Npm, &[], &Profile::NPM, NOW))
                 .contains(&"repository-changed")
         );
+    }
+
+    #[test]
+    fn an_attestation_for_another_artifact_is_high() {
+        let mut meta = meta();
+        meta.provenance = crate::model::Provenance::Present;
+        meta.attestation_subject_matches = Some(false);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert_eq!(
+            finding(&findings, "attestation-subject-mismatch").severity,
+            Severity::High
+        );
+
+        for allowed in [Some(true), None] {
+            meta.attestation_subject_matches = allowed;
+            assert!(
+                !ids(&assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                    .contains(&"attestation-subject-mismatch")
+            );
+        }
     }
 
     #[test]

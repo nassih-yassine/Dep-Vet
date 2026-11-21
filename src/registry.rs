@@ -36,6 +36,9 @@ pub struct PackageMeta {
     pub deprecated: Option<String>,
     /// Presence of a provenance attestation, never a verification result.
     pub provenance: crate::model::Provenance,
+    /// Whether the attestation's subject digest matches the published
+    /// tarball integrity. `None` means not checked, never "unverified".
+    pub attestation_subject_matches: Option<bool>,
     pub registry_url: String,
     /// Where a human should look this version up. `None` uses the
     /// ecosystem's default page.
@@ -152,7 +155,7 @@ impl RegistryClient {
             }
             Err(error) => return Err(RegistryError::Http(error.to_string())),
         };
-        parse_packument(spec, &body, &url)
+        parse_packument(spec, &body, &url, Some(&self.http))
     }
 
     /// Best effort: download counts are a nice-to-have, never a reason to fail.
@@ -293,6 +296,75 @@ fn has_attestation(doc: &VersionDoc) -> bool {
         })
 }
 
+/// Compare an attestation's in-toto subject digest with the tarball integrity
+/// the registry publishes. This is a consistency check, not signature
+/// verification: it answers "does the attestation name this exact artifact?".
+fn attestation_subject_matches(
+    http: Option<&crate::http::HttpClient>,
+    attestations: Option<&Attestations>,
+    dist: Option<&Dist>,
+) -> Option<bool> {
+    let http = http?;
+    let url = attestations?.url.as_deref()?;
+    let integrity = dist?.integrity.as_deref()?;
+    let expected = integrity
+        .strip_prefix("sha512-")
+        .and_then(sha512_base64_to_hex)?;
+    let body = http.get(url).ok()?;
+    subject_check(&body, &expected)
+}
+
+fn sha512_base64_to_hex(value: &str) -> Option<String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value.trim())
+        .ok()?;
+    if bytes.len() != 64 {
+        return None;
+    }
+    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// `Some(true)` when any subject digest matches, `Some(false)` when subjects
+/// were readable but none matched, `None` when the document could not be read.
+fn subject_check(body: &str, expected_hex: &str) -> Option<bool> {
+    use base64::Engine as _;
+    let doc: serde_json::Value = serde_json::from_str(body).ok()?;
+    let mut saw_subject = false;
+    for attestation in doc.get("attestations")?.as_array()? {
+        let Some(payload) = attestation
+            .get("bundle")
+            .and_then(|bundle| bundle.get("dsseEnvelope"))
+            .and_then(|envelope| envelope.get("payload"))
+            .and_then(|payload| payload.as_str())
+        else {
+            continue;
+        };
+        let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(payload.trim()) else {
+            continue;
+        };
+        let Ok(statement) = serde_json::from_slice::<serde_json::Value>(&decoded) else {
+            continue;
+        };
+        let Some(subjects) = statement.get("subject").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for subject in subjects {
+            if let Some(digest) = subject
+                .get("digest")
+                .and_then(|digest| digest.get("sha512"))
+                .and_then(|digest| digest.as_str())
+            {
+                saw_subject = true;
+                if digest.eq_ignore_ascii_case(expected_hex) {
+                    return Some(true);
+                }
+            }
+        }
+    }
+    saw_subject.then_some(false)
+}
+
 fn install_scripts(doc: &VersionDoc) -> Vec<InstallScript> {
     doc.scripts
         .iter()
@@ -308,6 +380,9 @@ fn install_scripts(doc: &VersionDoc) -> Vec<InstallScript> {
 struct Dist {
     #[serde(default)]
     attestations: Option<Attestations>,
+    /// `sha512-<base64>` of the tarball.
+    #[serde(default)]
+    integrity: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,6 +431,7 @@ fn parse_packument(
     spec: &PackageSpec,
     body: &str,
     url: &str,
+    http: Option<&crate::http::HttpClient>,
 ) -> Result<PackageMeta, RegistryError> {
     let packument: Packument = serde_json::from_str(body)
         .map_err(|error| RegistryError::Decode(format!("{url}: {error}")))?;
@@ -453,6 +529,13 @@ fn parse_packument(
         repository,
         deprecated: normalize_deprecated(doc.deprecated.clone()),
         provenance,
+        attestation_subject_matches: attestation_subject_matches(
+            http,
+            doc.dist
+                .as_ref()
+                .and_then(|dist| dist.attestations.as_ref()),
+            doc.dist.as_ref(),
+        ),
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
@@ -541,6 +624,7 @@ mod tests {
             &spec("evil-pkg", version),
             body,
             "https://example.test/evil-pkg",
+            None,
         )
     }
 
@@ -645,6 +729,31 @@ mod tests {
             }
         }
     }"#;
+
+    #[test]
+    fn subject_digests_are_compared_without_claiming_verification() {
+        let payload = r#"{"subject":[{"name":"pkg:npm/x@1.0.0","digest":{"sha512":"ABCDEF"}}]}"#;
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(payload);
+        let doc = format!(
+            r#"{{"attestations":[{{"bundle":{{"dsseEnvelope":{{"payload":"{encoded}"}}}}}}]}}"#
+        );
+        assert_eq!(subject_check(&doc, "abcdef"), Some(true));
+        assert_eq!(subject_check(&doc, "123456"), Some(false));
+        assert_eq!(subject_check("{}", "abcdef"), None);
+        assert_eq!(subject_check("not json", "abcdef"), None);
+
+        // A truncated integrity value is not a digest and must not compare.
+        assert_eq!(sha512_base64_to_hex("AAAA"), None);
+        let digest = [0xabu8; 64];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(digest);
+        assert_eq!(
+            sha512_base64_to_hex(&format!("sha512-{encoded}")),
+            None,
+            "only the bare value is accepted"
+        );
+        assert_eq!(sha512_base64_to_hex(&encoded).unwrap(), "ab".repeat(64));
+    }
 
     #[test]
     fn provenance_is_present_only_when_an_attestation_url_is_published() {

@@ -197,6 +197,7 @@ fn parse_metadata(
         repository,
         deprecated: package.and_then(|package| abandoned(&package.abandoned)),
         provenance: crate::model::Provenance::Unavailable,
+        attestation_subject_matches: None,
         registry_url: url.to_string(),
         review_url: None,
     })

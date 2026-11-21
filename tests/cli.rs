@@ -1986,6 +1986,77 @@ fn pypi_reports_present_provenance() {
     assert_eq!(value["provenance"], "missing");
 }
 
+fn attested_registry(subject_hex: &str) -> MockRegistry {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let tarball = b"attested tarball";
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(tarball));
+    let statement = format!(
+        r#"{{"subject":[{{"name":"pkg:npm/attested@1.0.0","digest":{{"sha512":"{subject_hex}"}}}}]}}"#
+    );
+    let envelope = base64::engine::general_purpose::STANDARD.encode(statement.as_bytes());
+    let body = format!(
+        r#"{{"attestations":[{{"bundle":{{"dsseEnvelope":{{"payload":"{envelope}"}}}}}}]}}"#
+    );
+
+    MockRegistry::start_with(move |base| {
+        let doc = format!(
+            r#"{{"name":"attested","dist-tags":{{"latest":"1.0.0"}},"versions":{{"1.0.0":{{"dist":{{"tarball":"{base}/attested.tgz","integrity":"sha512-{digest}","attestations":{{"url":"{base}/attestation","provenance":{{"predicateType":"https://slsa.dev/provenance/v1"}}}}}}}}}}}}"#
+        );
+        let mut routes = HashMap::new();
+        routes.insert("/attested".to_string(), (200, doc.into_bytes()));
+        routes.insert("/attestation".to_string(), (200, body.clone().into_bytes()));
+        routes
+    })
+}
+
+#[test]
+fn npm_attestations_are_checked_against_the_tarball_digest() {
+    use sha2::Digest as _;
+
+    let tarball_hex: String = sha2::Sha512::digest(b"attested tarball")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+
+    // The attestation names this exact tarball: report the match, no finding.
+    let registry = attested_registry(&tarball_hex);
+    let output = registry
+        .command()
+        .args(["npm", "attested", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["provenance"], "present");
+    assert_eq!(value["attestation_subject_matches"], true);
+
+    // A digest for another artifact is a HIGH integrity problem.
+    let registry = attested_registry(&"0".repeat(128));
+    let output = registry
+        .command()
+        .args(["npm", "attested", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["attestation_subject_matches"], false);
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["id"] == "attestation-subject-mismatch"),
+        "{}",
+        value["findings"]
+    );
+}
+
 #[test]
 fn pypi_history_is_fetched_only_for_recent_releases() {
     let mut routes = HashMap::new();

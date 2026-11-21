@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 471 unit + 120 end-to-end tests
+cargo test --locked                      # 475 unit + 121 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -298,12 +298,16 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   load, swept after 30 days; unverified archives are never cached, and
   `--no-cache` bypasses the lookup. Never cache a file whose checksum did not
   verify.
-- **Provenance is presence, never verification.** npm sets `Present` from
-  `dist.attestations.provenance.url`; PyPI HEADs
+- **Provenance is presence, never verification.** npm sets `Present` when
+  `dist.attestations` carries `provenance` or a URL (`provenance` holds only
+  `predicateType`; the URL sits on `attestations`); PyPI HEADs
   `/integrity/{project}/{version}/{filename}/provenance` for the sdist-first
   file. Everything else stays `Unavailable`. `Missing` is not a finding, and
   no report may claim a signature, builder, or source commit was verified.
-  Cryptographic Sigstore/SLSA checks are not implemented.
+  npm's `attestation_subject_matches` compares the in-toto subject's sha512
+  hex with the `dist.integrity` tarball digest: a mismatch is HIGH
+  (`attestation-subject-mismatch`), unreadable stays `None`. Cryptographic
+  Sigstore/SLSA checks are not implemented.
 - **Release-transition signals are history-based and gated.** `HISTORY_WINDOW_DAYS`
   (30) bounds them: PyPI and crates.io fetch two extra documents only for a
   version inside it. `previous_release` picks by timestamp, never list order.

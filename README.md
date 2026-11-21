@@ -296,6 +296,11 @@ Reports say whether a release publishes provenance, never that it is verified:
 - **Everything else** — `unavailable`; these registries publish no provenance
   this tool can read.
 
+For npm, dep-vet also reads the attestation and compares its in-toto subject
+digest with the tarball checksum the registry publishes. A match says the
+attestation names this exact artifact; a mismatch is HIGH, because the tarball
+is then not the one that was attested.
+
 `present` means the attestation exists, **not** that its signature, builder, or
 source commit was verified. `missing` is not suspicious on its own: most
 packages do not publish provenance. Cryptographic Sigstore/SLSA verification is
@@ -639,7 +644,8 @@ clean.
   the last 30 days.
 - **Provenance is presence, not verification.** `present` in a report means the
   registry publishes an attestation, not that dep-vet checked its signature or
-  builder. `missing` is never a finding, and `unavailable` means the ecosystem
+  builder. The npm subject-digest comparison is a consistency check on the
+  artifact, not a trust decision. `missing` is never a finding, and `unavailable` means the ecosystem
   has no provenance dep-vet can read.
 - **Release diffs are text-based.** `diff` compares extracted files by content
   and rule hits by (rule, file). Install hooks are compared as parsed commands,
