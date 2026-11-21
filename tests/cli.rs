@@ -1566,6 +1566,26 @@ fn audit_checks_every_package_in_the_lockfile() {
 }
 
 #[test]
+fn piped_audits_print_no_progress_line() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("clean-pkg", "1.0.0")]),
+    );
+    let registry = registry_with(&[PackageFixture::clean("clean-pkg")], None);
+
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("auditing"), "progress leaked: {stderr}");
+}
+
+#[test]
 fn audit_reports_uncheckable_packages_as_incomplete() {
     let repo = Repo::new();
     repo.write(

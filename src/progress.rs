@@ -20,7 +20,8 @@ impl Progress {
         let progress = Self {
             total,
             done: 0,
-            enabled,
+            // An empty list finishes before it starts; drawing "0/0" is noise.
+            enabled: enabled && total > 0,
         };
         progress.render();
         progress
@@ -36,6 +37,11 @@ impl Progress {
     #[cfg(test)]
     fn done(&self) -> usize {
         self.done
+    }
+
+    #[cfg(test)]
+    fn visible(&self) -> bool {
+        self.enabled
     }
 
     fn render(&self) {
@@ -72,6 +78,12 @@ mod tests {
         progress.advance();
         progress.advance();
         assert_eq!(progress.done(), 2, "never past the total");
+    }
+
+    #[test]
+    fn an_empty_audit_draws_nothing() {
+        let progress = Progress::new(0, true);
+        assert!(!progress.visible());
     }
 
     #[test]
