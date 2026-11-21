@@ -197,6 +197,28 @@ no line.
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
 
+### Release transitions
+
+A compromised package rarely looks like a typosquat. The exploitable moment is
+a release that changes what the package runs or pulls in, and registry metadata
+describes it:
+
+- **Dormant then published** (WARN): this version arrived in the last 30 days
+  after at least a year with no release. Every ecosystem.
+- **Install scripts changed** (WARN, HIGH when the new command uses `curl`,
+  `base64`, `node -e`, and similar): npm only, compared with the previous
+  release, so a package that always had a build script is not blamed.
+- **Dependencies added** (INFO, WARN when an added name looks like a typo):
+  npm, Composer, NuGet, and — for releases inside the 30-day window — PyPI and
+  crates.io.
+- **Publisher changed** (INFO): a different existing maintainer shipped this
+  version. A brand-new account is the stronger "not a maintainer" warning.
+
+History is only fetched for versions published in the last 30 days; older
+releases are covered by advisories and cost no extra requests. This still
+cannot read the new version's code: a same-publisher release with no new
+scripts or dependencies passes until an advisory exists.
+
 ### Watch mode
 
 ```sh
@@ -529,6 +551,10 @@ clean.
   their `freshness` signal is reported as `not checked`. Composer has maintainers,
   repository metadata, and an abandoned flag, but no install-time file list and
   no weekly download figure.
+- **Release transitions are metadata only.** Dormancy, changed install
+  scripts, added dependencies, and publisher changes come from the registry;
+  dep-vet never unpacks a release. History is requested only for versions from
+  the last 30 days.
 - **Advice is a pointer, not a guarantee.** `fixed in` is what OSV publishes for
   that advisory; `newest` is the highest published version and may be a breaking
   major or still vulnerable. dep-vet never upgrades, rewrites, or tests anything.

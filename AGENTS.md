@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 389 unit + 109 end-to-end tests
+cargo test --locked                      # 419 unit + 111 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -259,6 +259,19 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   from the workflow), and the job has `actions: write`. If auto-merge is off,
   the PR waits for a human.
   Do not commit generated data by hand outside the script.
+- **Release-transition signals are history-based and gated.** `HISTORY_WINDOW_DAYS`
+  (30) bounds them: PyPI and crates.io fetch two extra documents only for a
+  version inside it. `previous_release` picks by timestamp, never list order.
+  `install-scripts-changed` compares hook commands with the previous release and
+  escalates to HIGH only for known execution patterns; unchanged scripts stay
+  under the ordinary install-script finding. `dependency-added` is INFO unless
+  an added name resembles a seed name. `publisher-changed` is INFO and only for
+  accounts already on the maintainer list; a new account remains the existing
+  WARN, enriched with the previous publisher. Composer platform packages
+  (`php`, `ext-*`, `lib-*`, `composer-*`) and crates `dev` dependencies never
+  count. Typosquat suppression compares the package's downloads with the
+  looked-alike name's and falls back to 1,000,000; any ecosystem suppresses
+  names older than five years.
 - **Tree audits batch, single packages do not.** `advisories_for` sends one
   `querybatch` per 500 packages (JSR excluded); `downloads_for` sends one npm
   request per 128 unscoped names, with scoped names fetched singly because the

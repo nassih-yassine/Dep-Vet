@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Release-transition signals.** dep-vet now flags the shape of a compromised
+  release: a version published after a year of dormancy (all ecosystems),
+  changed install scripts in npm (HIGH when they fetch or decode code),
+  dependencies added by the new version (npm, Composer, NuGet, PyPI, crates.io),
+  and a different publisher from the previous release. History is only fetched
+  for versions published in the last 30 days, so older audits cost nothing
+  extra.
+- **Typosquats judged by registry facts.** npm compares the package's weekly
+  downloads with the downloads of the name it resembles, and any ecosystem
+  dismisses a lookalike with more than five years of history. The generated seed
+  now only supplies candidate names, so a gap in it can no longer recommend
+  replacing a framework with an unrelated package.
+
 - **No typosquat warnings for established packages.** A package with at least
   1,000,000 weekly downloads is no longer reported as a lookalike, and no
   longer suggests replacing it. `next` was matched to `jest` at two edits
