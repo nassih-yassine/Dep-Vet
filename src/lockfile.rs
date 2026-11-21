@@ -249,13 +249,21 @@ pub fn at_ref(lockfile: &Path, git_ref: &str) -> Result<LockContents, LockError>
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let root = git(directory, &["rev-parse", "--show-toplevel"])?;
-    let root = Path::new(root.trim());
+    // Canonicalize the root too: `git rev-parse` may print a Windows short
+    // path (`RUNNER~1`) or a macOS `/var` alias, while canonicalize resolves
+    // both to the same long/symlink-free form as the lockfile.
+    let root = Path::new(root.trim())
+        .canonicalize()
+        .map_err(|source| LockError::Io {
+            path: root.trim().to_string(),
+            source,
+        })?;
     let absolute = lockfile.canonicalize().map_err(|source| LockError::Io {
         path: lockfile.display().to_string(),
         source,
     })?;
     let relative = absolute
-        .strip_prefix(root)
+        .strip_prefix(&root)
         .map_err(|_| LockError::NotInRepository(lockfile.display().to_string()))?;
 
     let object = format!("{git_ref}:{}", git_path(relative));
@@ -1260,7 +1268,8 @@ mod tests {
         let lockfile = directory.path().join("package-lock.json");
         std::fs::write(&lockfile, "{}").unwrap();
 
-        assert_eq!(nearest(&nested).as_deref(), Some(lockfile.as_path()));
+        let expected = lockfile.canonicalize().unwrap();
+        assert_eq!(nearest(&nested).as_deref(), Some(expected.as_path()));
     }
 
     #[test]

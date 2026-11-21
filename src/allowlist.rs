@@ -467,6 +467,8 @@ reason = "why"
         std::fs::create_dir_all(&nested).unwrap();
         let config = directory.path().join(CONFIG_NAME);
         std::fs::write(&config, "").unwrap();
-        assert_eq!(nearest(&nested).as_deref(), Some(config.as_path()));
+        // macOS resolves /var to /private/var and Windows returns long paths.
+        let expected = config.canonicalize().unwrap();
+        assert_eq!(nearest(&nested).as_deref(), Some(expected.as_path()));
     }
 }
