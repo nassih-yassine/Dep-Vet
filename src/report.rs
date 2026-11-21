@@ -275,6 +275,7 @@ mod tests {
             repository: Some("https://github.com/alice/evil-pkg".to_string()),
             deprecated: None,
             advisories: Vec::new(),
+            hidden_advisories: 0,
             registry_url: "https://registry.npmjs.org/evil-pkg".to_string(),
             findings,
         }

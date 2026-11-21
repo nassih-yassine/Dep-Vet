@@ -27,7 +27,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test                              # 132 unit + 32 end-to-end tests
+cargo test                              # 139 unit + 34 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --all-targets -- -D warnings
@@ -83,6 +83,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   "advisory without a summary" for every real advisory.
 - **Advisory failure is an INFO finding**, not silence and not exit 3. "We
   could not check" must never read as "nothing found".
+- **The 25-advisory cap must be disclosed.** `OsvClient::query` returns an
+  `AdvisoryList { advisories, hidden }`; `hidden > 0` becomes an INFO finding.
+  Never truncate without saying so.
 - **`lock` exits 3 when any added package could not be checked**, even if the
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.

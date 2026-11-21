@@ -3,7 +3,7 @@
 
 use crate::date;
 use crate::model::{Evidence, Finding, PackageReport, Severity};
-use crate::osv::Advisory;
+use crate::osv::{Advisory, AdvisoryList, MAX_ADVISORIES};
 use crate::registry::{PackageMeta, package_page_url};
 use crate::typosquat;
 
@@ -15,12 +15,17 @@ pub const RECENT_VERSION_DAYS: i64 = 7;
 pub fn report(
     meta: PackageMeta,
     weekly_downloads: Option<u64>,
-    advisories: Option<&[Advisory]>,
+    advisories: Option<&AdvisoryList>,
     now: i64,
 ) -> PackageReport {
     let mut findings = assess(&meta, now);
     match advisories {
-        Some(advisories) => findings.extend(advisory_findings(advisories)),
+        Some(list) => {
+            findings.extend(advisory_findings(&list.advisories));
+            if list.hidden > 0 {
+                findings.push(advisories_hidden(list.hidden));
+            }
+        }
         None => findings.push(advisory_check_unavailable()),
     }
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
@@ -37,7 +42,10 @@ pub fn report(
         install_scripts: meta.install_scripts,
         repository: meta.repository,
         deprecated: meta.deprecated,
-        advisories: advisories.unwrap_or_default().to_vec(),
+        advisories: advisories
+            .map(|list| list.advisories.clone())
+            .unwrap_or_default(),
+        hidden_advisories: advisories.map(|list| list.hidden).unwrap_or(0),
         registry_url: meta.registry_url,
         findings,
     }
@@ -91,6 +99,29 @@ pub fn advisory_findings(advisories: &[Advisory]) -> Vec<Finding> {
             }
         })
         .collect()
+}
+
+/// The per-run cap dropped advisories; the report must not look complete.
+pub fn advisories_hidden(hidden: usize) -> Finding {
+    Finding {
+        id: "advisories-truncated",
+        severity: Severity::Info,
+        title: "more advisories not shown".to_string(),
+        detail: if hidden == 1 {
+            format!(
+                "1 additional advisory was not fetched; dep-vet shows at most {MAX_ADVISORIES} per package. Review OSV before installing"
+            )
+        } else {
+            format!(
+                "{hidden} additional advisories were not fetched; dep-vet shows at most {MAX_ADVISORIES} per package. Review OSV before installing"
+            )
+        },
+        evidence: vec![Evidence {
+            label: "OSV".to_string(),
+            value: "https://osv.dev".to_string(),
+            url: Some("https://osv.dev".to_string()),
+        }],
+    }
 }
 
 /// OSV unreachable: say so instead of implying the package is advisory-free.
@@ -300,7 +331,7 @@ pub fn assess(meta: &PackageMeta, now: i64) -> Vec<Finding> {
 mod tests {
     use super::*;
     use crate::model::InstallScript;
-    use crate::osv::Advisory;
+    use crate::osv::{Advisory, AdvisoryList};
 
     const NOW: i64 = 1_800_000_000; // 2027-01-15
 
@@ -588,6 +619,13 @@ mod tests {
         assert_eq!(report.publisher.as_deref(), Some("alice"));
     }
 
+    fn list(advisories: Vec<Advisory>) -> AdvisoryList {
+        AdvisoryList {
+            advisories,
+            hidden: 0,
+        }
+    }
+
     fn advisory(id: &str, severity: Severity) -> Advisory {
         Advisory {
             id: id.to_string(),
@@ -614,15 +652,32 @@ mod tests {
 
     #[test]
     fn a_high_advisory_exits_two() {
-        let advisories = [advisory("GHSA-bbbb", Severity::High)];
+        let advisories = list(vec![advisory("GHSA-bbbb", Severity::High)]);
         let report = report(meta(), None, Some(&advisories), NOW);
         assert_eq!(report.exit_code(), 2);
         assert_eq!(report.advisories.len(), 1);
     }
 
     #[test]
+    fn hidden_advisories_are_disclosed() {
+        let advisories = AdvisoryList {
+            advisories: vec![advisory("GHSA-eeee", Severity::Warn)],
+            hidden: 15,
+        };
+        let report = report(meta(), None, Some(&advisories), NOW);
+        let note = report
+            .findings
+            .iter()
+            .find(|finding| finding.id == "advisories-truncated")
+            .expect("truncation must be disclosed");
+        assert_eq!(note.severity, Severity::Info);
+        assert!(note.detail.contains("15 additional advisories"));
+        assert_eq!(report.hidden_advisories, 15);
+    }
+
+    #[test]
     fn a_low_advisory_is_informational() {
-        let advisories = [advisory("GHSA-cccc", Severity::Info)];
+        let advisories = list(vec![advisory("GHSA-cccc", Severity::Info)]);
         let report = report(meta(), None, Some(&advisories), NOW);
         assert_eq!(report.exit_code(), 0);
     }
@@ -640,7 +695,7 @@ mod tests {
     fn advisory_findings_sort_above_registry_findings_of_lower_severity() {
         let mut meta = meta();
         meta.repository = None; // INFO
-        let advisories = [advisory("GHSA-dddd", Severity::High)];
+        let advisories = list(vec![advisory("GHSA-dddd", Severity::High)]);
         let report = report(meta, None, Some(&advisories), NOW);
         assert_eq!(report.findings[0].severity, Severity::High);
         assert_eq!(report.findings[0].id, "advisory");

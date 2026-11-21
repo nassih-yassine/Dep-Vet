@@ -269,7 +269,7 @@ raw source does not ship.
 - Not an SBOM generator or a Dependabot replacement.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
 - One batch query plus one request per advisory on a cold cache; bounded at 25
-  advisories per run.
+  advisories per run, and the report says how many were skipped.
 - The popular-name list is a curated seed, not a download ranking.
 
 ## Development
