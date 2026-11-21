@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 328 unit + 99 end-to-end tests
+cargo test --locked                      # 336 unit + 99 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -149,6 +149,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   unavailable"), never look like agreement. Composer names are lowercase and
   `parse_composer` lowercases them for OSV. Downloads are monthly-only on
   Packagist, so the weekly download signal stays `not checked`.
+- **Maven search returns at most 200 rows.** `spring-core` has 300+ versions, so
+  an exact version is filtered in the query (`AND v:"3.2.0.RELEASE"`), and a
+  truncated page triggers one extra request for the last row so "first seen" is
+  the real oldest release. `rows=1000` is silently capped to 20: do not raise
+  the number, paginate or filter. "Latest" skips milestones, RCs, and
+  snapshots; Maven has no stable flag.
 - **Maven has no lockfile.** `dep-vet maven group:artifact[@version]` audits a
   single coordinate via the Central search API (timestamps are milliseconds).
   No owners, downloads, repository, or deprecation exist; `Profile::MAVEN`
