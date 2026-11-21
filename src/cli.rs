@@ -40,6 +40,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Vet a PyPI package before adding it
+    Pypi {
+        /// Package name with optional exact version: requests==2.31.0
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -95,6 +105,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_pypi_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "pypi", "requests==2.31.0"]).unwrap();
+        match cli.command {
+            Command::Pypi { package, json } => {
+                assert_eq!(package, "requests==2.31.0");
+                assert!(!json);
+            }
+            _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
     fn parses_lock_command() {
         let cli = Cli::try_parse_from(["dep-vet", "lock", "package-lock.json"]).unwrap();
         match cli.command {
@@ -145,7 +167,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_subcommands() {
-        assert!(Cli::try_parse_from(["dep-vet", "pypi", "requests"]).is_err());
+        assert!(Cli::try_parse_from(["dep-vet", "crates", "serde"]).is_err());
     }
 
     #[test]

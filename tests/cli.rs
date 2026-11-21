@@ -58,6 +58,7 @@ impl MockRegistry {
             .env("DEPVET_REGISTRY_BASE", &self.base)
             .env("DEPVET_DOWNLOADS_BASE", format!("{}/downloads", self.base))
             .env("DEPVET_OSV_BASE", &self.base)
+            .env("DEPVET_PYPI_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
         command
@@ -164,6 +165,16 @@ impl<'a> PackageFixture<'a> {
 }
 
 const NO_ADVISORIES: &str = r#"{"results":[{"vulns":[]}]}"#;
+
+fn pypi_registry(name: &str, body: &str) -> MockRegistry {
+    let mut routes = HashMap::new();
+    routes.insert(format!("/pypi/{name}/json"), (200, body.to_string()));
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    MockRegistry::start(routes)
+}
 
 fn registry_with(packages: &[PackageFixture<'_>], downloads: Option<u64>) -> MockRegistry {
     registry_and_osv(packages, downloads, 200, NO_ADVISORIES, None)
@@ -440,7 +451,7 @@ fn binary() -> Command {
 #[test]
 fn unknown_subcommand_is_a_tool_error_not_a_verdict() {
     binary()
-        .args(["pypi", "requests"])
+        .args(["crates", "serde"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("usage error"))
@@ -1162,4 +1173,87 @@ fn no_local_flag_falls_back_to_the_seed_list() {
             "name is close to a popular package",
         ))
         .stdout(predicate::str::contains("already in your lockfile").not());
+}
+
+const PYPI_WHEEL: &str = r#"{
+    "info": {
+        "name": "flask",
+        "version": "3.1.0",
+        "home_page": "https://flask.palletsprojects.com",
+        "project_urls": { "Source": "https://github.com/pallets/flask" }
+    },
+    "urls": [
+        { "packagetype": "bdist_wheel", "upload_time": "2025-01-15T00:00:00" },
+        { "packagetype": "sdist", "upload_time": "2025-01-15T00:00:00" }
+    ],
+    "releases": {
+        "3.1.0": [
+            { "packagetype": "bdist_wheel", "upload_time": "2025-01-15T00:00:00" },
+            { "packagetype": "sdist", "upload_time": "2025-01-15T00:00:00" }
+        ]
+    }
+}"#;
+
+#[test]
+fn pypi_wheel_release_is_clean_and_says_what_it_cannot_check() {
+    let registry = pypi_registry("flask", PYPI_WHEEL);
+    registry
+        .command()
+        .args(["pypi", "flask"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("pypi/flask@3.1.0"))
+        .stdout(predicate::str::contains("not checked"))
+        .stdout(predicate::str::contains("maintainers, downloads"));
+}
+
+#[test]
+fn pypi_json_names_the_ecosystem_and_missing_signals() {
+    let registry = pypi_registry("flask", PYPI_WHEEL);
+    let output = registry
+        .command()
+        .args(["pypi", "flask", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["ecosystem"], "pypi");
+    assert_eq!(value["version"], "3.1.0");
+    assert_eq!(value["not_checked"][0], "maintainers");
+    assert_eq!(value["not_checked"][1], "downloads");
+}
+
+#[test]
+fn pypi_sdist_only_version_warns_about_building() {
+    let body = r#"{
+        "info": { "name": "oldpkg", "version": "0.1" },
+        "urls": [{ "packagetype": "sdist", "upload_time": "2015-01-01T00:00:00" }]
+    }"#;
+    let registry = pypi_registry("oldpkg", body);
+    registry
+        .command()
+        .args(["pypi", "oldpkg==0.1"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("installs by building from source"))
+        .stdout(predicate::str::contains("no wheel is published"));
+}
+
+#[test]
+fn pypi_yanked_release_is_a_warning() {
+    let body = r#"{
+        "info": { "name": "badpkg", "version": "1.0" },
+        "urls": [
+            { "packagetype": "sdist", "yanked": true, "yanked_reason": "malware" }
+        ]
+    }"#;
+    let registry = pypi_registry("badpkg", body);
+    registry
+        .command()
+        .args(["pypi", "badpkg"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("this release is yanked: malware"));
 }

