@@ -161,6 +161,9 @@ fn render_advice(upgrades: &[Upgrade], version: &str) -> String {
                     line.push_str(&format!(" (+{extra})"));
                 }
             }
+            if leading_number(&upgrade.fixed[0]) != current {
+                line.push_str("   (major jump, may break)");
+            }
             out.push_str(&format!("    {line}\n"));
         } else if upgrade.fix_unknown {
             out.push_str("    fix unknown (advisory details unavailable)\n");

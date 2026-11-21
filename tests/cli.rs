@@ -553,7 +553,18 @@ const HIGH_ADVISORY_DETAIL: &str = r#"{
     "id": "GHSA-test-0001",
     "summary": "test advisory for dep-vet",
     "aliases": ["CVE-2026-0001"],
-    "database_specific": { "severity": "HIGH" }
+    "database_specific": { "severity": "HIGH" },
+    "affected": [
+        {
+            "package": { "ecosystem": "npm", "name": "advised-pkg" },
+            "ranges": [
+                {
+                    "type": "ECOSYSTEM",
+                    "events": [ { "introduced": "0" }, { "fixed": "2.0.0" } ]
+                }
+            ]
+        }
+    ]
 }"#;
 
 #[test]
@@ -580,6 +591,66 @@ fn a_high_advisory_sets_the_verdict() {
         .stdout(predicate::str::contains(
             "https://osv.dev/vulnerability/GHSA-test-0001",
         ));
+}
+
+#[test]
+fn a_high_advisory_report_suggests_the_fixed_version() {
+    let package = PackageFixture::clean("advised-pkg");
+    let registry = registry_and_osv(
+        &[package],
+        None,
+        200,
+        HIGH_ADVISORY,
+        Some(("GHSA-test-0001", HIGH_ADVISORY_DETAIL)),
+    );
+
+    registry
+        .command()
+        .args(["npm", "advised-pkg"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("fixed in 2.0.0"))
+        .stdout(predicate::str::contains("GHSA-test-0001"))
+        .stdout(predicate::str::contains("major jump, may break"));
+
+    let output = registry
+        .command()
+        .args(["npm", "advised-pkg", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["upgrades"][0]["fixed"][0], "2.0.0");
+}
+
+#[test]
+fn audit_block_suggests_fixes_and_keeps_the_exit_code() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("advised-pkg", "1.0.0")]),
+    );
+
+    let registry = registry_and_osv(
+        &[PackageFixture::clean("advised-pkg")],
+        None,
+        200,
+        HIGH_ADVISORY,
+        Some(("GHSA-test-0001", HIGH_ADVISORY_DETAIL)),
+    );
+
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("what to do"))
+        .stdout(predicate::str::contains("advised-pkg 1.0.0"))
+        .stdout(predicate::str::contains("→ 2.0.0"))
+        .stdout(predicate::str::contains("HIGH (exit 2)"));
 }
 
 #[test]

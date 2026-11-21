@@ -248,6 +248,13 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   from the workflow), and the job has `actions: write`. If auto-merge is off,
   the PR waits for a human.
   Do not commit generated data by hand outside the script.
+- **Upgrade advice is evidence-shaped.** `Upgrade.fixed` comes only from OSV's
+  `affected[].ranges[].events[].fixed`, filtered to the audited package's name;
+  `newest` is a hint and never a fix. Never derive a fix from `latest_version`,
+  never say "no fixed version published" when the advisory could not be hydrated
+  (`fix_unknown`), and produce no line for packages whose findings are only
+  install scripts, deprecation, or freshness. Advice never changes a verdict or
+  an exit code. The version helper only labels majors; it never orders versions.
 - **Advisories are deduplicated by alias.** OSV lists one issue as PYSEC, GHSA,
   and CVE records. `dedupe` unions records whose id/alias sets overlap, keeps the
   highest severity, prefers a real summary over the placeholder, and preserves
