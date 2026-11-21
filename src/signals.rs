@@ -14,6 +14,11 @@ pub const FRESH_DAYS: i64 = 7;
 /// A version newer than this on a package with no history is worth a look.
 pub const RECENT_VERSION_DAYS: i64 = 7;
 
+/// A package used this widely is not an accidental typo. The seed is generated
+/// and always has holes (`next` was missing once), and the alternative is
+/// telling people to replace a framework with an unrelated test runner.
+pub const ESTABLISHED_WEEKLY_DOWNLOADS: u64 = 1_000_000;
+
 pub fn report(
     meta: PackageMeta,
     ecosystem: Ecosystem,
@@ -23,7 +28,11 @@ pub fn report(
     profile: Profile,
     now: i64,
 ) -> PackageReport {
+    let established = weekly_downloads.is_some_and(|count| count >= ESTABLISHED_WEEKLY_DOWNLOADS);
     let mut findings = assess(&meta, ecosystem, local, &profile, now);
+    if established {
+        findings.retain(|finding| finding.id != "typosquat");
+    }
     match advisories {
         Some(list) => {
             findings.extend(advisory_findings(&list.advisories));
@@ -36,7 +45,11 @@ pub fn report(
     }
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
 
-    let suspect = suspect_for(&meta, ecosystem, local, &profile);
+    let suspect = if established {
+        None
+    } else {
+        suspect_for(&meta, ecosystem, local, &profile)
+    };
     let upgrades = upgrade_advice(&meta, advisories, suspect.as_ref())
         .into_iter()
         .collect();
@@ -700,6 +713,59 @@ mod tests {
 
         let report = advice_report(meta, Some(&list));
         assert_eq!(report.upgrades[0].newest, None);
+    }
+
+    #[test]
+    fn an_established_package_is_never_a_typosquat() {
+        let mut meta = meta();
+        meta.name = "next".to_string();
+
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(98_000_000),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.id != "typosquat"),
+            "next must not look like a typo: {:?}",
+            report.findings
+        );
+        assert!(report.upgrades.is_empty(), "{:?}", report.upgrades);
+    }
+
+    #[test]
+    fn a_low_download_lookalike_is_still_flagged() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(1_200),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "typosquat")
+        );
+        assert_eq!(
+            report.upgrades[0].replace_with.as_deref(),
+            Some("cross-env")
+        );
     }
 
     #[test]

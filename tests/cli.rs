@@ -1891,6 +1891,21 @@ fn a_failed_osv_batch_marks_every_package_incomplete() {
 }
 
 #[test]
+fn a_deeply_popular_package_is_not_a_typosquat() {
+    let package = PackageFixture::clean("next");
+    let registry = registry_and_osv(&[package], Some(98_000_000), 200, "{}", None);
+
+    registry
+        .command()
+        .args(["npm", "next"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("typosquat").not())
+        .stdout(predicate::str::contains("use jest").not())
+        .stdout(predicate::str::contains("INFO (exit 0)"));
+}
+
+#[test]
 fn piped_audits_print_no_progress_line() {
     let repo = Repo::new();
     repo.write(

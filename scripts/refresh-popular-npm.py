@@ -20,6 +20,23 @@ DATA = ROOT / "data" / "popular-npm.txt"
 LIMIT = 500
 UA = {"User-Agent": "dep-vet-refresh/0.1"}
 
+# The candidate universe is the seed plus its direct dependencies, so a popular
+# package that nobody in the seed depends on can stay invisible forever
+# (`next` was missing and got flagged as a typo of `jest`). Recent frameworks
+# are anchored here instead of relying on the graph reaching them.
+ANCHORS = [
+    "astro",
+    "ember-source",
+    "gatsby",
+    "jquery",
+    "next",
+    "nuxt",
+    "remix",
+    "solid-js",
+    "svelte",
+    "vue",
+]
+
 
 def get_json(url):
     request = urllib.request.Request(url, headers=UA)
@@ -62,7 +79,7 @@ def self_test():
 
 def main():
     seed = load_current()
-    candidates = set(seed)
+    candidates = set(seed) | set(ANCHORS)
 
     for name in seed:
         encoded = urllib.parse.quote(name, safe="@")

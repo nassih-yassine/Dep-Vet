@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **No typosquat warnings for established packages.** A package with at least
+  1,000,000 weekly downloads is no longer reported as a lookalike, and no
+  longer suggests replacing it. `next` was matched to `jest` at two edits
+  because the generated seed was missing it; the refresh script now anchors
+  recent frameworks so the seed stops losing them.
+
 - **Batched audit lookups.** A tree audit sends one OSV `querybatch` per 500
   packages (across ecosystems) and one npm downloads request per 128 names,
   instead of one of each per package. A shared advisory is hydrated once, and
