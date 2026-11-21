@@ -110,7 +110,7 @@ impl Cache {
     }
 }
 
-fn cache_directory() -> Option<PathBuf> {
+pub fn cache_directory() -> Option<PathBuf> {
     if let Some(directory) = std::env::var_os("DEPVET_CACHE_DIR") {
         return Some(PathBuf::from(directory));
     }

@@ -113,8 +113,20 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             }
             let http = Arc::new(HttpClient::from_env(cli.no_cache));
             let limits = allowlist.inspect().limits();
-            let old = dep_vet::inspect::inspect_archive(&http, ecosystem, &from_spec, limits)?;
-            let new = dep_vet::inspect::inspect_archive(&http, ecosystem, &to_spec, limits)?;
+            let old = dep_vet::inspect::inspect_archive(
+                &http,
+                ecosystem,
+                &from_spec,
+                limits,
+                !cli.no_cache,
+            )?;
+            let new = dep_vet::inspect::inspect_archive(
+                &http,
+                ecosystem,
+                &to_spec,
+                limits,
+                !cli.no_cache,
+            )?;
             let report = dep_vet::inspect::build_diff(
                 ecosystem,
                 &from_spec.name,
@@ -142,7 +154,8 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             let spec = inspect_spec(ecosystem, package)?;
             let http = Arc::new(HttpClient::from_env(cli.no_cache));
             let limits = allowlist.inspect().limits();
-            let prepared = dep_vet::inspect::inspect_archive(&http, ecosystem, &spec, limits)?;
+            let prepared =
+                dep_vet::inspect::inspect_archive(&http, ecosystem, &spec, limits, !cli.no_cache)?;
             let report = dep_vet::inspect::build_report(
                 ecosystem,
                 &spec,

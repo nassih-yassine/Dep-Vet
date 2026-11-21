@@ -11,6 +11,9 @@
 - **Release diff.** `dep-vet diff <ecosystem> <pkg@old> <pkg@new>` compares two
   archives by content: added, removed, and modified files, new and resolved rule
   findings, and a warning for newly added executable scripts.
+- **Verified archives are cached.** A downloaded release with a trusted
+  checksum is kept for 30 days and re-verified before reuse; unverified
+  archives are never cached, and `--no-cache` re-downloads.
 - **Inspection is configurable.** `.depvet.toml` gains an `[inspect]` section
   for archive caps and disabled rule ids. Unknown or zero values fail with
   exit 3 instead of changing nothing.

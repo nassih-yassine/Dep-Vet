@@ -2314,6 +2314,61 @@ fn inspect_reports_a_checksum_mismatch_as_high() {
 }
 
 #[test]
+fn verified_archives_are_cached_and_reexamined_without_downloading() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(&archive));
+    let registry = MockRegistry::start_with(|base| {
+        let doc = format!(
+            r#"{{"name":"cached-pkg","version":"1.0.0","dist":{{"tarball":"{base}/cached.tgz","integrity":"sha512-{digest}"}}}}"#
+        );
+        let mut routes = HashMap::new();
+        routes.insert("/cached-pkg/1.0.0".to_string(), (200, doc.into_bytes()));
+        routes.insert("/cached.tgz".to_string(), (200, archive.clone()));
+        routes
+    });
+    let cache = tempfile::tempdir().unwrap();
+
+    for _ in 0..2 {
+        registry
+            .command()
+            .env("DEPVET_NO_CACHE", "0")
+            .env("DEPVET_CACHE_DIR", cache.path())
+            .args(["inspect", "npm", "cached-pkg@1.0.0"])
+            .assert()
+            .code(0);
+    }
+    assert_eq!(
+        registry
+            .requests()
+            .iter()
+            .filter(|path| path.contains("cached.tgz"))
+            .count(),
+        1,
+        "second run must reuse the verified archive"
+    );
+
+    registry
+        .command()
+        .env("DEPVET_NO_CACHE", "0")
+        .env("DEPVET_CACHE_DIR", cache.path())
+        .args(["inspect", "npm", "cached-pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(0);
+    assert_eq!(
+        registry
+            .requests()
+            .iter()
+            .filter(|path| path.contains("cached.tgz"))
+            .count(),
+        2,
+        "--no-cache must re-download"
+    );
+}
+
+#[test]
 fn inspect_respects_disabled_rules_from_config() {
     use base64::Engine as _;
     use sha2::Digest as _;

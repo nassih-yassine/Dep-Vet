@@ -223,7 +223,9 @@ dep-vet inspect maven org.slf4j:slf4j-api@2.0.17   # sources jar when published
 dep-vet inspect nuget Newtonsoft.Json@12.0.1      # compiled: reports that
 ```
 
-Nothing is executed and nothing is extracted to disk. Limits are 25 MB
+Nothing is executed and nothing is extracted to disk. Downloads with a known
+checksum are cached for 30 days and re-verified before use; unverified archives
+are never cached, and `--no-cache` always re-downloads. Limits are 25 MB
 compressed, 100 MB uncompressed, 10,000 entries, and 5 MB per file. Entries
 with absolute paths, `..`, symlinks, or hardlinks are skipped. A checksum
 mismatch is a HIGH finding, not a warning.

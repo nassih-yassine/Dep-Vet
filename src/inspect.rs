@@ -46,18 +46,43 @@ struct ArchiveRef {
     checksum: Option<Checksum>,
 }
 
+/// Downloaded archives are kept only when their checksum is known, so a cached
+/// file can be re-verified before use. Unverified registries are never cached.
 pub fn inspect_archive(
     http: &HttpClient,
     ecosystem: Ecosystem,
     spec: &PackageSpec,
     limits: Limits,
+    use_cache: bool,
 ) -> Result<Prepared, InspectError> {
     let version = spec
         .version
         .as_deref()
         .ok_or_else(|| InspectError::Unavailable(ecosystem, "pass an exact version".to_string()))?;
     let source = resolve(http, ecosystem, &spec.name, version)?;
-    let bytes = get_bytes(http, ecosystem, &source.url, limits.max_compressed)?;
+    let cached = source
+        .checksum
+        .as_ref()
+        .filter(|_| use_cache)
+        .and_then(load_cached)
+        .filter(|bytes| {
+            source
+                .checksum
+                .as_ref()
+                .is_some_and(|checksum| verify(checksum, bytes) == Integrity::Verified)
+        });
+    let bytes = match cached {
+        Some(bytes) => bytes,
+        None => {
+            let bytes = get_bytes(http, ecosystem, &source.url, limits.max_compressed)?;
+            if let Some(checksum) = &source.checksum
+                && verify(checksum, &bytes) == Integrity::Verified
+            {
+                store_cached(checksum, &bytes);
+            }
+            bytes
+        }
+    };
     let integrity = match &source.checksum {
         Some(checksum) => verify(checksum, &bytes),
         None => Integrity::Unverified,
@@ -113,6 +138,70 @@ pub fn verify(checksum: &Checksum, bytes: &[u8]) -> Integrity {
         Integrity::Verified
     } else {
         Integrity::Mismatch { expected, actual }
+    }
+}
+
+const ARCHIVE_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+fn checksum_key(checksum: &Checksum) -> String {
+    let normalized = match checksum {
+        Checksum::Sha1Hex(value) => format!("sha1:{value}"),
+        Checksum::Sha256Hex(value) => format!("sha256:{value}"),
+        Checksum::Sha512Base64(value) => format!("sha512:{value}"),
+    };
+    hex(&Sha256::digest(normalized.as_bytes()))
+}
+
+fn cache_file(checksum: &Checksum) -> Option<std::path::PathBuf> {
+    crate::cache::cache_directory().map(|directory| {
+        directory
+            .join("archives")
+            .join(format!("{}.bin", checksum_key(checksum)))
+    })
+}
+
+fn load_cached(checksum: &Checksum) -> Option<Vec<u8>> {
+    let path = cache_file(checksum)?;
+    let metadata = std::fs::metadata(&path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default()
+        .as_secs();
+    if age > ARCHIVE_RETENTION_SECONDS {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    std::fs::read(&path).ok()
+}
+
+fn store_cached(checksum: &Checksum, bytes: &[u8]) {
+    let Some(path) = cache_file(checksum) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+        // Opportunistic sweep: drop archives nobody has touched for 30 days.
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            let now = std::time::SystemTime::now();
+            for entry in entries.flatten() {
+                let old = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .is_some_and(|age| age.as_secs() > ARCHIVE_RETENTION_SECONDS);
+                if old {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+    let temporary = path.with_extension("tmp");
+    if std::fs::write(&temporary, bytes).is_ok() {
+        let _ = std::fs::rename(&temporary, &path);
     }
 }
 
