@@ -270,7 +270,7 @@ DEPVET_OSV_BASE=https://api.osv.dev dep-vet npm express
 |--------|----------|---------|
 | Advisories | High/Warn/Info from OSV | Known vulnerabilities for this exact version, one finding per advisory, linking to its OSV record and CVE aliases. An advisory whose details cannot be fetched still surfaces as a warning. If OSV is unreachable, the report says so as an INFO finding instead of implying the package is clean. |
 | Install scripts | WARN, HIGH when combined | `preinstall`/`install`/`postinstall` run during `npm install`. Combined with a fresh package, an unexpected publisher, or a typosquat name, this is the shape of a supply-chain attack. |
-| Typosquat | HIGH at ≤1 edit or homoglyph, WARN at 2 | Levenshtein distance to a curated list of popular names, after folding lookalikes (`1`/`l`, `0`/`o`, `rn`/`m`). Names shorter than 4 characters are skipped to avoid noise. |
+| Typosquat | HIGH at ≤1 edit or homoglyph, WARN at 2 | Levenshtein distance to a curated list of popular names and, under `dep-vet lock`, to the dependency names already in your lockfile. Lookalikes are folded (`1`/`l`, `0`/`o`, `rn`/`m`); names under 4 characters are skipped to avoid noise. A package that is itself popular is never flagged for resembling something nearby (`preact` is not a `react` typo). |
 | Fresh package | WARN | First publish less than 7 days ago: no track record. |
 | Fresh version | INFO | Old package, version published in the last week. |
 | Publisher not a maintainer | WARN | This version's publisher is absent from the current maintainer list, a proxy for ownership handoff. CI identities such as `GitHub Actions` are ignored. |
@@ -285,6 +285,9 @@ raw source does not ship.
 - **npm only.** Bun, pnpm, and yarn install from the same registry, so package
   vetting is accurate for them; lockfile commands and manager-specific script
   policy are not implemented.
+- **Typosquat context differs by command.** `dep-vet lock` compares each new
+  package against names you already have, plus the seed list; `dep-vet npm` has
+  no tree to compare against and uses the seed only.
 - **Advisories describe this version, not your tree.** `dep-vet npm` answers for
   the package you named; `dep-vet lock` covers only the `name@version` pairs the
   lockfile change adds, not the pre-existing tree.
@@ -346,7 +349,8 @@ did.
 
 ## Roadmap
 
-1. Popular-name list built from download counts instead of a seed.
+1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
+   against your own dependencies.
 2. PyPI, crates.io, and Go. The design is kept locally (`docs/`), not published.
 3. Advisory lookups for the whole installed tree, not one package.
 
