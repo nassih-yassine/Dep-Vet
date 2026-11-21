@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::http::{HttpClient, HttpError};
-use crate::model::{Ecosystem, Severity};
+use crate::model::{Ecosystem, Severity, names_match};
 
 const DEFAULT_OSV_BASE: &str = "https://api.osv.dev";
 const OSV_VULN_URL: &str = "https://osv.dev/vulnerability";
@@ -34,6 +34,14 @@ pub struct Advisory {
     pub severity: Severity,
     pub aliases: Vec<String>,
     pub url: String,
+    /// Versions OSV says fix this advisory for the audited package, in the
+    /// order the ranges list them. Empty when no fix was published or the
+    /// details could not be read.
+    pub fixed_versions: Vec<String>,
+    /// The record was listed but its details could not be fetched, so its fix
+    /// is unknown rather than absent.
+    #[serde(skip)]
+    pub details_missing: bool,
 }
 
 impl Advisory {
@@ -49,6 +57,8 @@ impl Advisory {
             severity: Severity::Warn,
             aliases: Vec::new(),
             url: format!("{OSV_VULN_URL}/{id}"),
+            fixed_versions: Vec::new(),
+            details_missing: true,
         }
     }
 }
@@ -96,20 +106,20 @@ impl OsvClient {
         let response = self.http.post_json(&url, &body)?;
         let (ids, hidden) = take_capped(parse_advisory_ids(&response)?);
         Ok(AdvisoryList {
-            advisories: dedupe(self.advisories(&ids)),
+            advisories: dedupe(self.advisories(&ids, ecosystem, name)),
             hidden,
         })
     }
 
     /// Details are independent requests; fetch them together and keep the
     /// batch order so the report is stable.
-    fn advisories(&self, ids: &[String]) -> Vec<Advisory> {
+    fn advisories(&self, ids: &[String], ecosystem: Ecosystem, name: &str) -> Vec<Advisory> {
         advisory_batches(ids)
             .flat_map(|batch| {
                 std::thread::scope(|scope| {
                     let handles: Vec<_> = batch
                         .iter()
-                        .map(|id| (id, scope.spawn(move || self.advisory(id))))
+                        .map(|id| (id, scope.spawn(move || self.advisory(id, ecosystem, name))))
                         .collect();
                     handles
                         .into_iter()
@@ -122,13 +132,13 @@ impl OsvClient {
             .collect()
     }
 
-    fn advisory(&self, id: &str) -> Advisory {
+    fn advisory(&self, id: &str, ecosystem: Ecosystem, name: &str) -> Advisory {
         let url = format!("{}/v1/vulns/{id}", self.base.trim_end_matches('/'));
         match self
             .http
             .get(&url)
             .ok()
-            .and_then(|body| parse_advisory(&body).ok())
+            .and_then(|body| parse_advisory(&body, ecosystem, name).ok())
         {
             Some(advisory) => advisory,
             None => Advisory::unavailable(id),
@@ -237,12 +247,23 @@ fn merge_group(mut group: Vec<Advisory>) -> Advisory {
     aliases.sort();
     aliases.dedup();
 
+    let mut fixed_versions: Vec<String> = Vec::new();
+    for advisory in &group {
+        for version in &advisory.fixed_versions {
+            if !fixed_versions.contains(version) {
+                fixed_versions.push(version.clone());
+            }
+        }
+    }
+
     Advisory {
         id: group[0].id.clone(),
         summary,
         severity,
         aliases,
         url: group[0].url.clone(),
+        fixed_versions,
+        details_missing: group.iter().any(|advisory| advisory.details_missing),
     }
 }
 
@@ -257,9 +278,10 @@ fn take_capped(mut ids: Vec<String>) -> (Vec<String>, usize) {
     (ids, hidden)
 }
 
-fn parse_advisory(body: &str) -> Result<Advisory, OsvError> {
+fn parse_advisory(body: &str, ecosystem: Ecosystem, name: &str) -> Result<Advisory, OsvError> {
     let vuln: VulnRecord =
         serde_json::from_str(body).map_err(|error| OsvError::Decode(error.to_string()))?;
+    let fixed_versions = fixed_for(&vuln, ecosystem, name);
     Ok(Advisory {
         summary: vuln
             .summary
@@ -267,8 +289,10 @@ fn parse_advisory(body: &str) -> Result<Advisory, OsvError> {
             .unwrap_or_else(|| "advisory without a summary".to_string()),
         severity: severity_of(vuln.database_specific.as_ref()),
         url: format!("{OSV_VULN_URL}/{}", vuln.id),
+        fixed_versions,
         aliases: vuln.aliases,
         id: vuln.id,
+        details_missing: false,
     })
 }
 
@@ -312,6 +336,58 @@ struct VulnRecord {
     aliases: Vec<String>,
     #[serde(default)]
     database_specific: Option<DatabaseSpecific>,
+    #[serde(default)]
+    affected: Vec<Affected>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Affected {
+    package: AffectedPackage,
+    #[serde(default)]
+    ranges: Vec<AffectedRange>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AffectedPackage {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    ecosystem: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AffectedRange {
+    #[serde(default)]
+    events: Vec<AffectedEvent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AffectedEvent {
+    #[serde(default)]
+    fixed: Option<String>,
+}
+
+/// Versions OSV names as fixing this advisory, limited to the package that was
+/// queried (one advisory can cover several packages).
+fn fixed_for(record: &VulnRecord, ecosystem: Ecosystem, name: &str) -> Vec<String> {
+    let mut fixed = Vec::new();
+    for affected in &record.affected {
+        if !names_match(ecosystem, &affected.package.name, name)
+            || !names_match(ecosystem, &affected.package.ecosystem, ecosystem.osv_name())
+        {
+            continue;
+        }
+        for range in &affected.ranges {
+            for event in &range.events {
+                if let Some(version) = &event.fixed
+                    && !fixed.contains(version)
+                {
+                    fixed.push(version.clone());
+                }
+            }
+        }
+    }
+    fixed
 }
 
 #[derive(Debug, Deserialize)]
@@ -372,6 +448,48 @@ mod tests {
         assert!(matches!(parse_advisory_ids(body), Err(OsvError::Decode(_))));
     }
 
+    const VULN_MULTI: &str = r#"{
+        "id": "GHSA-test-0001",
+        "summary": "test",
+        "affected": [
+            { "package": { "ecosystem": "npm", "name": "left-pad" },
+              "ranges": [ { "type": "ECOSYSTEM",
+                            "events": [ { "introduced": "0" }, { "fixed": "1.2.3" },
+                                        { "introduced": "2.0.0" }, { "fixed": "2.0.1" } ] } ] },
+            { "package": { "ecosystem": "npm", "name": "other-pkg" },
+              "ranges": [ { "type": "ECOSYSTEM", "events": [ { "fixed": "9.9.9" } ] } ] }
+        ]
+    }"#;
+
+    #[test]
+    fn fixed_versions_are_limited_to_the_audited_package() {
+        let advisory = parse_advisory(VULN_MULTI, Ecosystem::Npm, "Left-Pad").unwrap();
+        assert_eq!(
+            advisory.fixed_versions,
+            vec!["1.2.3".to_string(), "2.0.1".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_advisory_without_fixed_events_has_no_fixed_versions() {
+        let advisory = parse_advisory(
+            r#"{ "id": "X", "affected": [ { "package": { "ecosystem": "npm", "name": "x" },
+                "ranges": [ { "type": "ECOSYSTEM", "events": [ { "introduced": "0" } ] } ] } ] }"#,
+            Ecosystem::Npm,
+            "x",
+        )
+        .unwrap();
+        assert!(advisory.fixed_versions.is_empty());
+        assert!(!advisory.details_missing);
+    }
+
+    #[test]
+    fn an_unhydrated_advisory_marks_details_missing() {
+        let advisory = Advisory::unavailable("GHSA-x");
+        assert!(advisory.details_missing);
+        assert!(advisory.fixed_versions.is_empty());
+    }
+
     #[test]
     fn parses_a_high_advisory() {
         let body = r#"{
@@ -380,7 +498,7 @@ mod tests {
             "aliases": ["CVE-2020-28500"],
             "database_specific": { "severity": "HIGH" }
         }"#;
-        let advisory = parse_advisory(body).unwrap();
+        let advisory = parse_advisory(body, Ecosystem::Npm, "lodash").unwrap();
         assert_eq!(advisory.id, "GHSA-29mw-wpgm-hmr9");
         assert_eq!(advisory.severity, Severity::High);
         assert_eq!(advisory.aliases, vec!["CVE-2020-28500"]);
@@ -405,7 +523,9 @@ mod tests {
             let body =
                 format!(r#"{{ "id": "X", "database_specific": {{ "severity": "{label}" }} }}"#);
             assert_eq!(
-                parse_advisory(&body).unwrap().severity,
+                parse_advisory(&body, Ecosystem::Npm, "lodash")
+                    .unwrap()
+                    .severity,
                 expected,
                 "label {label}"
             );
@@ -414,13 +534,14 @@ mod tests {
 
     #[test]
     fn missing_severity_is_a_warning() {
-        let advisory = parse_advisory(r#"{ "id": "X" }"#).unwrap();
+        let advisory = parse_advisory(r#"{ "id": "X" }"#, Ecosystem::Npm, "x").unwrap();
         assert_eq!(advisory.severity, Severity::Warn);
     }
 
     #[test]
     fn missing_summary_gets_a_placeholder() {
-        let advisory = parse_advisory(r#"{ "id": "X", "summary": "  " }"#).unwrap();
+        let advisory =
+            parse_advisory(r#"{ "id": "X", "summary": "  " }"#, Ecosystem::Npm, "x").unwrap();
         assert_eq!(advisory.summary, "advisory without a summary");
     }
 
@@ -455,6 +576,8 @@ mod tests {
             severity,
             aliases: aliases.iter().map(|alias| alias.to_string()).collect(),
             url: format!("https://osv.dev/vulnerability/{id}"),
+            fixed_versions: Vec::new(),
+            details_missing: false,
         }
     }
 
