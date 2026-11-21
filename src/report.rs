@@ -64,6 +64,9 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
     if let Some(repository) = &report.repository {
         push_field(&mut out, "repository", repository);
     }
+    if !report.not_checked.is_empty() {
+        push_field(&mut out, "not checked", &report.not_checked.join(", "));
+    }
     if let Some(publisher) = &report.publisher {
         let is_maintainer = report
             .maintainers
@@ -256,11 +259,11 @@ fn thousands(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Evidence, Finding, InstallScript};
+    use crate::model::{Ecosystem, Evidence, Finding, InstallScript};
 
     fn report(findings: Vec<Finding>) -> PackageReport {
         PackageReport {
-            ecosystem: "npm",
+            ecosystem: Ecosystem::Npm,
             name: "evil-pkg".to_string(),
             version: "1.0.0".to_string(),
             first_published_at: Some(1_704_067_200),
@@ -276,6 +279,7 @@ mod tests {
             deprecated: None,
             advisories: Vec::new(),
             hidden_advisories: 0,
+            not_checked: Vec::new(),
             registry_url: "https://registry.npmjs.org/evil-pkg".to_string(),
             findings,
         }
@@ -349,6 +353,28 @@ mod tests {
         assert_eq!(value["exit_code"], 1);
         assert_eq!(value["findings"][0]["severity"], "warn");
         assert!(value["findings"][0]["evidence"][0]["url"].is_string());
+    }
+
+    #[test]
+    fn human_report_lists_signals_that_were_not_checked() {
+        let mut report = report(vec![]);
+        report.not_checked = vec!["maintainers", "downloads"];
+        let text = render_human(&report, false);
+        assert!(text.contains("not checked"));
+        assert!(text.contains("maintainers, downloads"));
+    }
+
+    #[test]
+    fn json_carries_not_checked_only_when_something_is_missing() {
+        let clean: serde_json::Value =
+            serde_json::from_str(&render_json(&report(vec![])).unwrap()).unwrap();
+        assert!(clean.get("not_checked").is_none());
+
+        let mut partial = report(vec![]);
+        partial.not_checked = vec!["maintainers"];
+        let value: serde_json::Value =
+            serde_json::from_str(&render_json(&partial).unwrap()).unwrap();
+        assert_eq!(value["not_checked"][0], "maintainers");
     }
 
     #[test]

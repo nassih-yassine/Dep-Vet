@@ -29,7 +29,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 150 unit + 41 end-to-end tests
+cargo test --locked                      # 154 unit + 41 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -88,6 +88,13 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   "advisory without a summary" for every real advisory.
 - **Advisory failure is an INFO finding**, not silence and not exit 3. "We
   could not check" must never read as "nothing found".
+- **Ecosystem has one variant on purpose.** `Ecosystem::Npm` exists so the OSV
+  name and report field stop being string literals; add a variant only with the
+  source that uses it. The `PackageSource` trait is deferred until a second
+  source exists — a trait with one implementation is indirection, not design.
+- **`Profile` drives honesty, not exit codes.** Disabled signals produce no
+  finding and appear in `PackageReport.not_checked` (human line "not checked",
+  JSON field, omitted when empty). Never turn a missing signal into a clean one.
 - **Typosquat candidates = seed ∪ local lockfile names.** `closest()` takes the
   caller's local list. `lock` passes base lockfile names; `npm` finds the nearest
   `package-lock.json` by walking up (`lockfile::nearest`) unless `--no-local`.

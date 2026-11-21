@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::http::{HttpClient, HttpError};
-use crate::model::Severity;
+use crate::model::{Ecosystem, Severity};
 
 const DEFAULT_OSV_BASE: &str = "https://api.osv.dev";
 const OSV_VULN_URL: &str = "https://osv.dev/vulnerability";
@@ -80,11 +80,16 @@ impl OsvClient {
         }
     }
 
-    pub fn query(&self, name: &str, version: &str) -> Result<AdvisoryList, OsvError> {
+    pub fn query(
+        &self,
+        ecosystem: Ecosystem,
+        name: &str,
+        version: &str,
+    ) -> Result<AdvisoryList, OsvError> {
         let url = format!("{}/v1/querybatch", self.base.trim_end_matches('/'));
         let body = serde_json::json!({
             "queries": [{
-                "package": { "name": name, "ecosystem": "npm" },
+                "package": { "name": name, "ecosystem": ecosystem.osv_name() },
                 "version": version
             }]
         });
