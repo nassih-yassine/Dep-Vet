@@ -16,7 +16,7 @@
 <img alt="ci" src="https://github.com/nassih-yassine/Dep-Vet/actions/workflows/ci.yml/badge.svg">
 <img alt="release" src="https://img.shields.io/github/v/release/nassih-yassine/Dep-Vet">
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
-<img alt="single static binary" src="https://img.shields.io/badge/binary-static%2C%20no%20runtime-success.svg">
+<img alt="no runtime" src="https://img.shields.io/badge/runtime-none%20(linux%20musl%3A%20static)-success.svg">
 <img alt="no telemetry" src="https://img.shields.io/badge/telemetry-none-success.svg">
 <img alt="ecosystem npm" src="https://img.shields.io/badge/ecosystem-npm-cb3837.svg">
 </p>
@@ -233,9 +233,9 @@ Nothing is executed and nothing is extracted to disk. Downloads with a known
 checksum are cached for 30 days and re-verified before use; unverified archives
 are never cached, and `--no-cache` always re-downloads. Limits are 25 MB
 compressed, 100 MB uncompressed, 200 MB decompressed, 10,000 entries, and 5 MB
-per file. A gzip stream that expands past its cap is stopped while reading and
-reported as HIGH `archive-decompression-bomb`; it is never scanned partially and
-called clean. Entries
+per file. A gzip or zip stream that expands past its cap is stopped while
+reading and reported as HIGH `archive-decompression-bomb`; it is never scanned
+partially and called clean. Entries
 with absolute paths, `..`, symlinks, or hardlinks are skipped. A checksum
 mismatch is a HIGH finding, not a warning.
 
@@ -248,9 +248,11 @@ only a combination (network plus credential access in one file, or an encoded
 payload passed to `eval`) reaches HIGH. Comments are stripped per language
 family (`//` and `/* */` for JS/TS/Go/Rust/PHP, `#` for Python/shell/Ruby)
 without removing code after `*/`, string literals are respected so a URL is not
-mistaken for a comment, and patterns run over the whole file so a call split
-across lines still matches. Source extensions are scanned even when the bytes
-are not valid UTF-8; only files that are not source are treated as binary. The 16 starter rules cover JavaScript
+mistaken for a comment, and regex literals are skipped so `/[//]/` cannot open a
+comment. Shell `#` is a comment only at line start or after whitespace, so `$#`
+and `${#v}` stay code. Patterns run over the whole file, so a call split across
+lines still matches. Source extensions are scanned even when the bytes are not
+valid UTF-8; only files that are not source are treated as binary. The 16 starter rules cover JavaScript
 (dynamic execution, child processes, credential paths, encoded payloads),
 Python (exec/eval, dynamic imports, shell calls, encoded payloads), shell
 pipe-to-shell, Rust `build.rs`, Go (exec, network plus environment access), and
@@ -288,8 +290,10 @@ describes it:
   so a package that always had a build script is not blamed. Commands are
   tokenised, so `node scripts/evaluate.js` is a normal build step while
   `node -e`, `python3 -c`, `perl -e`, `ruby -e`, `php -r`, `bash/sh -c` with a
-  URL, `curl`, `wget`, `nc`, `base64`, `powershell`, `pwsh`, and `iex` are
-  execution patterns.
+  URL, `curl`, `wget`, `nc`, `base64`, `powershell`, `pwsh`, `iex`, `iwr`,
+  `irm`, `certutil`, `bitsadmin`, and `mshta` are execution patterns. Commands
+  are matched by basename after dropping `.exe`/`.cmd`/`.bat`, so
+  `powershell.exe`, `/usr/bin/curl`, and `C:\Windows\System32\curl.exe` count.
 - **Dependencies added** (INFO, WARN when an added name looks like a typo):
   npm, Composer, NuGet, and — for releases inside the 30-day window — PyPI and
   crates.io.
@@ -584,7 +588,8 @@ bounded (large packuments are stored whole). A network failure, 5xx, or 429
 falls back to the stale entry, so a warmed cache keeps working offline; a 404
 never falls back, because a deleted package must not look alive. Advisory
 answers are the exception: they are used only up to 24 hours past their fetch
-time, and serving one adds an INFO `advisories-stale` finding with its age. An
+time, and serving one adds an INFO `advisories-stale` finding with the age of the
+oldest stale answer, whether it came from the batch or an advisory detail. An
 older advisory answer is refused, so the normal "advisory check unavailable"
 finding appears instead of week-old data passing as today's. `--no-cache`
 bypasses the cache for one run. A cache written by an older schema is dropped

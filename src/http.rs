@@ -106,8 +106,13 @@ impl HttpClient {
     }
 
     pub fn get(&self, url: &str) -> Result<String, HttpError> {
+        self.get_with_source(url).map(|(body, _)| body)
+    }
+
+    /// Advisory detail fetches also need the source, so stale bodies can be
+    /// disclosed rather than silently blended with fresh ones.
+    pub fn get_with_source(&self, url: &str) -> Result<(String, Source), HttpError> {
         self.cached(url, || self.fetch_get(url))
-            .map(|(body, _)| body)
     }
 
     /// Raw response for callers that must stream a body (archives). Statuses
@@ -376,6 +381,16 @@ mod tests {
 
     fn advisory_key() -> &'static str {
         "POST https://api.osv.dev/v1/querybatch\n{\"queries\":[]}"
+    }
+
+    #[test]
+    fn detail_gets_report_their_source_too() {
+        let (_directory, cache) = cache(60);
+        cache.put("k", "cached", now_seconds()).unwrap();
+        let http = HttpClient::with_cache(Some(cache));
+        let (body, source) = http.get_with_source("k").unwrap();
+        assert_eq!(body, "cached");
+        assert_eq!(source, Source::Fresh);
     }
 
     #[test]

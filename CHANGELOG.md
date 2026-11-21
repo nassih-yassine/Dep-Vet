@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.11.0 — 2026-11-21
+## 0.11.0 — 2026-11-22
+
+- **Comment stripping recognises regex literals and shell `$#`.** `/[//]/` and
+  `/\/*/` no longer blank the rest of the line, and shell `#` is a comment only
+  at line start or after whitespace, so `$#` and `${#v}` stay code and are
+  scanned.
+- **Install commands match by basename.** `powershell.exe`, `curl.exe`,
+  `/usr/bin/curl`, and Windows paths are risky; `certutil`, `bitsadmin`,
+  `mshta`, `iwr`, and `irm` joined the list.
+- **Zip archives share the decompression bound.** Every entry charges
+  `Extracted.decompressed_bytes`, so a zip bomb is rejected and reported as
+  `archive-decompression-bomb` before it fills the total budget.
+- **Advisory detail staleness is folded in.** Batch and detail responses report
+  their source, and `advisories-stale` states the oldest age used.
 
 - **Decompression is time- and size-bounded.** A gzip stream that expands past
   `max_decompressed` (200 MB by default, `[inspect] max_decompressed_mb`) is

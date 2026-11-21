@@ -645,3 +645,12 @@ tiny-relative-date
 treeverse
 trim-right
 which-command
+astro
+ember-source
+gatsby
+next
+nuxt
+remix
+solid-js
+svelte
+vue
