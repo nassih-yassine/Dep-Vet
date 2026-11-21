@@ -120,6 +120,9 @@ dep-vet audit Cargo.lock             # crates.io
 dep-vet audit go.mod                 # Go
 dep-vet audit poetry.lock            # PyPI via Poetry
 dep-vet audit uv.lock                # PyPI via uv
+dep-vet audit bun.lock               # Bun
+dep-vet audit pnpm-lock.yaml         # pnpm
+dep-vet audit yarn.lock              # Yarn classic and Berry
 ```
 
 Vets **every** package the lockfile installs, not just the diff, and reports the
@@ -136,6 +139,9 @@ What each format contributes, and what it cannot:
 | `go.mod` | `require` entries, blocks and single lines | unreadable require lines; `replace` is ignored |
 | `poetry.lock` | PyPI packages | git/path/URL sources |
 | `uv.lock` | PyPI packages, editable/virtual entries ignored | git/URL sources |
+| `bun.lock` | `packages` tuples (JSON with comments) | unreadable entries |
+| `pnpm-lock.yaml` | v5, v6, and v9 package keys; peer suffixes stripped | unrecognized keys |
+| `yarn.lock` | classic and Berry entries | entries without a version; workspace links ignored |
 
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
@@ -360,10 +366,9 @@ clean.
 
 ## Scope and limits
 
-- **npm, PyPI, crates.io, and Go**, for both `audit` and `lock`. Bun, pnpm, and
-  yarn install from the same npm registry, so npm vetting is accurate for them,
-  but their own lockfile formats (`bun.lock`, `pnpm-lock.yaml`, `yarn.lock`) are
-  not parsed yet.
+- **npm, PyPI, crates.io, and Go**, for both `audit` and `lock`, including
+  `bun.lock`, `pnpm-lock.yaml`, and `yarn.lock` (classic and Berry). Deno and
+  other formats are not parsed.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the
@@ -377,8 +382,6 @@ clean.
   the package you named, `dep-vet lock` for the `name@version` pairs a change
   adds, and `dep-vet audit` for every installed package — never for the
   transitive install scripts a package would execute.
-- **Lockfiles:** npm `package-lock.json` v2/v3 only. Yarn, pnpm, and bun
-  lockfiles are not parsed yet.
 - Not an SBOM generator or a Dependabot replacement.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
 - One batch query plus one request per advisory on a cold cache, at most 8 in
@@ -440,7 +443,7 @@ did.
 
 1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
    against your own dependencies.
-2. Lockfile parsing for `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`.
+2. `.depvet.toml` allowlists, with a reason required per entry.
 
 ## License
 
