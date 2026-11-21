@@ -221,6 +221,73 @@ pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
     scan_with(files, &[])
 }
 
+/// Extensions the rule engine reads. A skipped file with one of these means
+/// unscanned code, not an uninteresting binary.
+pub const SCANNABLE_EXTENSIONS: &[&str] = &[
+    "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "sh", "bash", "zsh", "rb", "php", "go", "rs",
+];
+
+pub fn is_scannable(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            SCANNABLE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        })
+}
+
+/// Disclose anything the caps kept from the scanner. Unknown entries beyond the
+/// entry cap count as scannable because their names were never read.
+pub fn partially_scanned(extracted: &crate::archive::Extracted, side: &str) -> Option<RuleFinding> {
+    if !extracted.truncated {
+        return None;
+    }
+    let scannable_skip = extracted
+        .oversize_files
+        .iter()
+        .any(|path| is_scannable(path));
+    let mut reasons = Vec::new();
+    if !extracted.oversize_files.is_empty() {
+        let mut shown = extracted
+            .oversize_files
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if extracted.oversize_files.len() > 5 {
+            shown.push_str(&format!(" (+{} more)", extracted.oversize_files.len() - 5));
+        }
+        reasons.push(format!("size cap: {shown}"));
+    }
+    if extracted.entries_over_cap {
+        reasons.push("entries past the archive entry cap were not read".to_string());
+    }
+    if extracted.total_over_cap {
+        reasons.push("the total uncompressed budget ran out".to_string());
+    }
+    if reasons.is_empty() {
+        return None;
+    }
+    let severity = if scannable_skip || extracted.entries_over_cap {
+        Severity::Warn
+    } else {
+        Severity::Info
+    };
+    Some(RuleFinding {
+        rule: "archive-partially-scanned",
+        title: "not all of this archive was scanned",
+        description: "Archive limits stopped the scanner before the end, so findings may be missing.",
+        severity,
+        confidence: Confidence::High,
+        file: String::new(),
+        line: 0,
+        evidence: format!("{side}{}", reasons.join("; ")),
+        recommendation: "Review the skipped files manually before installing.",
+        references: vec!["https://github.com/nassih-yassine/Dep-Vet#inspect-a-release-archive"],
+    })
+}
+
 pub fn scan_with(files: &[ExtractedFile], disabled: &[String]) -> Vec<RuleFinding> {
     let allowed = |id: &str| !disabled.iter().any(|rule| rule == id);
     let mut findings = Vec::new();

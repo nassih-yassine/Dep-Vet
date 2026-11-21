@@ -36,6 +36,7 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "provenance-dropped",
     "attestation-subject-mismatch",
     "attestation-source-mismatch",
+    "archive-partially-scanned",
 ];
 
 #[derive(Debug, Default, Deserialize)]

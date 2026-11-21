@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Partial scans are disclosed.** Archive limits used to skip oversize files
+  and entries past the cap silently. They now record why, and `inspect`/`diff`
+  report `archive-partially-scanned` (WARN when skipped paths look like source,
+  INFO otherwise), naming up to 50 skipped files.
 - **Offline Sigstore verification.** `inspect npm` now verifies provenanced
   releases against the embedded Sigstore trust root: DSSE signature, Fulcio
   chain, SCT, Rekor inclusion, and artifact binding. Reports show the signer

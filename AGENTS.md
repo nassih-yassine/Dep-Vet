@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 484 unit + 123 end-to-end tests
+cargo test --locked                      # 489 unit + 124 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -277,6 +277,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   per-ecosystem archive URLs and trusted checksums; a mismatch is a HIGH finding
   (`ARCHIVE-CHECKSUM-001`). JSR has no documented tarball URL; Maven without a
   sources jar and NuGet compiled packages report source analysis as not checked.
+  `Extracted.truncated` must never be read as a boolean without its reasons:
+  `oversize_files` (paths capped at 50), `entries_over_cap`, and
+  `total_over_cap` feed `rules::partially_scanned`, which emits
+  `archive-partially-scanned` (WARN when a skipped path is scannable or entries
+  were never read, INFO otherwise) in both `inspect` and `diff`. A cap stop is
+  a disclosed gap, never a clean result.
   Rules in `src/rules.rs`: a lone API match is WARN with medium confidence;
   network plus credential access, or an encoded payload passed to `eval`, is
   HIGH. Every rule carries a description and at least one reference URL, and a

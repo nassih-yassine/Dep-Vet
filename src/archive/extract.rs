@@ -38,7 +38,23 @@ pub struct Extracted {
     pub binaries: Vec<String>,
     /// A NuGet `.signature.p7s` entry exists. Presence only, never verified.
     pub signature_file: bool,
+    /// Paths skipped for exceeding the per-file or total size cap, capped at
+    /// 50 so a hostile archive cannot make the report huge.
+    pub oversize_files: Vec<String>,
+    /// More entries existed than the entry cap allowed.
+    pub entries_over_cap: bool,
+    /// The total uncompressed budget ran out before the archive ended.
+    pub total_over_cap: bool,
+    /// Any of the above happened. Kept for callers that only ask "truncated?".
     pub truncated: bool,
+}
+
+/// Remember a skipped path without letting a hostile archive grow the report.
+fn record_skipped(out: &mut Extracted, path: String) {
+    out.truncated = true;
+    if out.oversize_files.len() < 50 {
+        out.oversize_files.push(path);
+    }
 }
 
 pub fn extract(kind: ArchiveKind, bytes: &[u8], limits: Limits) -> Result<Extracted, ArchiveError> {
@@ -88,6 +104,7 @@ fn read_tar<R: Read>(reader: R, limits: Limits, out: &mut Extracted) -> Result<(
     for entry in entries {
         if out.entries >= limits.max_entries {
             out.truncated = true;
+            out.entries_over_cap = true;
             break;
         }
         let mut entry = entry.map_err(|error| ArchiveError::Read(error.to_string()))?;
@@ -110,7 +127,7 @@ fn read_tar<R: Read>(reader: R, limits: Limits, out: &mut Extracted) -> Result<(
         };
         let declared = entry.size();
         if declared > limits.max_file {
-            out.truncated = true;
+            record_skipped(out, path);
             continue;
         }
         read_text(&mut entry, path, limits, out)?;
@@ -125,6 +142,7 @@ fn read_zip(bytes: &[u8], limits: Limits, out: &mut Extracted) -> Result<(), Arc
     for index in 0..zip.len() {
         if out.entries >= limits.max_entries {
             out.truncated = true;
+            out.entries_over_cap = true;
             break;
         }
         let mut file = zip
@@ -147,7 +165,7 @@ fn read_zip(bytes: &[u8], limits: Limits, out: &mut Extracted) -> Result<(), Arc
             continue;
         };
         if file.size() > limits.max_file {
-            out.truncated = true;
+            record_skipped(out, path);
             continue;
         }
         read_text(&mut file, path, limits, out)?;
@@ -170,7 +188,8 @@ fn read_text(
             .sum::<u64>(),
     );
     if remaining == 0 {
-        out.truncated = true;
+        out.total_over_cap = true;
+        record_skipped(out, path);
         return Ok(());
     }
     let budget = limits.max_file.saturating_add(1).min(remaining);
@@ -180,7 +199,7 @@ fn read_text(
         .read_to_end(&mut buffer)
         .map_err(|error| ArchiveError::Read(error.to_string()))?;
     if buffer.len() as u64 > limits.max_file {
-        out.truncated = true;
+        record_skipped(out, path);
         return Ok(());
     }
     if path
@@ -328,6 +347,74 @@ mod tests {
         let out = extract(ArchiveKind::TarGz, &bytes, limits).unwrap();
         assert!(out.truncated);
         assert!(out.files.is_empty());
+    }
+
+    #[test]
+    fn an_oversize_scannable_file_records_why_it_was_skipped() {
+        let big = vec![b'a'; 6 * 1024 * 1024];
+        let bytes = tar_gz(&[("big.js", &big)], None);
+        let out = extract(ArchiveKind::TarGz, &bytes, Limits::default()).unwrap();
+        assert!(out.truncated);
+        assert!(out.files.is_empty());
+        assert!(
+            out.oversize_files.iter().any(|path| path == "big.js"),
+            "{:?}",
+            out.oversize_files
+        );
+    }
+
+    #[test]
+    fn entries_past_the_cap_say_the_archive_was_not_read_to_the_end() {
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        for index in 0..10_001 {
+            let body = b"x";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            let name = if index == 10_000 {
+                "payload.js".to_string()
+            } else {
+                format!("f{index}.txt")
+            };
+            header.set_path(&name).unwrap();
+            header.set_cksum();
+            builder.append(&header, body.as_slice()).unwrap();
+        }
+        let bytes = builder.into_inner().unwrap().finish().unwrap();
+        let out = extract(ArchiveKind::TarGz, &bytes, Limits::default()).unwrap();
+        assert!(out.entries_over_cap);
+        assert!(out.truncated);
+        assert!(
+            out.files.iter().all(|file| file.path != "payload.js"),
+            "the entry past the cap must not be scanned"
+        );
+
+        // The finding is what the user sees: a skipped scannable payload.
+        let report = crate::inspect::build_report(
+            crate::model::Ecosystem::Npm,
+            &crate::model::PackageSpec {
+                name: "pkg".to_string(),
+                version: Some("1.0.0".to_string()),
+            },
+            crate::inspect::Prepared {
+                url: "https://example.test/a.tgz".to_string(),
+                kind: ArchiveKind::TarGz,
+                integrity: crate::inspect::Integrity::Verified,
+                extracted: out,
+                bytes: 1,
+                provenance: None,
+            },
+            &[],
+        );
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule == "archive-partially-scanned")
+            .expect("missing partial-scan finding");
+        assert_eq!(finding.severity, crate::model::Severity::Warn);
     }
 
     #[test]
