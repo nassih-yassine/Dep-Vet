@@ -282,7 +282,9 @@ DEPVET_OSV_BASE=https://api.osv.dev dep-vet npm express
 | No repository | INFO | No source repository declared, so the tarball cannot be traced to source. |
 
 Every finding carries evidence, and a finding whose claim cannot be linked to a
-raw source does not ship.
+raw source does not ship. Signals an ecosystem cannot support are reported as
+`not_checked` (in JSON, omitted when everything ran) — absence never means
+clean.
 
 ## Scope and limits
 

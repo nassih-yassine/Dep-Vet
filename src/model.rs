@@ -126,6 +126,76 @@ impl Severity {
     }
 }
 
+/// Which package ecosystem a report describes. One variant today: add the next
+/// one when its source exists, not before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Ecosystem {
+    Npm,
+}
+
+impl Ecosystem {
+    pub fn cli_name(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+        }
+    }
+
+    /// The string OSV expects in `package.ecosystem`.
+    pub fn osv_name(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+        }
+    }
+}
+
+impl std::fmt::Display for Ecosystem {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.cli_name())
+    }
+}
+
+/// Which signals an ecosystem can support. A disabled signal is reported as
+/// "not checked", never as clean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Profile {
+    pub maintainers: bool,
+    pub downloads: bool,
+    pub deprecation: bool,
+    pub typosquat: bool,
+    pub freshness: bool,
+}
+
+impl Profile {
+    pub const NPM: Self = Self {
+        maintainers: true,
+        downloads: true,
+        deprecation: true,
+        typosquat: true,
+        freshness: true,
+    };
+
+    pub fn not_checked(&self) -> Vec<&'static str> {
+        let mut missing = Vec::new();
+        if !self.maintainers {
+            missing.push("maintainers");
+        }
+        if !self.downloads {
+            missing.push("downloads");
+        }
+        if !self.deprecation {
+            missing.push("deprecation");
+        }
+        if !self.typosquat {
+            missing.push("typosquat");
+        }
+        if !self.freshness {
+            missing.push("freshness");
+        }
+        missing
+    }
+}
+
 /// Exit code for "the check could not run", shared by every command.
 pub const TOOL_ERROR_EXIT_CODE: u8 = 3;
 
@@ -189,7 +259,7 @@ pub struct InstallScript {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageReport {
-    pub ecosystem: &'static str,
+    pub ecosystem: Ecosystem,
     pub name: String,
     pub version: String,
     /// Unix seconds; `None` when the registry did not report it.
@@ -205,6 +275,9 @@ pub struct PackageReport {
     pub advisories: Vec<Advisory>,
     /// Advisories skipped after the per-run cap.
     pub hidden_advisories: usize,
+    /// Signals this ecosystem cannot support; empty means everything ran.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_checked: Vec<&'static str>,
     pub registry_url: String,
     pub findings: Vec<Finding>,
 }
@@ -354,6 +427,17 @@ mod tests {
     }
 
     #[test]
+    fn profile_reports_only_what_it_cannot_check() {
+        assert!(Profile::NPM.not_checked().is_empty());
+        let partial = Profile {
+            maintainers: false,
+            downloads: false,
+            ..Profile::NPM
+        };
+        assert_eq!(partial.not_checked(), vec!["maintainers", "downloads"]);
+    }
+
+    #[test]
     fn severity_drives_exit_codes() {
         assert_eq!(Severity::Info.exit_code(), 0);
         assert_eq!(Severity::Warn.exit_code(), 1);
@@ -362,7 +446,7 @@ mod tests {
 
     fn report(findings: Vec<Finding>) -> PackageReport {
         PackageReport {
-            ecosystem: "npm",
+            ecosystem: Ecosystem::Npm,
             name: "x".into(),
             version: "1.0.0".into(),
             first_published_at: None,
@@ -375,6 +459,7 @@ mod tests {
             deprecated: None,
             advisories: Vec::new(),
             hidden_advisories: 0,
+            not_checked: Vec::new(),
             registry_url: String::new(),
             findings,
         }

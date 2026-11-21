@@ -8,7 +8,8 @@ use dep_vet::cli::{Cli, Command};
 use dep_vet::http::HttpClient;
 use dep_vet::lockfile;
 use dep_vet::model::{
-    LockFetchError, LockReport, PackageReport, PackageSpec, TOOL_ERROR_EXIT_CODE as TOOL_ERROR,
+    LockFetchError, LockReport, PackageReport, PackageSpec, Profile,
+    TOOL_ERROR_EXIT_CODE as TOOL_ERROR,
 };
 use dep_vet::osv::OsvClient;
 use dep_vet::registry::{RegistryClient, RegistryError};
@@ -215,12 +216,16 @@ impl Auditor {
         let downloads = self.registry.weekly_downloads(&meta.name);
         // Advisories are best effort: a failure is reported as an INFO
         // finding, never as "no known vulnerabilities".
-        let advisories = self.osv.query(&meta.name, &meta.version).ok();
+        let advisories = self
+            .osv
+            .query(dep_vet::model::Ecosystem::Npm, &meta.name, &meta.version)
+            .ok();
         Ok(signals::report(
             meta,
             downloads,
             advisories.as_ref(),
             local,
+            Profile::NPM,
             now,
         ))
     }
