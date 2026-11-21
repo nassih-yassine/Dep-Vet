@@ -2028,3 +2028,47 @@ fn explicit_config_path_wins_over_discovery() {
         .code(0)
         .stdout(predicate::str::contains("explicit review"));
 }
+
+#[test]
+fn advisories_listed_under_several_ids_are_merged() {
+    let package = PackageFixture::clean("dup-adv-pkg");
+    let mut routes = HashMap::new();
+    routes.insert(package.route(), (200, package.to_json()));
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (
+            200,
+            r#"{"results":[{"vulns":[{"id":"GHSA-dup-1"},{"id":"PYSEC-dup-1"}]}]}"#.to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/vulns/GHSA-dup-1".to_string(),
+        (
+            200,
+            r#"{"id":"GHSA-dup-1","summary":"one problem","aliases":["CVE-2026-1","PYSEC-dup-1"],"database_specific":{"severity":"HIGH"}}"#.to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/vulns/PYSEC-dup-1".to_string(),
+        (
+            200,
+            r#"{"id":"PYSEC-dup-1","summary":"one problem","aliases":["CVE-2026-1","GHSA-dup-1"],"database_specific":{"severity":"MODERATE"}}"#.to_string(),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["npm", "dup-adv-pkg", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["advisories"].as_array().unwrap().len(), 1);
+    assert_eq!(value["advisories"][0]["id"], "GHSA-dup-1");
+    assert_eq!(value["advisories"][0]["severity"], "high");
+    assert_eq!(value["findings"].as_array().unwrap().len(), 1);
+}
