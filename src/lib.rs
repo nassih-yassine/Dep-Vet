@@ -15,6 +15,7 @@ pub mod maven;
 pub mod model;
 pub mod nuget;
 pub mod osv;
+pub mod progress;
 pub mod pypi;
 pub mod registry;
 pub mod report;
