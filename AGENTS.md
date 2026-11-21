@@ -32,7 +32,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 218 unit + 67 end-to-end tests
+cargo test --locked                      # 225 unit + 71 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -145,9 +145,14 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   collected in `LockReport.errors`.
 - **`lock` diffs `name@version` pairs**, so a version bump is "new" and gets
   audited. The parser is chosen by file name (`package-lock.json`,
-  `requirements*.txt`, `Cargo.lock`, `go.mod`, `poetry.lock`, `uv.lock`); npm
-  v1 is rejected instead of approximated. Unpinned pip lines, git crates, and
+  `requirements*.txt`, `Cargo.lock`, `go.mod`, `poetry.lock`, `uv.lock`,
+  `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`); npm v1 is rejected instead of
+  approximated. Unpinned pip lines, git crates, and
   unreadable go.mod lines become `errors`, so an incomplete tree exits 3.
+- **JS lockfile quirks that bite.** `bun.lock` is JSONC (comments and trailing
+  commas) and `strip_jsonc` must keep `//` inside strings (URLs). pnpm keys are
+  `name@ver` (v9), `/name@ver` (v6), or `/name/ver` (v5), with `(peer@x)` suffixes
+  to strip. Yarn Berry workspace entries use `0.0.0-use.local` and are skipped.
 - **Aliases resolve to the real package.** For `"x": "npm:real-pkg@1"`, npm
   keys the path `node_modules/x` but stores `"name": "real-pkg"` in the entry.
   Use `Entry::name` first and fall back to the path segment; auditing the alias
@@ -204,5 +209,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Lockfiles for bun/pnpm/yarn. Roadmap only: do not describe these as existing
-in code, README, or help text.
+`.depvet.toml` allowlists. Roadmap only: do not describe these as existing in
+code, README, or help text.

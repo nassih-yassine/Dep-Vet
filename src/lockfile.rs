@@ -36,6 +36,9 @@ impl LockContents {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Npm,
+    Bun,
+    Pnpm,
+    Yarn,
     Pip,
     Poetry,
     Uv,
@@ -46,7 +49,7 @@ pub enum Format {
 impl Format {
     pub fn ecosystem(self) -> crate::model::Ecosystem {
         match self {
-            Self::Npm => crate::model::Ecosystem::Npm,
+            Self::Npm | Self::Bun | Self::Pnpm | Self::Yarn => crate::model::Ecosystem::Npm,
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
@@ -63,6 +66,9 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         .ok_or_else(|| LockError::UnsupportedFormat(path.display().to_string()))?;
     match name {
         "package-lock.json" => Ok(Format::Npm),
+        "bun.lock" => Ok(Format::Bun),
+        "pnpm-lock.yaml" => Ok(Format::Pnpm),
+        "yarn.lock" => Ok(Format::Yarn),
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
         "poetry.lock" => Ok(Format::Poetry),
@@ -75,6 +81,9 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
 pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
     match format {
         Format::Npm => parse_npm(body),
+        Format::Bun => parse_bun(body),
+        Format::Pnpm => parse_pnpm(body),
+        Format::Yarn => Ok(parse_yarn(body)),
         Format::Pip => Ok(parse_pip(body)),
         Format::Poetry => parse_poetry(body),
         Format::Uv => parse_uv(body),
@@ -257,6 +266,224 @@ struct Entry {
     version: Option<String>,
     #[serde(default)]
     link: bool,
+}
+
+fn parse_bun(body: &str) -> Result<LockContents, LockError> {
+    let cleaned = strip_jsonc(body);
+    let root: serde_json::Value =
+        serde_json::from_str(&cleaned).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let packages = root
+        .get("packages")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| LockError::Malformed("bun.lock has no `packages` map".to_string()))?;
+
+    let mut collected = Vec::new();
+    let mut skipped = Vec::new();
+    for value in packages.values() {
+        let Some(field) = value
+            .as_array()
+            .and_then(|tuple| tuple.first())
+            .and_then(serde_json::Value::as_str)
+        else {
+            skipped.push((
+                value.to_string(),
+                "unreadable bun package entry".to_string(),
+            ));
+            continue;
+        };
+        match field.rsplit_once('@') {
+            Some((name, version)) if !name.is_empty() && !version.is_empty() => {
+                collected.push(LockedPackage {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                });
+            }
+            _ => skipped.push((
+                field.to_string(),
+                "unreadable bun package entry".to_string(),
+            )),
+        }
+    }
+
+    Ok(finish(collected, skipped))
+}
+
+/// bun.lock is JSON with comments and trailing commas.
+fn strip_jsonc(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut without_comments = String::with_capacity(input.len());
+    let mut index = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let ch = bytes[index] as char;
+        if in_string {
+            without_comments.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                without_comments.push(ch);
+                index += 1;
+            }
+            '/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            '/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            }
+            _ => {
+                without_comments.push(ch);
+                index += 1;
+            }
+        }
+    }
+
+    let chars: Vec<char> = without_comments.chars().collect();
+    let mut cleaned = String::with_capacity(without_comments.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for (position, &ch) in chars.iter().enumerate() {
+        if in_string {
+            cleaned.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            cleaned.push(ch);
+            continue;
+        }
+        if ch == ',' {
+            let next = chars[position + 1..]
+                .iter()
+                .find(|candidate| !candidate.is_whitespace());
+            if matches!(next, Some('}') | Some(']')) {
+                continue;
+            }
+        }
+        cleaned.push(ch);
+    }
+    cleaned
+}
+
+fn parse_pnpm(body: &str) -> Result<LockContents, LockError> {
+    let lockfile: PnpmLock =
+        serde_yaml_ng::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for key in lockfile.packages.keys() {
+        match split_pnpm_key(key) {
+            Some((name, version)) => packages.push(LockedPackage { name, version }),
+            None => skipped.push((key.clone(), "unrecognized pnpm package key".to_string())),
+        }
+    }
+
+    Ok(finish(packages, skipped))
+}
+
+/// pnpm v9 keys look like `name@1.2.3`, v6 like `/name@1.2.3`, v5 like
+/// `/name/1.2.3`; peer suffixes are appended as `(peer@1.0.0)`.
+fn split_pnpm_key(key: &str) -> Option<(String, String)> {
+    let key = key.trim_start_matches('/');
+    let key = key.split('(').next().unwrap_or(key);
+    if let Some((name, version)) = key.rsplit_once('@')
+        && !name.is_empty()
+        && starts_like_version(version)
+    {
+        return Some((name.to_string(), version.to_string()));
+    }
+    let (name, version) = key.rsplit_once('/')?;
+    (starts_like_version(version)).then(|| (name.to_string(), version.to_string()))
+}
+
+fn starts_like_version(candidate: &str) -> bool {
+    candidate
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_digit())
+}
+
+fn parse_yarn(body: &str) -> LockContents {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || line.starts_with([' ', '\t']) {
+            index += 1;
+            continue;
+        }
+        let Some(header) = line.trim_end().strip_suffix(':') else {
+            index += 1;
+            continue;
+        };
+        let selector = header
+            .split(',')
+            .next()
+            .unwrap_or(header)
+            .trim()
+            .trim_matches('"')
+            .to_string();
+
+        let mut version = None;
+        let mut cursor = index + 1;
+        while cursor < lines.len() && lines[cursor].starts_with([' ', '\t']) {
+            let field = lines[cursor].trim();
+            if let Some(rest) = field
+                .strip_prefix("version ")
+                .or_else(|| field.strip_prefix("version:"))
+            {
+                version = Some(rest.trim().trim_matches('"').to_string());
+            }
+            cursor += 1;
+        }
+        index = cursor;
+
+        let Some(version) = version else {
+            skipped.push((selector, "yarn entry without a version".to_string()));
+            continue;
+        };
+        // Yarn Berry workspace packages are links to local sources.
+        if version.starts_with("0.0.0-use.local") {
+            continue;
+        }
+        match selector.rsplit_once('@') {
+            Some((name, _range)) if !name.is_empty() => packages.push(LockedPackage {
+                name: name.to_string(),
+                version,
+            }),
+            _ => skipped.push((selector, "unreadable yarn selector".to_string())),
+        }
+    }
+
+    finish(packages, skipped)
 }
 
 fn parse_pip(body: &str) -> LockContents {
@@ -450,6 +677,12 @@ fn finish(mut packages: Vec<LockedPackage>, skipped: Vec<(String, String)>) -> L
 }
 
 #[derive(Debug, Deserialize)]
+struct PnpmLock {
+    #[serde(default)]
+    packages: std::collections::BTreeMap<String, serde_yaml_ng::Value>,
+}
+
+#[derive(Debug, Deserialize)]
 struct TomlPackages {
     #[serde(default)]
     package: Vec<TomlPackage>,
@@ -622,19 +855,144 @@ source = { git = "https://github.com/example/viaduct" }
     }
 
     #[test]
+    fn bun_reads_its_jsonc_lockfile() {
+        let body = r#"{
+            // bun writes comments and trailing commas
+            "lockfileVersion": 2,
+            "workspaces": { "": { "name": "app", } },
+            "packages": {
+                "is-number": ["is-number@7.0.0", "", {}, "sha512-x"],
+                "@scope/pkg": ["@scope/pkg@1.2.3", "", {}, "sha512-y"],
+                "broken": [],
+            },
+        }"#;
+        let contents = parse(Format::Bun, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("@scope/pkg", "1.2.3"),
+                package("is-number", "7.0.0")
+            ]
+        );
+        assert_eq!(contents.skipped.len(), 1);
+    }
+
+    #[test]
+    fn jsonc_stripping_keeps_urls_inside_strings() {
+        let cleaned = strip_jsonc(r#"{ "url": "https://example.test/a//b", }"#);
+        assert!(cleaned.contains("https://example.test/a//b"));
+        assert!(!cleaned.contains(", }"));
+    }
+
+    #[test]
+    fn bun_rejects_broken_json() {
+        assert!(matches!(
+            parse(Format::Bun, "{ nope"),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn pnpm_reads_v9_v6_and_v5_keys() {
+        let body = r#"
+lockfileVersion: '9.0'
+packages:
+  is-number@7.0.0: {}
+  '@scope/pkg@1.2.3': {}
+  'peer-pkg@2.0.0(react@18.0.0)': {}
+  '/legacy@1.0.0': {}
+  '/old-style/0.9.0': {}
+  'file:../local': {}
+"#;
+        let contents = parse(Format::Pnpm, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("@scope/pkg", "1.2.3"),
+                package("is-number", "7.0.0"),
+                package("legacy", "1.0.0"),
+                package("old-style", "0.9.0"),
+                package("peer-pkg", "2.0.0"),
+            ]
+        );
+        assert_eq!(contents.skipped.len(), 1);
+        assert!(contents.skipped[0].1.contains("unrecognized pnpm"));
+    }
+
+    #[test]
+    fn pnpm_rejects_malformed_yaml() {
+        assert!(matches!(
+            parse(Format::Pnpm, "packages: [unclosed"),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn yarn_reads_classic_and_berry_entries() {
+        let classic = r#"
+# yarn lockfile v1
+
+"@scope/pkg@^1.0.0":
+  version "1.2.3"
+  resolved "https://registry.yarnpkg.com/@scope/pkg/-/pkg-1.2.3.tgz"
+
+is-number@7.0.0:
+  version "7.0.0"
+"#;
+        let contents = parse(Format::Yarn, classic).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("@scope/pkg", "1.2.3"),
+                package("is-number", "7.0.0")
+            ]
+        );
+
+        let berry = r#"
+__metadata:
+  version: 8
+
+"is-number@npm:^7.0.0":
+  version: 7.0.0
+  resolution: "is-number@npm:7.0.0"
+
+"app@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "app@workspace:."
+"#;
+        let contents = parse(Format::Yarn, berry).unwrap();
+        assert_eq!(contents.packages, vec![package("is-number", "7.0.0")]);
+    }
+
+    #[test]
+    fn yarn_reports_entries_without_a_version() {
+        let body = r#"
+broken@1.0.0:
+  resolved "https://example.test/broken.tgz"
+"#;
+        let contents = parse(Format::Yarn, body).unwrap();
+        assert!(contents.packages.is_empty());
+        assert_eq!(contents.skipped.len(), 1);
+        assert!(contents.skipped[0].1.contains("without a version"));
+    }
+
+    #[test]
     fn detects_each_supported_lockfile() {
         assert_eq!(detect(Path::new("package-lock.json")).unwrap(), Format::Npm);
         assert_eq!(detect(Path::new("Cargo.lock")).unwrap(), Format::Cargo);
         assert_eq!(detect(Path::new("go.mod")).unwrap(), Format::Go);
         assert_eq!(detect(Path::new("poetry.lock")).unwrap(), Format::Poetry);
         assert_eq!(detect(Path::new("uv.lock")).unwrap(), Format::Uv);
+        assert_eq!(detect(Path::new("bun.lock")).unwrap(), Format::Bun);
+        assert_eq!(detect(Path::new("pnpm-lock.yaml")).unwrap(), Format::Pnpm);
+        assert_eq!(detect(Path::new("yarn.lock")).unwrap(), Format::Yarn);
         assert_eq!(detect(Path::new("requirements.txt")).unwrap(), Format::Pip);
         assert_eq!(
             detect(Path::new("dev-requirements.txt")).unwrap(),
             Format::Pip
         );
         assert!(matches!(
-            detect(Path::new("yarn.lock")),
+            detect(Path::new("deno.lock")),
             Err(LockError::UnsupportedFormat(_))
         ));
     }

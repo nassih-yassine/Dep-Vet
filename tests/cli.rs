@@ -1663,10 +1663,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 #[test]
 fn audit_rejects_unknown_lockfile_formats() {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("yarn.lock"), "").unwrap();
+    std::fs::write(directory.path().join("deno.lock"), "").unwrap();
     binary()
         .current_dir(directory.path())
-        .args(["audit", "yarn.lock"])
+        .args(["audit", "deno.lock"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("unsupported lockfile"));
@@ -1771,4 +1771,124 @@ version = "3.1.0"
         .code(0)
         .stdout(predicate::str::contains("1 new package"))
         .stdout(predicate::str::contains("flask@3.1.0"));
+}
+
+fn js_fixture() -> PackageFixture<'static> {
+    PackageFixture {
+        version: "7.0.0",
+        ..PackageFixture::clean("is-number")
+    }
+}
+
+#[test]
+fn audit_reads_bun_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("bun.lock"),
+        r#"{
+  "lockfileVersion": 2,
+  "workspaces": { "": { "name": "app" } },
+  "packages": {
+    "is-number": ["is-number@7.0.0", "", {}, "sha512-x"],
+  },
+}"#,
+    )
+    .unwrap();
+
+    let registry = registry_with(&[js_fixture()], None);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "bun.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"][0]["name"], "is-number");
+    assert_eq!(value["packages"][0]["ecosystem"], "npm");
+}
+
+#[test]
+fn audit_reads_pnpm_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\npackages:\n  is-number@7.0.0: {}\nsnapshots:\n  is-number@7.0.0: {}\n",
+    )
+    .unwrap();
+
+    let registry = registry_with(&[js_fixture()], None);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "pnpm-lock.yaml", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"][0]["name"], "is-number");
+}
+
+#[test]
+fn audit_reads_yarn_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("yarn.lock"),
+        "is-number@7.0.0:\n  version \"7.0.0\"\n  resolved \"https://registry.yarnpkg.com/is-number/-/is-number-7.0.0.tgz\"\n",
+    )
+    .unwrap();
+
+    let registry = registry_with(&[js_fixture()], None);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "yarn.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"][0]["name"], "is-number");
+}
+
+#[test]
+fn lock_diffs_a_bun_lock_against_a_ref() {
+    let repo = Repo::new();
+    repo.write(
+        "bun.lock",
+        r#"{
+  "lockfileVersion": 2,
+  "packages": {
+    "is-number": ["is-number@6.0.0", "", {}, "sha512-old"],
+  },
+}"#,
+    );
+    repo.commit("base");
+    repo.write(
+        "bun.lock",
+        r#"{
+  "lockfileVersion": 2,
+  "packages": {
+    "is-number": ["is-number@7.0.0", "", {}, "sha512-new"],
+  },
+}"#,
+    );
+
+    let registry = registry_with(&[js_fixture()], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "bun.lock", "--base", "HEAD"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("1 new package"))
+        .stdout(predicate::str::contains("is-number@7.0.0"));
 }
