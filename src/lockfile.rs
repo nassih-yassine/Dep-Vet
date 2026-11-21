@@ -56,6 +56,7 @@ pub enum Format {
     Composer,
     Gradle,
     Pipfile,
+    PackagesConfig,
 }
 
 impl Format {
@@ -69,6 +70,7 @@ impl Format {
             Self::Composer => crate::model::Ecosystem::Composer,
             Self::Gradle => crate::model::Ecosystem::Maven,
             Self::Pipfile => crate::model::Ecosystem::Pypi,
+            Self::PackagesConfig => crate::model::Ecosystem::NuGet,
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
@@ -96,6 +98,7 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
             Ok(Format::Gradle)
         }
         "Pipfile.lock" => Ok(Format::Pipfile),
+        "packages.config" => Ok(Format::PackagesConfig),
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
         "poetry.lock" => Ok(Format::Poetry),
@@ -117,6 +120,7 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
         Format::Composer => parse_composer_lock(body),
         Format::Gradle => Ok(parse_gradle(body)),
         Format::Pipfile => parse_pipfile(body),
+        Format::PackagesConfig => Ok(parse_packages_config(body)),
         Format::Pip => Ok(parse_pip(body)),
         Format::Poetry => parse_poetry(body),
         Format::Uv => parse_uv(body),
@@ -627,6 +631,49 @@ fn parse_gemfile(body: &str) -> LockContents {
     }
 
     finish(packages, skipped)
+}
+
+/// Legacy NuGet `packages.config` is a small XML file whose auditable content
+/// is one `<package id="..." version="..." />` element per line.
+fn parse_packages_config(body: &str) -> LockContents {
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for raw in body.lines() {
+        let line = raw.trim();
+        if !line.starts_with("<package ") {
+            continue;
+        }
+        match (attribute(line, "id"), attribute(line, "version")) {
+            (Some(name), Some(version)) if !name.is_empty() && !version.is_empty() => {
+                packages.push(LockedPackage { name, version });
+            }
+            (Some(name), _) if !name.is_empty() => {
+                skipped.push((name, "package element without a version".to_string()))
+            }
+            _ => skipped.push((
+                line.to_string(),
+                "package element without an id".to_string(),
+            )),
+        }
+    }
+
+    finish(packages, skipped)
+}
+
+/// Reads `name="value"` or `name='value'` from a single XML start tag. This is
+/// deliberately not an XML parser: packages.config has one flat element type.
+fn attribute(line: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}=");
+    let start = line.find(&needle)? + needle.len();
+    let rest = line.get(start..)?;
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let value = rest.get(1..)?;
+    let end = value.find(quote)?;
+    Some(value[..end].to_string())
 }
 
 /// Pipfile.lock stores `default` and `develop` tables whose entries hold a
@@ -1426,6 +1473,40 @@ DEPENDENCIES
             parse(Format::NugetLock, "{ nope"),
             Err(LockError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn packages_config_reads_package_elements() {
+        let body = r#"<?xml version="1.0" encoding="utf-8"?>
+<packages>
+  <package id="Newtonsoft.Json" version="13.0.3" targetFramework="net472" />
+  <package id="Serilog" version="2.12.0" targetFramework="net45" />
+</packages>
+"#;
+        let contents = parse(Format::PackagesConfig, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("Newtonsoft.Json", "13.0.3"),
+                package("Serilog", "2.12.0")
+            ]
+        );
+        assert!(contents.skipped.is_empty());
+    }
+
+    #[test]
+    fn packages_config_reports_elements_without_a_version() {
+        let body = "<package id=\"A\" />\n<package version=\"1.0\" />\n";
+        let contents = parse(Format::PackagesConfig, body).unwrap();
+        assert!(contents.packages.is_empty());
+        assert_eq!(contents.skipped.len(), 2);
+    }
+
+    #[test]
+    fn packages_config_accepts_single_quotes() {
+        let body = "<package id='B' version='2.0.0' />\n";
+        let contents = parse(Format::PackagesConfig, body).unwrap();
+        assert_eq!(contents.packages, vec![package("B", "2.0.0")]);
     }
 
     #[test]

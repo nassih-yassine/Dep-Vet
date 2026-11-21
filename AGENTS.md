@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 325 unit + 98 end-to-end tests
+cargo test --locked                      # 328 unit + 99 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -128,6 +128,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **`packages.config` is parsed line-wise, not with an XML crate.** Each
+  `<package id="..." version="..." />` start tag is read by a tiny attribute
+  scanner; a missing id or version is reported, never invented. Like pnpm,
+  this avoids adding a parser dependency for one flat file.
 - **Pipfile.lock is JSON, not TOML.** `default` and `develop` entries hold
   `version: "==1.2.3"`. A missing/`*` version or a path/git/URL entry is
   reported as an error (an incomplete tree exits 3), matching `poetry.lock`;
