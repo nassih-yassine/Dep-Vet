@@ -26,7 +26,12 @@ require executing untrusted package code, which dep-vet deliberately never does.
 
 ## What dep-vet will not do
 
-- It does not execute package code during `audit`, `lock`, `inspect`, or `diff`.
+- It does not execute package code during `audit`, `lock`, `guard`, `inspect`,
+  or `diff`.
+- Agent hooks are advisory against a hostile agent. Absolute paths, `python -c`,
+  nested subprocesses, and unparsed installs can bypass the command parser, and
+  transitive dependencies are not checked. The hook fails open unless
+  `--strict`.
 - It does not extract archives to disk.
 - It does not verify Sigstore signatures during an audit; `inspect npm` verifies
   them offline, and its report says exactly what was checked.

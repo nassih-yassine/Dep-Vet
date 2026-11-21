@@ -86,12 +86,22 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
 
     match &cli.command {
-        Command::Hook { event, strict } => {
-            if event != "claude" {
-                anyhow::bail!("unknown hook event '{event}'; supported: claude");
-            }
-            run_hook(*strict)
-        }
+        Command::Hook { action } => match action {
+            dep_vet::cli::HookAction::Claude { strict } => run_hook(*strict),
+            dep_vet::cli::HookAction::Install {
+                target,
+                project,
+                user,
+                strict,
+                write,
+            } => run_hook_install(target, *project, *user, *strict, *write),
+            dep_vet::cli::HookAction::Uninstall {
+                target,
+                project,
+                user,
+                write,
+            } => run_hook_uninstall(target, *project, *user, *write),
+        },
 
         Command::Guard {
             check,
@@ -725,6 +735,93 @@ fn run_guard_child(command: &str) -> (u8, Option<String>) {
     (output.status.code().unwrap_or(3) as u8, Some(stdout))
 }
 
+fn hook_settings_path(project: bool, user: bool) -> anyhow::Result<std::path::PathBuf> {
+    if project && user {
+        anyhow::bail!("choose either --project or --user");
+    }
+    if user {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .ok_or_else(|| anyhow::anyhow!("could not find the home directory"))?;
+        return Ok(std::path::PathBuf::from(home)
+            .join(".claude")
+            .join("settings.json"));
+    }
+    Ok(std::path::PathBuf::from(".claude").join("settings.json"))
+}
+
+fn run_hook_install(
+    target: &str,
+    project: bool,
+    user: bool,
+    strict: bool,
+    write: bool,
+) -> anyhow::Result<u8> {
+    if target != "claude" {
+        anyhow::bail!("unknown hook target '{target}'; supported: claude");
+    }
+    let path = hook_settings_path(project, user)?;
+    let before = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let executable = std::env::current_exe()?;
+    let command = dep_vet::hook::settings::command_line(&executable, strict);
+    let after = dep_vet::hook::settings::merge(
+        &path.display().to_string(),
+        &before,
+        &command,
+        dep_vet::hook::settings::TIMEOUT_SECONDS,
+    )?;
+    println!(
+        "{}\n{}",
+        path.display(),
+        dep_vet::hook::settings::diff(&before, &after)
+    );
+    if write {
+        dep_vet::hook::settings::atomic_write(&path, &after)?;
+        println!("wrote {}", path.display());
+    } else {
+        println!("dry run; pass --write to save");
+    }
+    Ok(0)
+}
+
+fn run_hook_uninstall(target: &str, project: bool, user: bool, write: bool) -> anyhow::Result<u8> {
+    if target != "claude" {
+        anyhow::bail!("unknown hook target '{target}'; supported: claude");
+    }
+    let path = hook_settings_path(project, user)?;
+    let before = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let executable = std::env::current_exe()?;
+    for strict in [false, true] {
+        let command = dep_vet::hook::settings::command_line(&executable, strict);
+        let after =
+            dep_vet::hook::settings::remove(&path.display().to_string(), &before, &command)?;
+        if after != before {
+            println!(
+                "{}\n{}",
+                path.display(),
+                dep_vet::hook::settings::diff(&before, &after)
+            );
+            if write {
+                dep_vet::hook::settings::atomic_write(&path, &after)?;
+                println!("wrote {}", path.display());
+            } else {
+                println!("dry run; pass --write to save");
+            }
+            return Ok(0);
+        }
+    }
+    println!("no dep-vet hook in {}", path.display());
+    Ok(0)
+}
+
 fn run_hook(strict: bool) -> anyhow::Result<u8> {
     use std::io::Read as _;
     let mut stdin = std::io::stdin().take(dep_vet::hook::MAX_STDIN_BYTES + 1);
@@ -1081,9 +1178,8 @@ fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result
         // report alone.
         if io::stdout().is_terminal() {
             format!(
-                "{}\n{}\n\n{}",
+                "{}\n\n{}",
                 dep_vet::branding::banner(use_color(cli)),
-                dep_vet::branding::TAGLINE,
                 report_text
             )
         } else {

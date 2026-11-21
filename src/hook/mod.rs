@@ -5,6 +5,8 @@
 //! module is the only place that maps one to the other: it always exits 0 and
 //! prints exactly one `hookSpecificOutput` object, or nothing at all.
 
+pub mod settings;
+
 use serde::Deserialize;
 
 pub const MAX_STDIN_BYTES: u64 = 1024 * 1024;

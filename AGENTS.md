@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 509 unit + 125 end-to-end tests
+cargo test --locked                      # 526 unit + 138 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -474,6 +474,32 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   2 so warnings still pass. A `vX.Y.Z` ref installs with `--tag`, other refs
   with `--branch`. Third-party actions are avoided on purpose: this repo should
   not add supply-chain surface to a supply-chain tool.
+- **Claude's exit 2 is not dep-vet's exit 2.** In Claude Code, exit 2 from a
+  PreToolUse hook means BLOCK; in dep-vet it means HIGH risk. `hook claude` owns
+  the mapping: it always exits 0 and prints exactly one
+  `hookSpecificOutput` object (`permissionDecision` deny/ask) or nothing.
+  Never let `guard`'s 0/1/2/3 leak, and never use exit 2 as the deny path.
+- **The hook budget is enforced by a child process.** `hook claude` spawns
+  `guard --check --json` and kills it at `HOOK_BUDGET_SECONDS` (8). Threads
+  cannot be cancelled and the HTTP agent waits 20 seconds, so in-process
+  deadlines would be fiction. Generated settings use `timeout: 30` so the child
+  loses first.
+- **The hook strips `DEPVET_*` overrides.** `DEPVET_REGISTRY_BASE`,
+  `DEPVET_OSV_BASE`, `DEPVET_DOWNLOADS_BASE`, `DEPVET_NO_CACHE`,
+  `DEPVET_HOOK_TIMEOUT`, and the rest are removed from the child; only
+  `DEPVET_CACHE_DIR` and `DEPVET_DEBUG` pass. `DEPVET_HOOK_TEST_BASE` is a
+  `cfg!(debug_assertions)` seam for `tests/cli.rs` only and is absent from
+  release builds; do not make it unconditional.
+- **`hook install` merges, never rewrites.** It preserves unknown keys and other
+  matcher groups, is idempotent byte-for-byte, removes only its own handler, and
+  refuses malformed JSON with exit 3 and no write. Writes are atomic
+  (sibling temp file then rename). The settings `command` is a shell string; the
+  binary path must be absolute and quoted when it has spaces.
+- **The intent parser is best-effort, not a shell.** It splits on `&& || ; |`
+  and newlines outside quotes, follows one `sh -c`, and records a note for every
+  install-like command it cannot parse, every URL/VCS/path spec, and every
+  invalid package name. A bare install becomes a lockfile intent (exit 3 from
+  `guard`), never a silent pass.
 - **`lockfile::at_ref` must run git in the lockfile's directory.** A bare
   filename has `parent() == Some("")`, which git rejects; the empty-parent case
   falls back to `.` and has a regression test. Object paths are rebuilt with

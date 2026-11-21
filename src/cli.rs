@@ -33,6 +33,56 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum HookAction {
+    /// Serve a Claude Code PreToolUse hook on stdin
+    Claude {
+        /// Deny warnings and unchecked installs instead of asking/allowing
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Merge the hook into Claude settings
+    Install {
+        /// Hook target (claude)
+        target: String,
+
+        /// Project settings: .claude/settings.json
+        #[arg(long)]
+        project: bool,
+
+        /// User settings: ~/.claude/settings.json
+        #[arg(long)]
+        user: bool,
+
+        /// Deny warnings and unchecked installs
+        #[arg(long)]
+        strict: bool,
+
+        /// Actually write; without this only the diff is printed
+        #[arg(long)]
+        write: bool,
+    },
+
+    /// Remove the hook from Claude settings
+    Uninstall {
+        /// Hook target (claude)
+        target: String,
+
+        /// Project settings: .claude/settings.json
+        #[arg(long)]
+        project: bool,
+
+        /// User settings: ~/.claude/settings.json
+        #[arg(long)]
+        user: bool,
+
+        /// Actually write; without this only the diff is printed
+        #[arg(long)]
+        write: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum Command {
     /// Vet an npm package before adding it
     Npm {
@@ -74,14 +124,10 @@ pub enum Command {
         json: bool,
     },
 
-    /// Serve an AI agent hook on stdin
+    /// AI agent hooks
     Hook {
-        /// Hook event to serve (claude)
-        event: String,
-
-        /// Deny warnings and unchecked installs instead of asking/allowing
-        #[arg(long)]
-        strict: bool,
+        #[command(subcommand)]
+        action: HookAction,
     },
 
     /// Vet the packages an install command would fetch

@@ -1,13 +1,28 @@
 <div align="center">
 
 <pre>
-    █                                 █
-    █                                ███
- ████  ███  ████        █   █  ███    █
-█   █ █   █ █   █  ███  █   █ █   █   █
-█   █ █████ ████        █   █ █████   █
-█   █ █     █            █ █  █       █
- ████  ███  █             █    ███    ██
+██████╗ ███████╗██████╗       ██╗   ██╗███████╗████████╗
+██╔══██╗██╔════╝██╔══██╗      ██║   ██║██╔════╝╚══██╔══╝
+██║  ██║█████╗  ██████╔╝█████╗██║   ██║█████╗     ██║
+██║  ██║██╔══╝  ██╔═══╝ ╚════╝╚██╗ ██╔╝██╔══╝     ██║
+██████╔╝███████╗██║             ╚████╔╝ ███████╗   ██║
+╚═════╝ ╚══════╝╚═╝              ╚═══╝  ╚══════╝   ╚═╝
+
+        ┌────────────────────────────────────────────────┐
+        │                                                │
+        │       THE DEPENDENCY TRUST PROTOCOL             │
+        │                                                │
+        │   ◈  INSPECT       Dependency intelligence     │
+        │   ◈  ANALYZE       Malicious code detection    │
+        │   ◈  VERIFY        Publisher provenance        │
+        │   ◈  DIFF          Release behavior changes    │
+        │   ◈  ENFORCE       Supply-chain security       │
+        │                                                │
+        └────────────────────────────────────────────────┘
+
+        ZERO BLIND TRUST. FULL SUPPLY-CHAIN VISIBILITY.
+
+        [ SYSTEM READY ]  [ RUST POWERED ]  [ SECURITY FIRST ]
 </pre>
 
 **Check a package's risk before it enters your lockfile.**
@@ -631,6 +646,38 @@ binary for the `ref` input (default `v0.11.0`) and falls back to a source build
 when that ref has no release; a `vX.Y.Z` ref is installed with `--tag`, other
 refs with `--branch`. Pinning `uses:` alone does not pin the binary: set `ref`
 to the tag you reviewed.
+
+### Agent hooks
+
+`dep-vet guard --check -- npm i foo` parses an install command, audits the
+packages it names, and exits with the normal verdict codes. `dep-vet hook claude`
+turns that into a Claude Code `PreToolUse` hook:
+
+```sh
+dep-vet hook install claude              # print the diff; writes nothing
+dep-vet hook install claude --write      # .claude/settings.json
+dep-vet hook install claude --user --write
+dep-vet hook uninstall claude --write
+```
+
+The generated handler matches `Bash`, runs the absolute path of `dep-vet`, and
+gets `timeout: 30` so dep-vet's own 8-second budget finishes first. HIGH denies,
+WARN asks (deny with `--strict`), clean allows silently, and an audit that
+cannot run is allowed unless `--strict`. The hook always exits 0 and prints one
+documented `hookSpecificOutput` object, because Claude treats exit 2 as BLOCK
+while dep-vet uses it for HIGH.
+
+What this protects against: a hallucinated package name, a typosquat, and a
+direct package whose metadata looks wrong. What it does not protect against:
+transitive dependencies, a bare `npm install` with no named package, URLs, VCS
+and path specs, `$(...)`, `eval`, nested shells, `xargs`, absolute paths, or a
+hostile, prompt-injected agent. It is advisory against a hostile agent and
+useful against an honest one.
+
+There are two bypasses: an allow entry in `.depvet.toml` with a reason, and
+removing the hook. The hook ignores agent-settable `DEPVET_*` overrides
+(registry/OSV bases, cache, timeout) so the command string cannot redirect the
+audit; only `DEPVET_CACHE_DIR` and `DEPVET_DEBUG` pass through.
 
 ### Color
 

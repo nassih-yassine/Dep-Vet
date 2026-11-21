@@ -509,6 +509,126 @@ fn hook_fails_open_on_audit_failure_unless_strict() {
 }
 
 #[test]
+fn hook_install_writes_only_with_write_and_is_idempotent() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings = directory.path().join(".claude").join("settings.json");
+
+    let first = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let first = String::from_utf8(first).unwrap();
+    assert!(first.contains("hook claude"), "{first}");
+    assert!(!settings.exists(), "no --write means no file");
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--write"])
+        .assert()
+        .code(0);
+    let body = std::fs::read_to_string(&settings).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let groups = value["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["matcher"], "Bash");
+    let handlers = groups[0]["hooks"].as_array().unwrap();
+    assert_eq!(handlers.len(), 1);
+    assert_eq!(handlers[0]["timeout"], 30);
+    assert!(
+        handlers[0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("hook claude"),
+        "{body}"
+    );
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--write"])
+        .assert()
+        .code(0);
+    let again = std::fs::read_to_string(&settings).unwrap();
+    assert_eq!(body, again, "second install must be a no-op");
+}
+
+#[test]
+fn hook_install_preserves_other_settings_and_can_be_removed() {
+    let directory = tempfile::tempdir().unwrap();
+    let claude = directory.path().join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    let settings = claude.join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"theme":"dark","hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"fmt"}]}]}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--write"])
+        .assert()
+        .code(0);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(value["theme"], "dark");
+    assert_eq!(value["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "uninstall", "claude", "--write"])
+        .assert()
+        .code(0);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(value["theme"], "dark");
+    let groups = value["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["matcher"], "Edit");
+    assert_eq!(groups[0]["hooks"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn hook_install_refuses_malformed_settings_without_writing() {
+    let directory = tempfile::tempdir().unwrap();
+    let claude = directory.path().join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    let settings = claude.join("settings.json");
+    std::fs::write(&settings, "{not json").unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--write"])
+        .assert()
+        .code(3);
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{not json");
+}
+
+#[test]
+fn hook_install_supports_the_user_location() {
+    let home = tempfile::tempdir().unwrap();
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .args(["hook", "install", "claude", "--user", "--write"])
+        .assert()
+        .code(0);
+    assert!(home.path().join(".claude").join("settings.json").exists());
+}
+
+#[test]
 fn hook_ignores_non_bash_and_malformed_input() {
     let registry = registry_with(&[], None);
     let edit = serde_json::json!({
@@ -862,10 +982,8 @@ fn help_shows_the_wordmark() {
         .arg("--help")
         .assert()
         .code(0)
-        .stdout(predicate::str::contains(
-            "dependency risk, checked before install",
-        ))
-        .stdout(predicate::str::contains("####"));
+        .stdout(predicate::str::contains("THE DEPENDENCY TRUST PROTOCOL"))
+        .stdout(predicate::str::contains("ZERO BLIND TRUST"));
 }
 
 #[test]
@@ -878,7 +996,7 @@ fn piped_output_has_no_wordmark() {
         .args(["npm", "clean-pkg"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("dependency risk").not())
+        .stdout(predicate::str::contains("THE DEPENDENCY TRUST PROTOCOL").not())
         .stdout(predicate::str::contains("INFO"));
 }
 
