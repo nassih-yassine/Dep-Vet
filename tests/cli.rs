@@ -2174,3 +2174,83 @@ fn watch_reruns_after_the_lockfile_changes() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+fn stub_dep_vet(exit_code: i32) -> (tempfile::TempDir, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let log = directory.path().join("calls.log");
+    let script = directory.path().join("dep-vet");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho \"$@\" >> \"$LOG\"\nexit {exit_code}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (directory, log)
+}
+
+fn run_pre_commit(
+    repo: &Repo,
+    stub_dir: &std::path::Path,
+    log: &std::path::Path,
+) -> std::process::Output {
+    let path = format!(
+        "{}:{}",
+        stub_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    std::process::Command::new("sh")
+        .arg(format!(
+            "{}/.githooks/pre-commit",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .current_dir(repo.path())
+        .env("PATH", path)
+        .env("LOG", log)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn pre_commit_runs_only_for_staged_lockfiles() {
+    let repo = Repo::new();
+    repo.write("README.md", "hi\n");
+    repo.commit("base");
+    repo.write("README.md", "hello\n");
+    repo.git(&["add", "README.md"]);
+
+    let (stub, log) = stub_dep_vet(0);
+    let output = run_pre_commit(&repo, stub.path(), &log);
+    assert!(output.status.success());
+    assert!(!log.exists(), "no lockfile staged, nothing to run");
+
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.git(&["add", "package-lock.json"]);
+    let output = run_pre_commit(&repo, stub.path(), &log);
+    assert!(output.status.success());
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(calls.contains("audit package-lock.json"), "{calls}");
+}
+
+#[test]
+fn pre_commit_blocks_on_high_risk_and_passes_warnings() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.commit("base");
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.3.0")]));
+    repo.git(&["add", "package-lock.json"]);
+
+    let (blocking, log) = stub_dep_vet(2);
+    let output = run_pre_commit(&repo, blocking.path(), &log);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("blocking"));
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains("lock package-lock.json --base HEAD"),
+        "{calls}"
+    );
+
+    let (warning, log) = stub_dep_vet(1);
+    let output = run_pre_commit(&repo, warning.path(), &log);
+    assert!(output.status.success(), "warnings must not block a commit");
+}

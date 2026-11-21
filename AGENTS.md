@@ -32,7 +32,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 248 unit + 79 end-to-end tests
+cargo test --locked                      # 248 unit + 81 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -41,14 +41,16 @@ cargo fmt --check
 
 Clippy warnings are errors. Do not commit unformatted code.
 
-A tracked pre-push hook (`.githooks/pre-push`) runs fmt, clippy, and tests.
-Enable it once per clone:
+Two tracked hooks live in `.githooks/`: `pre-commit` vets staged lockfiles
+(`lock --base HEAD`, full `audit` for newly added files; blocks on exit 2/3,
+warnings pass), and `pre-push` runs fmt, clippy, and tests. Enable both once per
+clone:
 
 ```sh
 git config core.hooksPath .githooks
 ```
 
-Do not push with `--no-verify` to get past a failure; fix the failure.
+Do not use `--no-verify` to get past a failure; fix the failure.
 
 ## Layout
 

@@ -1,0 +1,59 @@
+#!/bin/sh
+# dep-vet pre-commit gate: vet staged lockfile changes against HEAD.
+#
+# Fails on high risk (2) or an incomplete check (3). Warnings (1) pass.
+# Bypass: git commit --no-verify
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+changed=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -z "$changed" ]; then
+    exit 0
+fi
+
+lockfiles=$(printf '%s\n' "$changed" | grep -E '(^|/)(package-lock\.json|bun\.lock|pnpm-lock\.yaml|yarn\.lock|deno\.lock|Cargo\.lock|go\.mod|requirements[^/]*\.txt|poetry\.lock|uv\.lock)$' || true)
+if [ -z "$lockfiles" ]; then
+    exit 0
+fi
+
+if command -v dep-vet >/dev/null 2>&1; then
+    runner="dep-vet"
+else
+    runner="cargo run --quiet --"
+fi
+
+status=0
+while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    [ -f "$file" ] || continue
+
+    code=0
+    if git cat-file -e "HEAD:$file" 2>/dev/null; then
+        echo "dep-vet pre-commit: $file against HEAD"
+        set +e
+        $runner lock "$file" --base HEAD
+        code=$?
+        set -e
+    else
+        # A newly added lockfile has no base revision; audit the whole file.
+        echo "dep-vet pre-commit: $file (new file, full audit)"
+        set +e
+        $runner audit "$file"
+        code=$?
+        set -e
+    fi
+
+    if [ "$code" -ge 2 ] && [ "$code" -gt "$status" ]; then
+        status=$code
+    fi
+done <<EOF
+$lockfiles
+EOF
+
+if [ "$status" -ge 2 ]; then
+    echo "dep-vet pre-commit: blocking (exit $status). Fix the findings, or commit with --no-verify." >&2
+    exit "$status"
+fi
+
+exit 0
