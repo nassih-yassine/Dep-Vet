@@ -96,8 +96,12 @@ pub fn inspect_archive(
     let provenance = source
         .provenance_url
         .as_deref()
-        .and_then(|url| http.get(url).ok())
-        .map(|body| crate::provenance::verify(&body, &bytes));
+        .map(|url| match http.get(url) {
+            Ok(body) => crate::provenance::verify(&body, &bytes),
+            Err(error) => {
+                crate::provenance::unverified(format!("attestation could not be fetched: {error}"))
+            }
+        });
     Ok(Prepared {
         url: source.url,
         kind: source.kind,

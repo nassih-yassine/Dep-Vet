@@ -32,7 +32,9 @@ impl ProvenanceReport {
     }
 }
 
-fn unverified(reason: impl Into<String>) -> ProvenanceReport {
+/// A published attestation that could not be read is "not verified" with the
+/// reason, never silently absent.
+pub fn unverified(reason: impl Into<String>) -> ProvenanceReport {
     ProvenanceReport {
         status: "unverified",
         identity: None,
@@ -145,6 +147,16 @@ mod tests {
         let report = verify(body, TARBALL);
         assert!(!report.verified());
         assert!(report.reason.is_some());
+    }
+
+    #[test]
+    fn an_unreadable_attestation_says_why() {
+        let report = unverified("attestation fetch failed: connection refused");
+        assert!(!report.verified());
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("attestation fetch failed: connection refused")
+        );
     }
 
     #[test]

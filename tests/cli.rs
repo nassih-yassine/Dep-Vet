@@ -2546,6 +2546,30 @@ fn inspect_verifies_npm_provenance_offline() {
             .contains("node-semver"),
         "{value}"
     );
+
+    // A published attestation that cannot be fetched is "unverified" with a
+    // reason, never silently treated as absent.
+    let tarball = include_bytes!("fixtures/semver-7.8.6.tgz");
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(tarball));
+    let registry = MockRegistry::start_with(move |base| {
+        let doc = format!(
+            r#"{{"name":"semver","version":"7.8.6","dist":{{"tarball":"{base}/semver.tgz","integrity":"sha512-{digest}","attestations":{{"url":"{base}/missing-attestation"}}}}}}"#
+        );
+        let mut routes = HashMap::new();
+        routes.insert("/semver/7.8.6".to_string(), (200, doc.into_bytes()));
+        routes.insert("/semver.tgz".to_string(), (200, tarball.to_vec()));
+        routes
+    });
+    let output = registry
+        .command()
+        .args(["inspect", "npm", "semver@7.8.6", "--json"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["provenance"]["status"], "unverified", "{value}");
+    assert!(value["provenance"]["reason"].is_string(), "{value}");
 }
 
 #[test]
