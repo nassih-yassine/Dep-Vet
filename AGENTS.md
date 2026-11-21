@@ -177,10 +177,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - **`watch` watches the file, not the folder.** `is_target` ignores sibling
   files and same-named files elsewhere; events are debounced 300 ms. The
   watcher is registered before `on_start` runs, so an edit during the first
-  report is not lost.
-  end-to-end test spawns the binary, edits the lockfile, and waits for a second
-  report, so it touches inotify - keep timeouts generous. Any lockfile format
-  works; the default is the nearest `package-lock.json`.
+  report is not lost. The end-to-end test spawns the binary, edits the lockfile,
+  and waits for a second report, so it touches inotify - keep timeouts generous.
+  Any lockfile format works; the default is the nearest `package-lock.json`.
 - **Allowlists downgrade, never delete.** `Allowlist::apply` runs after a
   report exists, sets `allowed`, forces `Severity::Info`, prefixes the reason,
   and re-sorts (severity changed). Tree views must show allowed entries or the
