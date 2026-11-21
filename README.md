@@ -91,8 +91,9 @@ With a Rust toolchain, from source:
 cargo install --git https://github.com/nassih-yassine/Dep-Vet.git
 ```
 
-Releases are checksummed (`sha256.sum`) and built for Linux and macOS on
-aarch64 and x86_64, plus Windows x86_64.
+Releases are checksummed (`sha256.sum`), carry SLSA provenance attestations,
+and are built for Linux (glibc and static musl), macOS (aarch64 and x86_64),
+and Windows x86_64.
 
 ## Usage
 
@@ -788,6 +789,15 @@ src/typosquat.rs  Levenshtein, homoglyph folding, per-ecosystem candidate lists
 src/branding.rs   the wordmark in --help and interactive reports
 src/report.rs     human and JSON rendering
 src/date.rs       RFC 3339 parsing, no date crate
+src/archive/      bounded in-memory tar.gz/zip/gem extraction
+src/rules.rs      static rules over extracted source, comment stripping
+src/inspect.rs    archive resolution, checksums, release diff
+src/provenance.rs offline Sigstore verification for npm
+src/maven.rs      Maven Central and Google Maven metadata
+src/composer.rs   Packagist versions, maintainers, abandoned flag
+src/cli.rs        command-line surface
+src/progress.rs   stderr-only progress bar
+src/version.rs    version comparison helper for advice
 src/main.rs       wiring, color choice, exit codes
 ```
 
@@ -797,7 +807,10 @@ did.
 
 ## Roadmap
 
-1. Remaining ecosystems and lockfile formats (e.g. Gradle).
+1. More ecosystems and lockfile formats (Maven dependency trees, Gradle
+   without dependency locking).
+2. SARIF and SBOM output for CI consumers.
+3. Publisher history beyond the immediately previous release.
 
 ## License
 

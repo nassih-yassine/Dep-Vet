@@ -1,7 +1,8 @@
 [package]
 name = "dep-vet"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Check a package's risk before it enters your lockfile"
 repository = "https://github.com/nassih-yassine/Dep-Vet"
 readme = "README.md"
