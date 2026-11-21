@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 504 unit + 124 end-to-end tests
+cargo test --locked                      # 509 unit + 125 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -144,8 +144,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `(body, Source)` so callers can tell `Fresh` from `Network` from
   `Stale { age_seconds }`. Advisory stale fallback stops at
   `ADVISORY_MAX_STALE_SECONDS` (24h); past it the error is returned so the
-  existing "advisory check unavailable" INFO fires. Serving stale advisory data
-  adds INFO `advisories-stale` with its human age.
+  existing "advisory check unavailable" INFO fires. Advisory details use
+  `get_with_source`; `oldest_stale` folds batch and detail ages so
+  `advisories-stale` reports the oldest data it relied on.
 - **Cache lifecycle:** entries older than `RETENTION_SECONDS` (30 days) are
   deleted on open, and `PRAGMA user_version` drops the table when the schema
   changes. Never add a column without bumping `SCHEMA_VERSION`.
@@ -265,7 +266,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **Lockfile audits run 4 packages at a time.** `MAX_CONCURRENT_AUDITS` in
   `main.rs` bounds the burst; output order still follows the sorted diff, and
   per-package failures stay in `errors`.
-- **The npm candidate list is generated, not hand-edited.**
+- **The npm candidate list is generated, not hand-edited.** `ANCHORS` are part
+  of the written seed (`set(seed) | set(ANCHORS)`), and the refresh workflow
+  fails if any anchor is missing from `data/popular-npm.txt` or if the diff
+  exceeds 200 lines.
   `data/popular-npm.txt` comes from `scripts/refresh-popular-npm.py` (downloads
   ranking, unioned with the previous seed). `popular_npm()` loads it once via
   `include_str!` + `OnceLock`. Tests require `cross-env`, `preact`, and `moment`
@@ -291,8 +295,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   per-ecosystem archive URLs and trusted checksums; a mismatch is a HIGH finding
   (`ARCHIVE-CHECKSUM-001`). JSR has no documented tarball URL; Maven without a
   sources jar and NuGet compiled packages report source analysis as not checked.
-  Every `GzDecoder` is wrapped in `CountingReader` with `Limits.max_decompressed`
-  (200 MB, `[inspect] max_decompressed_mb`); crossing it aborts with
+  Every `GzDecoder` is wrapped in `CountingReader`, and zip entries are charged
+  through `Extracted.decompressed_bytes` (declared size for oversize entries,
+  bytes read otherwise), all against `Limits.max_decompressed` (200 MB,
+  `[inspect] max_decompressed_mb`). Crossing it aborts with
   `ArchiveError::DecompressedTooLarge`, which `inspect`/`diff` turn into HIGH
   `archive-decompression-bomb` plus a not-checked line instead of exit 3.
   `Extracted.truncated` must never be read as a boolean without its reasons:
@@ -306,9 +312,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   HIGH. Every rule carries a description and at least one reference URL, and a
   test fails when either is missing. Dynamic imports are intentionally WARN:
   frameworks use them legitimately. Comments are
-  skipped with `rules::strip_comments` (C-style for JS/TS/Go/Rust/PHP, `#` for
-  Python/shell/Ruby), which tracks string literals so URLs are not comments and
-  keeps code after `*/`. Patterns run over the whole stripped file, so a call
+  skipped with `rules::strip_comments` (C-style for JS/TS/Go/Rust/PHP, `#`
+  anywhere for Python/Ruby, `#` only at line start/after whitespace for
+  sh/bash/zsh). It tracks string literals so URLs are not comments, keeps code
+  after `*/`, and skips regex literals after `(,=:[!&|?{};`, start, `return`,
+  or `typeof` so `/[//]/` cannot open a comment. When unsure, do not blank: a
+  false positive beats a missed call. Patterns run over the whole stripped file, so a call
   split across lines matches; line numbers come from the stripped text and
   evidence from the original line. `Extracted` keeps any file with a scannable
   extension and decodes it lossily, so a trailing `0xFF` or NUL cannot hide
@@ -365,8 +374,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   escalates to HIGH only for known execution patterns; unchanged scripts stay
   under the ordinary install-script finding. `risky_install_command` tokenises
   on shell punctuation and matches whole words, so `node scripts/evaluate.js`
-  is not `eval`; it catches curl/wget/nc/base64/iex/eval, powershell/pwsh,
-  python -c, perl/ruby -e, php -r, node -e/-p/--eval, and bash/sh -c with a URL. `dependency-added` is INFO unless
+  is not `eval`; tokens are reduced to their basename with `.exe/.cmd/.bat`
+  dropped. It catches curl/wget/nc/base64/iex/iwr/irm/eval, powershell/pwsh,
+  certutil/bitsadmin/mshta, python -c, perl/ruby -e, php -r,
+  node -e/-p/--eval, and bash/sh -c with a URL. `dependency-added` is INFO unless
   an added name resembles a seed name. `publisher-changed` is INFO and only for
   accounts already on the maintainer list; a new account remains the existing
   WARN, enriched with the previous publisher. Composer platform packages

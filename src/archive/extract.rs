@@ -89,8 +89,19 @@ pub struct Extracted {
     pub entries_over_cap: bool,
     /// The total uncompressed budget ran out before the archive ended.
     pub total_over_cap: bool,
+    /// Bytes read out of compressed entries so far, including skipped ones.
+    /// Bounded by `Limits.max_decompressed` for every archive kind.
+    pub decompressed_bytes: u64,
     /// Any of the above happened. Kept for callers that only ask "truncated?".
     pub truncated: bool,
+}
+
+fn charge(out: &mut Extracted, amount: u64, limits: Limits) -> Result<(), ArchiveError> {
+    out.decompressed_bytes = out.decompressed_bytes.saturating_add(amount);
+    if out.decompressed_bytes > limits.max_decompressed {
+        return Err(ArchiveError::DecompressedTooLarge(limits.max_decompressed));
+    }
+    Ok(())
 }
 
 /// Remember a skipped path without letting a hostile archive grow the report.
@@ -178,6 +189,7 @@ fn read_tar<R: Read>(reader: R, limits: Limits, out: &mut Extracted) -> Result<(
         };
         let declared = entry.size();
         if declared > limits.max_file {
+            charge(out, declared, limits)?;
             record_skipped(out, path);
             continue;
         }
@@ -216,6 +228,7 @@ fn read_zip(bytes: &[u8], limits: Limits, out: &mut Extracted) -> Result<(), Arc
             continue;
         };
         if file.size() > limits.max_file {
+            charge(out, file.size(), limits)?;
             record_skipped(out, path);
             continue;
         }
@@ -249,6 +262,7 @@ fn read_text(
         .take(budget)
         .read_to_end(&mut buffer)
         .map_err(|error| read_error(error, limits))?;
+    charge(out, buffer.len() as u64, limits)?;
     if buffer.len() as u64 > limits.max_file {
         record_skipped(out, path);
         return Ok(());
@@ -481,6 +495,27 @@ mod tests {
             .find(|finding| finding.rule == "archive-partially-scanned")
             .expect("missing partial-scan finding");
         assert_eq!(finding.severity, crate::model::Severity::Warn);
+    }
+
+    #[test]
+    fn a_zip_that_expands_past_the_cap_is_rejected() {
+        let block = vec![0u8; 1024 * 1024];
+        let files: Vec<(&str, &[u8])> = vec![
+            ("a.bin", &block),
+            ("b.bin", &block),
+            ("c.bin", &block),
+            ("d.bin", &block),
+        ];
+        let bytes = zip_bytes(&files);
+        let limits = Limits {
+            max_decompressed: 2 * 1024 * 1024,
+            ..Limits::default()
+        };
+        let error = extract(ArchiveKind::Zip, &bytes, limits).unwrap_err();
+        assert!(
+            matches!(error, ArchiveError::DecompressedTooLarge(limit) if limit == 2 * 1024 * 1024),
+            "{error:?}"
+        );
     }
 
     #[test]

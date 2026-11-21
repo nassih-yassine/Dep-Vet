@@ -2599,6 +2599,63 @@ fn inspect_discloses_files_the_size_cap_skipped() {
 }
 
 #[test]
+fn inspect_rejects_a_zip_that_expands_past_the_configured_cap() {
+    let block = vec![0u8; 1024 * 1024];
+    let files: Vec<(&str, &[u8])> = vec![
+        ("lib/a.bin", &block),
+        ("lib/b.bin", &block),
+        ("lib/c.bin", &block),
+        ("lib/d.bin", &block),
+        ("lib/e.bin", &block),
+        ("lib/f.bin", &block),
+    ];
+    let nupkg = zip_archive(&files);
+    let registry = MockRegistry::start_with(move |_base| {
+        let mut routes = HashMap::new();
+        routes.insert(
+            "/v3-flatcontainer/bomb/1.0.0/bomb.1.0.0.nupkg".to_string(),
+            (200, nupkg.clone()),
+        );
+        routes
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join(".depvet.toml");
+    std::fs::write(&config, "[inspect]\nmax_decompressed_mb = 1\n").unwrap();
+
+    let output = registry
+        .command()
+        .args([
+            "inspect",
+            "nuget",
+            "bomb@1.0.0",
+            "--json",
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let finding = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["rule"] == "archive-decompression-bomb")
+        .unwrap_or_else(|| panic!("missing bomb finding: {value}"));
+    assert_eq!(finding["severity"], "high");
+    assert!(
+        value["not_checked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str().unwrap_or("").contains("decompression")),
+        "{value}"
+    );
+}
+
+#[test]
 fn inspect_reports_a_checksum_mismatch_as_high() {
     use base64::Engine as _;
     let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);

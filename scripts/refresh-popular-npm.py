@@ -119,7 +119,10 @@ def main():
         for name, _ in sorted(downloads.items(), key=lambda item: (-item[1], item[0]))
     ][:LIMIT]
     # Ranked names keep download order; carried-over seed names follow.
-    final = ranked + sorted(set(seed) - set(ranked))
+    # Anchors are part of the seed even when they miss the download cut, so a
+    # framework name can never silently disappear from the candidate list.
+    carried = sorted((set(seed) | set(ANCHORS)) - set(ranked))
+    final = ranked + carried
 
     DATA.write_text(
         "# npm typosquat candidates, ranked by weekly downloads.\n"

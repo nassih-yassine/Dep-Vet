@@ -169,6 +169,7 @@ impl OsvClient {
             }
         }
         let bodies = self.fetch_bodies(&unique);
+        let stale_seconds = oldest_stale(stale_seconds, &bodies);
         check_len(
             lists_from(chunk, capped, &bodies, stale_seconds),
             chunk.len(),
@@ -177,15 +178,28 @@ impl OsvClient {
 
     /// Raw advisory bodies keyed by id. A failed fetch is `None`, which becomes
     /// an "unavailable" advisory rather than a missing one.
-    fn fetch_bodies(&self, ids: &[String]) -> std::collections::HashMap<String, Option<String>> {
+    fn fetch_bodies(&self, ids: &[String]) -> Bodies {
         let mut bodies = std::collections::HashMap::new();
         for batch in advisory_batches(ids) {
-            let fetched: Vec<(String, Option<String>)> = std::thread::scope(|scope| {
+            let fetched: Vec<(String, FetchedBody)> = std::thread::scope(|scope| {
                 let handles: Vec<_> = batch
                     .iter()
                     .map(|id| {
                         let url = format!("{}/v1/vulns/{id}", self.base.trim_end_matches('/'));
-                        (id, scope.spawn(move || self.http.get(&url).ok()))
+                        (
+                            id,
+                            scope.spawn(move || {
+                                self.http.get_with_source(&url).ok().map(|(body, source)| {
+                                    let age = match source {
+                                        crate::http::Source::Stale { age_seconds } => {
+                                            Some(age_seconds)
+                                        }
+                                        _ => None,
+                                    };
+                                    (body, age)
+                                })
+                            }),
+                        )
                     })
                     .collect();
                 handles
@@ -197,6 +211,20 @@ impl OsvClient {
         }
         bodies
     }
+}
+
+/// A body plus how old a cached copy was, when it was served stale.
+type FetchedBody = Option<(String, Option<i64>)>;
+type Bodies = std::collections::HashMap<String, FetchedBody>;
+
+/// The batch and every detail body contribute; the oldest stale age wins, so
+/// the finding never understates how old the advice is.
+fn oldest_stale(batch: Option<i64>, bodies: &Bodies) -> Option<i64> {
+    bodies
+        .values()
+        .filter_map(|body| body.as_ref().and_then(|(_, age)| *age))
+        .chain(batch)
+        .max()
 }
 
 /// A server that answers a different number of queries than it was given has
@@ -237,7 +265,7 @@ fn parse_batch_ids(body: &str) -> Result<Vec<Vec<String>>, OsvError> {
 fn lists_from(
     queries: &[OsvQuery],
     ids: Vec<(Vec<String>, usize)>,
-    bodies: &std::collections::HashMap<String, Option<String>>,
+    bodies: &Bodies,
     stale_seconds: Option<i64>,
 ) -> Vec<AdvisoryList> {
     queries
@@ -247,7 +275,7 @@ fn lists_from(
             let advisories = ids
                 .iter()
                 .map(|id| match bodies.get(id) {
-                    Some(Some(body)) => parse_advisory(body, query.ecosystem, &query.name)
+                    Some(Some((body, _))) => parse_advisory(body, query.ecosystem, &query.name)
                         .unwrap_or_else(|_| Advisory::unavailable(id)),
                     _ => Advisory::unavailable(id),
                 })
@@ -552,7 +580,7 @@ mod tests {
             (vec!["GHSA-shared".to_string()], 0),
         ];
         let mut bodies = std::collections::HashMap::new();
-        bodies.insert("GHSA-shared".to_string(), Some(record.to_string()));
+        bodies.insert("GHSA-shared".to_string(), Some((record.to_string(), None)));
 
         let lists = lists_from(&queries, ids, &bodies, None);
         assert_eq!(
