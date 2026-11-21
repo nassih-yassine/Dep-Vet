@@ -96,6 +96,42 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             emit_package(cli, *json, &report)
         }
 
+        Command::Diff {
+            ecosystem,
+            from,
+            to,
+            json,
+        } => {
+            let ecosystem = inspect_ecosystem(ecosystem)?;
+            let from_spec = inspect_spec(ecosystem, from)?;
+            let to_spec = inspect_spec(ecosystem, to)?;
+            if !from_spec.name.eq_ignore_ascii_case(&to_spec.name) {
+                anyhow::bail!("diff needs two versions of the same package");
+            }
+            if from_spec.version.is_none() || to_spec.version.is_none() {
+                anyhow::bail!("diff needs exact versions on both sides");
+            }
+            let http = Arc::new(HttpClient::from_env(cli.no_cache));
+            let limits = dep_vet::archive::Limits::default();
+            let old = dep_vet::inspect::inspect_archive(&http, ecosystem, &from_spec, limits)?;
+            let new = dep_vet::inspect::inspect_archive(&http, ecosystem, &to_spec, limits)?;
+            let report = dep_vet::inspect::build_diff(
+                ecosystem,
+                &from_spec.name,
+                &from_spec,
+                &to_spec,
+                &old,
+                &new,
+            );
+            let output = if *json {
+                dep_vet::report::render_diff_json(&report)?
+            } else {
+                dep_vet::report::render_diff_human(&report, use_color(cli))
+            };
+            print!("{output}");
+            Ok(report.exit_code())
+        }
+
         Command::Inspect {
             ecosystem,
             package,

@@ -8,6 +8,9 @@
   Python, shell, Rust `build.rs`, Go, PHP). Path traversal, absolute paths,
   symlinks, hardlinks, oversized archives, and decompression bombs are rejected
   or bounded. Checksum mismatch is HIGH. Nothing is executed.
+- **Release diff.** `dep-vet diff <ecosystem> <pkg@old> <pkg@new>` compares two
+  archives by content: added, removed, and modified files, new and resolved rule
+  findings, and a warning for newly added executable scripts.
 - **Rule findings** carry rule id, severity, confidence, file, and line, and are
   deterministic across runs.
 

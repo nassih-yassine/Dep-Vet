@@ -295,6 +295,116 @@ pub fn render_inspection_human(report: &crate::inspect::InspectionReport, color:
     out
 }
 
+pub fn render_diff_json(report: &crate::inspect::DiffReport) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Json<'a> {
+        #[serde(flatten)]
+        report: &'a crate::inspect::DiffReport,
+        verdict: Severity,
+        exit_code: u8,
+    }
+
+    serde_json::to_string_pretty(&Json {
+        report,
+        verdict: report.verdict(),
+        exit_code: report.exit_code(),
+    })
+}
+
+pub fn render_diff_human(report: &crate::inspect::DiffReport, color: bool) -> String {
+    let mut out = format!(
+        "diff: {}/{} {} -> {}\n\n",
+        report.ecosystem, report.name, report.from_version, report.to_version
+    );
+    push_field(
+        &mut out,
+        "integrity",
+        &format!("{} -> {}", report.from_integrity, report.to_integrity),
+    );
+    push_field(
+        &mut out,
+        "files",
+        &format!(
+            "{} added, {} removed, {} modified, {} unchanged",
+            report.added.len(),
+            report.removed.len(),
+            report.modified.len(),
+            report.unchanged
+        ),
+    );
+    for (label, files) in [
+        ("added", &report.added),
+        ("removed", &report.removed),
+        ("modified", &report.modified),
+    ] {
+        if files.is_empty() {
+            continue;
+        }
+        let shown = files.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+        let extra = files.len().saturating_sub(8);
+        push_field(
+            &mut out,
+            label,
+            &if extra > 0 {
+                format!("{shown} (+{extra} more)")
+            } else {
+                shown
+            },
+        );
+    }
+    if !report.not_checked.is_empty() {
+        push_field(&mut out, "not checked", &report.not_checked.join(", "));
+    }
+
+    out.push('\n');
+    if report.findings.is_empty() {
+        out.push_str("  no new findings in this release\n");
+    } else {
+        out.push_str(&format!(
+            "  {} new finding{}\n\n",
+            report.findings.len(),
+            if report.findings.len() == 1 { "" } else { "s" }
+        ));
+        for finding in &report.findings {
+            out.push_str(&format!(
+                "  {}  {} {}\n",
+                paint(
+                    &format!("[{}]", finding.severity.label()),
+                    verdict_color(finding.severity),
+                    color
+                ),
+                finding.rule,
+                finding.title
+            ));
+            if !finding.file.is_empty() {
+                out.push_str(&format!("        {}:{}\n", finding.file, finding.line));
+            }
+            for line in wrap(&finding.evidence, 88) {
+                out.push_str(&format!("        {line}\n"));
+            }
+            out.push('\n');
+        }
+    }
+    if !report.resolved.is_empty() {
+        out.push_str(&format!(
+            "  {} finding{} gone since {}\n",
+            report.resolved.len(),
+            if report.resolved.len() == 1 { "" } else { "s" },
+            report.from_version
+        ));
+    }
+    out.push_str(&format!(
+        "\n  verdict {} (exit {})\n",
+        paint(
+            report.verdict().label(),
+            verdict_color(report.verdict()),
+            color
+        ),
+        report.exit_code()
+    ));
+    out
+}
+
 pub fn render_lock_json(report: &LockReport) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
     struct Json<'a> {

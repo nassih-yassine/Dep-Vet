@@ -2227,6 +2227,68 @@ fn inspect_downloads_verifies_and_scans_an_archive() {
     assert_eq!(value["exit_code"], 2);
 }
 
+fn npm_tarball_routes(
+    base: &str,
+    packages: &[(&str, &str, &[u8])],
+) -> HashMap<String, (u16, Vec<u8>)> {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let mut routes = HashMap::new();
+    for (name, version, archive) in packages {
+        let digest =
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(*archive));
+        let doc = format!(
+            r#"{{"name":"{name}","version":"{version}","dist":{{"tarball":"{base}/{name}-{version}.tgz","integrity":"sha512-{digest}"}}}}"#
+        );
+        routes.insert(format!("/{name}/{version}"), (200, doc.into_bytes()));
+        routes.insert(format!("/{name}-{version}.tgz"), (200, archive.to_vec()));
+    }
+    routes
+}
+
+#[test]
+fn diff_reports_added_files_scripts_and_new_findings() {
+    let old = tar_gz(&[("lib/a.js", b"eval(atob(x))\n"), ("old.txt", b"old\n")]);
+    let new = tar_gz(&[
+        ("lib/a.js", b"const a = 1;\n"),
+        ("new.sh", b"#!/bin/sh\necho hi\n"),
+    ]);
+    let registry = MockRegistry::start_with(|base| {
+        npm_tarball_routes(base, &[("pkg", "1.0.0", &old), ("pkg", "1.1.0", &new)])
+    });
+
+    let output = registry
+        .command()
+        .args(["diff", "npm", "pkg@1.0.0", "pkg@1.1.0", "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["added"], serde_json::json!(["new.sh"]));
+    assert_eq!(value["removed"], serde_json::json!(["old.txt"]));
+    assert_eq!(value["modified"], serde_json::json!(["lib/a.js"]));
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["rule"] == "DIFF-NEW-SCRIPT-001"),
+        "{}",
+        value["findings"]
+    );
+    assert!(
+        value["resolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["rule"] == "JS-OBF-001"),
+        "{}",
+        value["resolved"]
+    );
+}
+
 #[test]
 fn inspect_reports_a_checksum_mismatch_as_high() {
     use base64::Engine as _;

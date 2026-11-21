@@ -221,6 +221,19 @@ Python, shell, Rust `build.rs`, Go, and PHP. Maven jars and NuGet packages
 contain compiled artifacts, so their source analysis is reported as not
 checked; JSR archives are not available yet.
 
+### Compare two releases
+
+```sh
+dep-vet diff npm lodash@4.17.20 lodash@4.17.21
+```
+
+Both archives are fetched, verified, and compared by file content: added,
+removed, and modified paths, plus rule findings that appear or disappear. A
+newly added shell script or shebang file gets its own warning, because that is
+where install-time behaviour usually enters. The diff is text-based; a minified
+rewrite can look large without being suspicious, and line numbers shift, so
+rule findings are matched by rule and file, not line.
+
 ### Release transitions
 
 A compromised package rarely looks like a typosquat. The exploitable moment is
@@ -579,6 +592,9 @@ clean.
   scripts, added dependencies, and publisher changes come from the registry;
   dep-vet never unpacks a release. History is requested only for versions from
   the last 30 days.
+- **Release diffs are text-based.** `diff` compares extracted files by content
+  and rule hits by (rule, file). It does not decompile compiled artifacts, and
+  a minified rewrite can produce a large but harmless diff.
 - **Archive inspection never executes a package.** It downloads, verifies,
   extracts in memory, and reads text. No install hooks run, no script is
   sourced, and no file is written outside the process.

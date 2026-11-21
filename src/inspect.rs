@@ -456,3 +456,184 @@ pub fn build_report(
         not_checked,
     }
 }
+
+/// Security-focused comparison of two releases.
+#[derive(Debug, serde::Serialize)]
+pub struct DiffReport {
+    pub ecosystem: Ecosystem,
+    pub name: String,
+    pub from_version: String,
+    pub to_version: String,
+    pub from_integrity: String,
+    pub to_integrity: String,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub modified: Vec<String>,
+    pub unchanged: usize,
+    /// Rule findings present in the new release but not the old one.
+    pub findings: Vec<crate::rules::RuleFinding>,
+    /// Findings that disappeared.
+    pub resolved: Vec<crate::rules::RuleFinding>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_checked: Vec<String>,
+}
+
+impl DiffReport {
+    pub fn verdict(&self) -> crate::model::Severity {
+        self.findings
+            .iter()
+            .map(|finding| finding.severity)
+            .max()
+            .unwrap_or(crate::model::Severity::Info)
+    }
+
+    pub fn exit_code(&self) -> u8 {
+        self.verdict().exit_code()
+    }
+}
+
+fn integrity_label(integrity: &Integrity) -> String {
+    match integrity {
+        Integrity::Verified => "verified".to_string(),
+        Integrity::Unverified => "unverified".to_string(),
+        Integrity::Mismatch { expected, actual } => {
+            format!("MISMATCH (expected {expected}, got {actual})")
+        }
+    }
+}
+
+fn compare_files(
+    old: &[crate::archive::ExtractedFile],
+    new: &[crate::archive::ExtractedFile],
+) -> (Vec<String>, Vec<String>, Vec<String>, usize) {
+    use std::collections::BTreeMap;
+    let old_map: BTreeMap<&str, &str> = old
+        .iter()
+        .map(|file| (file.path.as_str(), file.text.as_str()))
+        .collect();
+    let new_map: BTreeMap<&str, &str> = new
+        .iter()
+        .map(|file| (file.path.as_str(), file.text.as_str()))
+        .collect();
+
+    let added = new_map
+        .keys()
+        .filter(|path| !old_map.contains_key(**path))
+        .map(|path| path.to_string())
+        .collect();
+    let removed = old_map
+        .keys()
+        .filter(|path| !new_map.contains_key(**path))
+        .map(|path| path.to_string())
+        .collect();
+    let modified = new_map
+        .iter()
+        .filter(|(path, text)| old_map.get(**path).is_some_and(|old| old != *text))
+        .map(|(path, _)| path.to_string())
+        .collect();
+    let unchanged = new_map
+        .iter()
+        .filter(|(path, text)| old_map.get(**path).is_some_and(|old| old == *text))
+        .count();
+    (added, removed, modified, unchanged)
+}
+
+/// New shell scripts and shebang files are worth a line in a release diff.
+fn new_script_findings(
+    new_files: &[crate::archive::ExtractedFile],
+    added: &[String],
+) -> Vec<crate::rules::RuleFinding> {
+    let by_path: std::collections::BTreeMap<&str, &str> = new_files
+        .iter()
+        .map(|file| (file.path.as_str(), file.text.as_str()))
+        .collect();
+    added
+        .iter()
+        .filter_map(|path| {
+            let text = by_path.get(path.as_str())?;
+            let shell = path.ends_with(".sh")
+                || path.ends_with(".bash")
+                || path.ends_with(".ps1")
+                || path.ends_with(".bat");
+            let shebang = text.starts_with("#!");
+            if !shell && !shebang {
+                return None;
+            }
+            Some(crate::rules::RuleFinding {
+                rule: "DIFF-NEW-SCRIPT-001",
+                title: "this release adds an executable script",
+                severity: crate::model::Severity::Warn,
+                confidence: crate::model::Confidence::Medium,
+                file: path.clone(),
+                line: 1,
+                evidence: text
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(160)
+                    .collect(),
+                recommendation: "Review the new script before installing the update.",
+            })
+        })
+        .collect()
+}
+
+pub fn build_diff(
+    ecosystem: Ecosystem,
+    name: &str,
+    from_spec: &PackageSpec,
+    to_spec: &PackageSpec,
+    old: &Prepared,
+    new: &Prepared,
+) -> DiffReport {
+    let (added, removed, modified, unchanged) =
+        compare_files(&old.extracted.files, &new.extracted.files);
+
+    let old_findings = crate::rules::scan(&old.extracted.files);
+    let new_findings = crate::rules::scan(&new.extracted.files);
+    let key = |finding: &crate::rules::RuleFinding| (finding.rule, finding.file.clone());
+    let old_keys: std::collections::HashSet<_> = old_findings.iter().map(key).collect();
+    let new_keys: std::collections::HashSet<_> = new_findings.iter().map(key).collect();
+
+    let mut findings: Vec<_> = new_findings
+        .iter()
+        .filter(|finding| !old_keys.contains(&key(finding)))
+        .cloned()
+        .collect();
+    findings.extend(new_script_findings(&new.extracted.files, &added));
+    let resolved: Vec<_> = old_findings
+        .into_iter()
+        .filter(|finding| !new_keys.contains(&key(finding)))
+        .collect();
+    findings.sort_by(|left, right| {
+        left.file
+            .cmp(&right.file)
+            .then(left.line.cmp(&right.line))
+            .then(left.rule.cmp(right.rule))
+    });
+
+    let mut not_checked = Vec::new();
+    if new.extracted.files.is_empty() {
+        not_checked.push("source analysis (no text files in the new archive)".to_string());
+    }
+    if matches!(new.integrity, Integrity::Unverified) {
+        not_checked.push("archive checksum (registry publishes none)".to_string());
+    }
+
+    DiffReport {
+        ecosystem,
+        name: name.to_string(),
+        from_version: from_spec.version.clone().unwrap_or_default(),
+        to_version: to_spec.version.clone().unwrap_or_default(),
+        from_integrity: integrity_label(&old.integrity),
+        to_integrity: integrity_label(&new.integrity),
+        added,
+        removed,
+        modified,
+        unchanged,
+        findings,
+        resolved,
+        not_checked,
+    }
+}

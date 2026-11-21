@@ -153,6 +153,22 @@ pub enum Command {
         json: bool,
     },
 
+    /// Compare two releases of the same package by archive contents
+    Diff {
+        /// Ecosystem: npm, pypi, crates, go, jsr, gem, nuget, maven, composer
+        ecosystem: String,
+
+        /// Older release, with an exact version
+        from: String,
+
+        /// Newer release, with an exact version
+        to: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -216,6 +232,27 @@ mod tests {
                 assert!(!json);
             }
             _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
+    fn parses_diff_command() {
+        let cli =
+            Cli::try_parse_from(["dep-vet", "diff", "npm", "lodash@4.17.20", "lodash@4.17.21"])
+                .unwrap();
+        match cli.command {
+            Command::Diff {
+                ecosystem,
+                from,
+                to,
+                json,
+            } => {
+                assert_eq!(ecosystem, "npm");
+                assert_eq!(from, "lodash@4.17.20");
+                assert_eq!(to, "lodash@4.17.21");
+                assert!(!json);
+            }
+            _ => panic!("expected diff command"),
         }
     }
 
