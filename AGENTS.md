@@ -27,7 +27,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test                              # 118 unit + 26 end-to-end tests
+cargo test                              # 132 unit + 32 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --all-targets -- -D warnings
@@ -50,6 +50,7 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 | File | Owns |
 |------|------|
 | `src/model.rs` | `PackageSpec` parsing/validation, `Severity`, `Finding`, `PackageReport` |
+| `src/lockfile.rs` | `package-lock.json` v2/v3 parsing, flat diff against a git ref |
 | `src/registry.rs` | packument fetch + parsing, download counts, repo URL normalization |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
@@ -80,6 +81,15 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   "advisory without a summary" for every real advisory.
 - **Advisory failure is an INFO finding**, not silence and not exit 3. "We
   could not check" must never read as "nothing found".
+- **`lock` exits 3 when any added package could not be checked**, even if the
+  rest is clean. An incomplete audit is not a pass. Per-package failures are
+  collected in `LockReport.errors`.
+- **`lock` diffs `name@version` pairs**, so a version bump is "new" and gets
+  audited. It reads `package-lock.json` v2/v3 only; v1 is rejected instead of
+  approximated.
+- **`lockfile::at_ref` must run git in the lockfile's directory.** A bare
+  filename has `parent() == Some("")`, which git rejects; the empty-parent case
+  falls back to `.` and has a regression test.
 - **ureq caps bodies at 10 MB.** `registry.rs` raises the limit to 64 MB; the
   `aws-sdk` packument proves why. Removing it silently truncates large packages.
 - **Automation publishers** (`GitHub Actions`, `[bot]` accounts) are not
@@ -97,6 +107,6 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 
 ## Not built yet
 
-`dep-vet lock`, the GitHub Action, PyPI/crates.io, and tree-wide advisory
-lookups. Roadmap only: do not describe these as existing in code, README, or
-help text.
+The GitHub Action, PyPI/crates.io, tree-wide advisory lookups, and non-npm
+lockfiles (yarn, pnpm, bun). Roadmap only: do not describe these as existing in
+code, README, or help text.

@@ -35,6 +35,20 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Audit every dependency a lockfile change adds
+    Lock {
+        /// Path to package-lock.json
+        lockfile: std::path::PathBuf,
+
+        /// Git revision to compare against
+        #[arg(long, default_value = "main")]
+        base: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[cfg(test)]
@@ -49,6 +63,7 @@ mod tests {
                 assert_eq!(package, "express@5.1.0");
                 assert!(!json);
             }
+            _ => panic!("expected npm command"),
         }
         assert!(!cli.no_color);
     }
@@ -58,6 +73,7 @@ mod tests {
         let cli = Cli::try_parse_from(["dep-vet", "npm", "express", "--json"]).unwrap();
         match cli.command {
             Command::Npm { json, .. } => assert!(json),
+            _ => panic!("expected npm command"),
         }
     }
 
@@ -72,6 +88,43 @@ mod tests {
         let cli = Cli::try_parse_from(["dep-vet", "npm", "express", "--no-cache"]).unwrap();
         assert!(cli.no_cache);
         assert!(!cli.no_color);
+    }
+
+    #[test]
+    fn parses_lock_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "lock", "package-lock.json"]).unwrap();
+        match cli.command {
+            Command::Lock {
+                lockfile,
+                base,
+                json,
+            } => {
+                assert_eq!(lockfile, std::path::PathBuf::from("package-lock.json"));
+                assert_eq!(base, "main");
+                assert!(!json);
+            }
+            _ => panic!("expected lock command"),
+        }
+    }
+
+    #[test]
+    fn lock_base_and_json_can_be_overridden() {
+        let cli = Cli::try_parse_from([
+            "dep-vet",
+            "lock",
+            "package-lock.json",
+            "--base",
+            "origin/main",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Lock { base, json, .. } => {
+                assert_eq!(base, "origin/main");
+                assert!(json);
+            }
+            _ => panic!("expected lock command"),
+        }
     }
 
     #[test]
