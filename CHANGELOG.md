@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Install-command classification is token-based.** The risky-command check
+  matches whole words instead of substrings, so `node scripts/evaluate.js` is no
+  longer treated as `eval`, while `python3 -c`, `perl -e`, `pwsh -c`,
+  `node --eval`, `nc`, `iex`, and `bash/sh -c` with a URL now are.
 - **Windows and macOS.** The cache honours `%LOCALAPPDATA%` on Windows, nested
   lockfiles are read with forward-slash git paths and `--end-of-options`, refs
   that look like flags are refused, and CI now runs the test suite on ubuntu,

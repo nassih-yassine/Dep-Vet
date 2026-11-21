@@ -278,9 +278,13 @@ describes it:
 
 - **Dormant then published** (INFO): this version arrived in the last 30 days
   after at least a year with no release. Every ecosystem.
-- **Install scripts changed** (WARN, HIGH when the new command uses `curl`,
-  `base64`, `node -e`, and similar): npm only, compared with the previous
-  release, so a package that always had a build script is not blamed.
+- **Install scripts changed** (WARN, HIGH when the new command runs inline
+  code or fetches and decodes it): npm only, compared with the previous release,
+  so a package that always had a build script is not blamed. Commands are
+  tokenised, so `node scripts/evaluate.js` is a normal build step while
+  `node -e`, `python3 -c`, `perl -e`, `ruby -e`, `php -r`, `bash/sh -c` with a
+  URL, `curl`, `wget`, `nc`, `base64`, `powershell`, `pwsh`, and `iex` are
+  execution patterns.
 - **Dependencies added** (INFO, WARN when an added name looks like a typo):
   npm, Composer, NuGet, and — for releases inside the 30-day window — PyPI and
   crates.io.
