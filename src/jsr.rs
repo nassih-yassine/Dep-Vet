@@ -118,6 +118,8 @@ fn parse_package(
         .as_ref()
         .and_then(|info| info.github_repository.as_ref())
         .map(|repo| format!("https://github.com/{}/{}", repo.owner, repo.name));
+    let latest_version = meta.latest.clone();
+
     let deprecated = info
         .as_ref()
         .filter(|info| info.is_archived)
@@ -140,6 +142,7 @@ fn parse_package(
         deprecated,
         registry_url: url.to_string(),
         review_url: None,
+        latest_version,
     })
 }
 
@@ -225,6 +228,12 @@ mod tests {
             Some("https://github.com/denoland/std")
         );
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn reports_the_meta_latest_for_an_older_pin() {
+        let meta = fetch(META, None, Some("0.1.0")).unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("1.0.19"));
     }
 
     #[test]

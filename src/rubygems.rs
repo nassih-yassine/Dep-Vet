@@ -130,6 +130,21 @@ fn parse_versions(
         })
         .filter(|url| !url.trim().is_empty());
 
+    let latest_version = latest
+        .as_ref()
+        .map(|latest| latest.version.clone())
+        .or_else(|| {
+            releases
+                .iter()
+                .max_by_key(|release| {
+                    release
+                        .created_at
+                        .as_deref()
+                        .and_then(date::parse_timestamp)
+                })
+                .map(|release| release.number.clone())
+        });
+
     let is_latest = latest
         .as_ref()
         .is_some_and(|latest| latest.version == release.number);
@@ -155,6 +170,7 @@ fn parse_versions(
         deprecated,
         registry_url: url.to_string(),
         review_url: None,
+        latest_version,
     })
 }
 
@@ -253,6 +269,12 @@ mod tests {
             Some("https://github.com/rack/rack")
         );
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn reports_the_latest_gem_for_an_older_pin() {
+        let meta = fetch(VERSIONS, Some(LATEST), Some("3.0.0")).unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("3.2.9"));
     }
 
     #[test]

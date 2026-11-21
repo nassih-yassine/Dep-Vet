@@ -21,4 +21,5 @@ pub mod report;
 pub mod rubygems;
 pub mod signals;
 pub mod typosquat;
+pub mod version;
 pub mod watch;

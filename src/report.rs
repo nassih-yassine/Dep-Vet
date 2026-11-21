@@ -3,7 +3,8 @@
 use owo_colors::OwoColorize;
 use serde::Serialize;
 
-use crate::model::{AuditReport, LockFetchError, LockReport, PackageReport, Severity};
+use crate::model::{AuditReport, LockFetchError, LockReport, PackageReport, Severity, Upgrade};
+use crate::version::leading_number;
 
 pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
@@ -119,6 +120,10 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
         }
     }
 
+    if !report.upgrades.is_empty() {
+        out.push_str(&render_advice(&report.upgrades, &report.version));
+    }
+
     out.push_str(&format!(
         "  review: {}\n",
         report
@@ -126,6 +131,54 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
             .clone()
             .unwrap_or_else(|| report.ecosystem.package_url(&report.name, &report.version))
     ));
+    out
+}
+
+/// The `fixes` block of a single-package report. A replacement hides version
+/// advice: a newer copy of a lookalike is not the fix.
+fn render_advice(upgrades: &[Upgrade], version: &str) -> String {
+    let mut out = String::from("  fixes\n");
+    let current = leading_number(version);
+
+    for upgrade in upgrades {
+        if let Some(replacement) = &upgrade.replace_with {
+            out.push_str(&format!("    use {replacement} instead\n"));
+            continue;
+        }
+
+        if !upgrade.fixed.is_empty() {
+            let shown: Vec<&str> = upgrade.fixed.iter().take(3).map(String::as_str).collect();
+            let extra = upgrade.fixed.len().saturating_sub(shown.len());
+            let mut line = format!("fixed in {}", shown.join(", "));
+            if extra > 0 {
+                line.push_str(&format!(" (+{extra} more)"));
+            }
+            if !upgrade.fixes.is_empty() {
+                let shown: Vec<&str> = upgrade.fixes.iter().take(3).map(String::as_str).collect();
+                let extra = upgrade.fixes.len().saturating_sub(shown.len());
+                line.push_str(&format!("   fixes {}", shown.join(", ")));
+                if extra > 0 {
+                    line.push_str(&format!(" (+{extra})"));
+                }
+            }
+            if leading_number(&upgrade.fixed[0]) != current {
+                line.push_str("   (major jump, may break)");
+            }
+            out.push_str(&format!("    {line}\n"));
+        } else if !upgrade.fix_unknown {
+            out.push_str("    no fixed version published\n");
+        }
+        if upgrade.fix_unknown {
+            out.push_str("    fix unknown (advisory details unavailable)\n");
+        }
+
+        if let Some(newest) = &upgrade.newest {
+            let jump = leading_number(newest) != current;
+            let suffix = if jump { "   major jump, may break" } else { "" };
+            out.push_str(&format!("    newest {newest}{suffix}\n"));
+        }
+    }
+    out.push('\n');
     out
 }
 
@@ -204,6 +257,57 @@ struct TreeView<'a> {
     color: bool,
 }
 
+/// One actionable block for a whole tree, worst verdict first. Clean packages
+/// are absent, so this never reads as an "out of date" list.
+fn render_tree_advice(packages: &[PackageReport]) -> Option<String> {
+    let mut advised: Vec<&PackageReport> = packages
+        .iter()
+        .filter(|package| !package.upgrades.is_empty())
+        .collect();
+    if advised.is_empty() {
+        return None;
+    }
+    advised.sort_by(|left, right| {
+        right
+            .verdict()
+            .cmp(&left.verdict())
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let mut out = String::from("\n  what to do\n\n");
+    for package in advised {
+        for upgrade in &package.upgrades {
+            let subject = format!("{} {}", package.name, package.version);
+            let action = if let Some(replacement) = &upgrade.replace_with {
+                format!("→ {replacement}")
+            } else if let Some(fixed) = upgrade.fixed.first() {
+                let mut line = format!("→ {fixed}");
+                if !upgrade.fixes.is_empty() {
+                    let shown: Vec<&str> =
+                        upgrade.fixes.iter().take(3).map(String::as_str).collect();
+                    let extra = upgrade.fixes.len().saturating_sub(shown.len());
+                    line.push_str(&format!("   fixes {}", shown.join(", ")));
+                    if extra > 0 {
+                        line.push_str(&format!(" (+{extra})"));
+                    }
+                }
+                if leading_number(fixed) != leading_number(&package.version) {
+                    line.push_str("   (major jump, may break)");
+                }
+                line
+            } else if upgrade.fix_unknown {
+                "→ fix unknown".to_string()
+            } else if let Some(newest) = &upgrade.newest {
+                format!("no fixed version published; newest {newest}")
+            } else {
+                "no fixed version published".to_string()
+            };
+            out.push_str(&format!("    {subject:<40} {action}\n"));
+        }
+    }
+    Some(out)
+}
+
 fn render_tree(view: TreeView<'_>) -> String {
     let mut out = format!("{}\n\n", view.header);
 
@@ -253,6 +357,10 @@ fn render_tree(view: TreeView<'_>) -> String {
             out.push_str(&format!("    {}: {}\n", error.package, error.message));
         }
         out.push_str("  this report is incomplete\n");
+    }
+
+    if let Some(block) = render_tree_advice(view.packages) {
+        out.push_str(&block);
     }
 
     out.push_str(&format!(
@@ -354,6 +462,7 @@ mod tests {
             not_checked: Vec::new(),
             registry_url: "https://registry.npmjs.org/evil-pkg".to_string(),
             review_url: None,
+            upgrades: Vec::new(),
             findings,
         }
     }
@@ -383,6 +492,86 @@ mod tests {
         assert!(text.contains("-> https://registry.npmjs.org/evil-pkg"));
         assert!(text.contains("1,234/week"));
         assert!(text.contains("https://www.npmjs.com/package/evil-pkg/v/1.0.0"));
+    }
+
+    fn report_with_upgrades(upgrades: Vec<crate::model::Upgrade>, version: &str) -> PackageReport {
+        let mut report = report(Vec::new());
+        report.version = version.to_string();
+        report.upgrades = upgrades;
+        report
+    }
+
+    fn upgrade(fixed: &[&str], newest: Option<&str>) -> crate::model::Upgrade {
+        crate::model::Upgrade {
+            fixed: fixed.iter().map(|value| value.to_string()).collect(),
+            fix_unknown: false,
+            newest: newest.map(str::to_string),
+            fixes: vec!["GHSA-a".to_string()],
+            replace_with: None,
+        }
+    }
+
+    #[test]
+    fn advice_shows_the_fixed_version_and_newest_hint() {
+        let report =
+            report_with_upgrades(vec![upgrade(&["2.0.1", "1.2.3"], Some("3.0.0"))], "2.1.0");
+        let out = render_human(&report, false);
+        assert!(out.contains("fixed in 2.0.1, 1.2.3"), "{out}");
+        assert!(out.contains("newest 3.0.0"), "{out}");
+        assert!(out.contains("major jump, may break"), "{out}");
+    }
+
+    #[test]
+    fn unknown_fix_is_not_worded_as_no_fix() {
+        let mut item = upgrade(&[], None);
+        item.fix_unknown = true;
+        item.fixes = vec!["GHSA-x".to_string()];
+        let report = report_with_upgrades(vec![item], "1.0.0");
+        let out = render_human(&report, false);
+        assert!(out.contains("fix unknown"), "{out}");
+        assert!(!out.contains("no fixed version published"), "{out}");
+    }
+
+    #[test]
+    fn a_mixed_unknown_advisory_is_printed_as_unknown() {
+        let mut item = upgrade(&["2.0.1"], None);
+        item.fix_unknown = true;
+        item.fixes = vec!["GHSA-fixed".to_string()];
+        let report = report_with_upgrades(vec![item], "2.0.0");
+        let out = render_human(&report, false);
+        assert!(out.contains("fixed in 2.0.1"), "{out}");
+        assert!(out.contains("fix unknown"), "{out}");
+        assert!(!out.contains("GHSA-unknown"), "{out}");
+    }
+
+    #[test]
+    fn a_replacement_hides_version_advice() {
+        let mut item = upgrade(&["2.0.1"], Some("3.0.0"));
+        item.replace_with = Some("cross-env".to_string());
+        let report = report_with_upgrades(vec![item], "1.0.0");
+        let out = render_human(&report, false);
+        assert!(out.contains("use cross-env instead"), "{out}");
+        assert!(!out.contains("fixed in"), "{out}");
+    }
+
+    #[test]
+    fn a_clean_report_has_no_advice_block() {
+        let report = report_with_upgrades(Vec::new(), "1.0.0");
+        let out = render_human(&report, false);
+        assert!(!out.contains("  fixes"), "{out}");
+    }
+
+    #[test]
+    fn long_fixed_lists_are_capped() {
+        let report = report_with_upgrades(
+            vec![upgrade(&["2.0.1", "2.0.2", "2.0.3", "2.0.4"], None)],
+            "2.0.0",
+        );
+        let out = render_human(&report, false);
+        assert!(
+            out.contains("fixed in 2.0.1, 2.0.2, 2.0.3 (+1 more)"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -552,6 +741,44 @@ mod tests {
         assert_eq!(value["errors"][0]["package"], "ghost@1.0.0");
         assert_eq!(value["exit_code"], 3);
         assert!(render_audit_human(&audit, false).contains("incomplete"));
+    }
+
+    #[test]
+    fn the_tree_block_lists_worst_first_and_skips_clean_packages() {
+        let mut lock = lock_report();
+        let mut high = report(vec![finding(Severity::High)]);
+        high.name = "log4j-core".to_string();
+        high.version = "2.14.1".to_string();
+        high.upgrades = vec![upgrade(&["2.17.1"], None)];
+        let mut warn = report(vec![finding(Severity::Warn)]);
+        warn.name = "crossenv".to_string();
+        warn.version = "0.0.2-security".to_string();
+        warn.upgrades = vec![crate::model::Upgrade {
+            fixed: Vec::new(),
+            fix_unknown: false,
+            newest: None,
+            fixes: Vec::new(),
+            replace_with: Some("cross-env".to_string()),
+        }];
+        let clean = report(vec![]);
+        lock.new_packages = vec![clean, warn, high];
+
+        let text = render_lock_human(&lock, false);
+        let block = text.find("what to do").expect("missing block");
+        let high_at = text[block..].find("log4j-core").expect("high line");
+        let warn_at = text[block..].find("crossenv").expect("warn line");
+        assert!(high_at < warn_at, "{text}");
+        assert!(text[block..].contains("2.17.1"), "{text}");
+        assert!(text[block..].contains("cross-env"), "{text}");
+        assert!(!text[block..].contains("evil-pkg"), "{text}");
+    }
+
+    #[test]
+    fn a_tree_without_advice_has_no_block() {
+        let mut lock = lock_report();
+        lock.new_packages = vec![report(Vec::new())];
+        let text = render_lock_human(&lock, false);
+        assert!(!text.contains("what to do"), "{text}");
     }
 
     #[test]

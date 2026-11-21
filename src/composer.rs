@@ -147,6 +147,7 @@ fn parse_metadata(
     Ok(PackageMeta {
         name: spec.name.clone(),
         version: release.version.clone(),
+        latest_version: Some(latest(&releases).version.clone()),
         first_published_at,
         published_at: release.time.as_deref().and_then(date::parse_timestamp),
         maintainers,
@@ -323,6 +324,18 @@ mod tests {
         ] } }"#;
         let meta = parse_metadata(&spec("x/y", None), body, None, "url").unwrap();
         assert_eq!(meta.version, "2.0.0");
+    }
+
+    #[test]
+    fn reports_the_newest_release_for_an_older_pin() {
+        let meta = parse_metadata(
+            &spec("monolog/monolog", Some("3.0.0")),
+            P2,
+            Some(&package()),
+            "url",
+        )
+        .unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("3.13.0"));
     }
 
     #[test]

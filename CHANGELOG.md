@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Upgrade advice.** Reports now end with what to do: the version OSV says fixes
+  the advisory (or `no fixed version published` / `fix unknown`), the newest
+  published version as a labelled hint, and the real package behind a lookalike
+  name. `audit` and `lock` close with one worst-first block. Advice never changes
+  a verdict or an exit code.
+
 ## 0.7.0 — 2026-11-21
 
 - **Legacy NuGet:** `packages.config` audits its `<package id version />`

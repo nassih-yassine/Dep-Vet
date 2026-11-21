@@ -348,6 +348,16 @@ pub enum Ecosystem {
     Composer,
 }
 
+/// Whether two package names refer to the same package. Case is folded for
+/// every ecosystem; PyPI also folds the separators PEP 503 treats as equal.
+pub fn names_match(ecosystem: Ecosystem, left: &str, right: &str) -> bool {
+    let fold = |name: &str| match ecosystem {
+        Ecosystem::Pypi => name.to_ascii_lowercase().replace(['_', '.'], "-"),
+        _ => name.to_ascii_lowercase(),
+    };
+    fold(left) == fold(right)
+}
+
 impl Ecosystem {
     pub fn cli_name(self) -> &'static str {
         match self {
@@ -705,7 +715,31 @@ pub struct PackageReport {
     /// live on its main registry (Google Maven, for example).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_url: Option<String>,
+    /// What to do about this package, when there is something to do.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub upgrades: Vec<Upgrade>,
     pub findings: Vec<Finding>,
+}
+
+/// One actionable line for a package. The fixed version is what OSV publishes;
+/// the newest version is a hint and never claims to fix anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Upgrade {
+    /// Versions OSV says fix this package's advisories, audited major first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<String>,
+    /// An advisory could not be read, so its fix is unknown, not absent.
+    #[serde(skip_serializing_if = "is_false")]
+    pub fix_unknown: bool,
+    /// Highest published version, secondary hint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub newest: Option<String>,
+    /// Advisory ids whose fixes are in `fixed` or unknown.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<String>,
+    /// The package a lookalike name probably meant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replace_with: Option<String>,
 }
 
 impl PackageReport {
@@ -927,6 +961,29 @@ mod tests {
     }
 
     #[test]
+    fn package_names_match_regardless_of_case_and_pypi_separators() {
+        assert!(names_match(Ecosystem::Npm, "React", "react"));
+        assert!(names_match(Ecosystem::Pypi, "Flask", "flask"));
+        assert!(names_match(
+            Ecosystem::Pypi,
+            "zope.interface",
+            "zope-interface"
+        ));
+        assert!(names_match(
+            Ecosystem::Pypi,
+            "zope_interface",
+            "zope.interface"
+        ));
+        assert!(names_match(
+            Ecosystem::Maven,
+            "Org.Slf4j:Slf4j-Api",
+            "org.slf4j:slf4j-api"
+        ));
+        assert!(!names_match(Ecosystem::Npm, "react", "preact"));
+        assert!(!names_match(Ecosystem::Pypi, "foo", "bar"));
+    }
+
+    #[test]
     fn parses_maven_coordinates() {
         assert_eq!(
             PackageSpec::parse_maven("org.slf4j:slf4j-api").unwrap(),
@@ -1088,6 +1145,7 @@ mod tests {
             not_checked: Vec::new(),
             registry_url: String::new(),
             review_url: None,
+            upgrades: Vec::new(),
             findings,
         }
     }

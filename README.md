@@ -173,6 +173,27 @@ What each format contributes, and what it cannot:
 | `composer.lock` | `packages` and `packages-dev` | dev-only advisories are still reported |
 | `gradle.lockfile` | `group:artifact:version` lines, including `buildscript-`/`settings-` variants | unlocked configurations; Gradle without dependency locking |
 
+### What to do about a finding
+
+Reports with advisories end with the fix, not just the problem:
+
+```console
+$ dep-vet audit composer.lock
+
+  what to do
+
+    guzzlehttp/guzzle 7.9.2    → 7.14.2   fixes GHSA-94pj-82f3-465w, ... (+6)
+    crossenv 0.0.2-security    → cross-env
+```
+
+`fixed in` is the version OSV says fixes the advisory; the advisory ids point
+back to the linked findings above. When no fix was published the line says so; when OSV would not return
+the advisory's details it says `fix unknown`, never "no fix". `newest` is a
+separate hint and never claims the new version is safe. A lookalike name
+suggests the package it resembles, never a version. Advice never changes the
+verdict or the exit code, and packages with no advisory or lookalike finding get
+no line.
+
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
 
@@ -508,6 +529,9 @@ clean.
   their `freshness` signal is reported as `not checked`. Composer has maintainers,
   repository metadata, and an abandoned flag, but no install-time file list and
   no weekly download figure.
+- **Advice is a pointer, not a guarantee.** `fixed in` is what OSV publishes for
+  that advisory; `newest` is the highest published version and may be a breaking
+  major or still vulnerable. dep-vet never upgrades, rewrites, or tests anything.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the

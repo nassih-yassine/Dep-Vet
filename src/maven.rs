@@ -198,6 +198,13 @@ fn parse_search(
             .unwrap_or(&docs[0]),
     };
 
+    let latest_version = docs
+        .iter()
+        .filter(|doc| !is_prerelease(&doc.v))
+        .max_by_key(|doc| doc.timestamp.unwrap_or(0))
+        .or_else(|| docs.iter().max_by_key(|doc| doc.timestamp.unwrap_or(0)))
+        .map(|doc| doc.v.clone());
+
     let seconds = |millis: i64| millis / 1000;
     let first_published_at = oldest.map(seconds).or_else(|| {
         docs.iter()
@@ -221,6 +228,7 @@ fn parse_search(
         deprecated: None,
         registry_url: url.to_string(),
         review_url: None,
+        latest_version,
     })
 }
 
@@ -279,6 +287,11 @@ fn google_meta(
         review_url: Some(format!(
             "https://maven.google.com/web/index.html#{group}:{artifact}:{version}"
         )),
+        latest_version: versions
+            .iter()
+            .rfind(|candidate| !is_prerelease(candidate))
+            .or_else(|| versions.last())
+            .cloned(),
     })
 }
 
@@ -434,6 +447,24 @@ mod tests {
         for version in ["1.0.0-M1", "1.0.0-rc1", "1.0.0-SNAPSHOT", "2.0-beta"] {
             assert!(is_prerelease(version), "{version}");
         }
+    }
+
+    #[test]
+    fn reports_the_newest_stable_version_for_an_older_pin() {
+        let meta = fetch(SEARCH, Some("1.7.36")).unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("2.0.17"));
+    }
+
+    #[test]
+    fn google_metadata_reports_its_newest_stable_version() {
+        let versions = parse_metadata_versions(GOOGLE_METADATA);
+        let meta = google_meta(
+            &spec("androidx.core:core-ktx", Some("1.13.0")),
+            &versions,
+            "u",
+        )
+        .unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("1.13.1"));
     }
 
     #[test]

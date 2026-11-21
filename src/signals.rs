@@ -2,10 +2,12 @@
 //! and severity only escalates when signals reinforce each other.
 
 use crate::date;
+use crate::model::Upgrade;
 use crate::model::{Ecosystem, Evidence, Finding, PackageReport, Profile, Severity};
 use crate::osv::{Advisory, AdvisoryList, MAX_ADVISORIES};
 use crate::registry::PackageMeta;
 use crate::typosquat;
+use crate::version::leading_number;
 
 /// A package younger than this has no track record.
 pub const FRESH_DAYS: i64 = 7;
@@ -34,6 +36,11 @@ pub fn report(
     }
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
 
+    let suspect = suspect_for(&meta, ecosystem, local, &profile);
+    let upgrades = upgrade_advice(&meta, advisories, suspect.as_ref())
+        .into_iter()
+        .collect();
+
     // A registry that reports no publish date cannot support the freshness
     // rules; say so instead of letting silence read as "freshness checked".
     let mut not_checked = profile.not_checked();
@@ -60,8 +67,66 @@ pub fn report(
         not_checked,
         registry_url: meta.registry_url,
         review_url: meta.review_url,
+        upgrades,
         findings,
     }
+}
+
+/// Advice is driven only by advisories and by a lookalike name. A package whose
+/// findings are all install scripts, deprecation, or freshness gets nothing, so
+/// the report never becomes an "out of date" nag.
+fn upgrade_advice(
+    meta: &PackageMeta,
+    advisories: Option<&AdvisoryList>,
+    suspect: Option<&typosquat::Suspect<'_>>,
+) -> Option<Upgrade> {
+    let mut fixed: Vec<String> = Vec::new();
+    let mut fixes: Vec<String> = Vec::new();
+    let mut fix_unknown = false;
+
+    if let Some(list) = advisories {
+        for advisory in &list.advisories {
+            if advisory.details_missing {
+                // Its fix is unknown, so it must not be attached to a version.
+                fix_unknown = true;
+                continue;
+            }
+            if advisory.fixed_versions.is_empty() {
+                continue;
+            }
+            for version in &advisory.fixed_versions {
+                if !fixed.contains(version) {
+                    fixed.push(version.clone());
+                }
+            }
+            fixes.push(advisory.id.clone());
+        }
+    }
+
+    // Prefer the fix on the audited major line; keep OSV's order otherwise.
+    let current = leading_number(&meta.version);
+    fixed.sort_by_key(|version| (leading_number(version) != current) as u8);
+
+    // The newest hint exists only to act on an advisory; on its own it would
+    // turn every report into an "out of date" nag.
+    let has_advisory = advisories.is_some_and(|list| !list.advisories.is_empty());
+    let newest = meta
+        .latest_version
+        .clone()
+        .filter(|_| has_advisory)
+        .filter(|version| *version != meta.version && !fixed.contains(version));
+    let replace_with = suspect.map(|suspect| suspect.candidate.to_string());
+
+    if fixed.is_empty() && !fix_unknown && newest.is_none() && replace_with.is_none() {
+        return None;
+    }
+    Some(Upgrade {
+        fixed,
+        fix_unknown,
+        newest,
+        fixes,
+        replace_with,
+    })
 }
 
 /// Accounts that publish on behalf of a project's CI, not people.
@@ -192,15 +257,17 @@ pub fn advisory_check_unavailable() -> Finding {
     }
 }
 
-pub fn assess(
+/// The nearest popular name, when typosquatting is enabled. Called by `assess`
+/// for the finding and by `report` for the replacement advice.
+fn suspect_for<'a>(
     meta: &PackageMeta,
     ecosystem: Ecosystem,
-    local: &[String],
+    local: &'a [String],
     profile: &Profile,
-    now: i64,
-) -> Vec<Finding> {
-    let mut findings = Vec::new();
-
+) -> Option<typosquat::Suspect<'a>> {
+    if !profile.typosquat {
+        return None;
+    }
     let seed = match ecosystem {
         Ecosystem::Npm => typosquat::popular_npm(),
         Ecosystem::Pypi => typosquat::POPULAR_PYPI,
@@ -212,11 +279,19 @@ pub fn assess(
         Ecosystem::Maven => typosquat::POPULAR_MAVEN,
         Ecosystem::Composer => typosquat::POPULAR_COMPOSER,
     };
-    let suspect = if profile.typosquat {
-        typosquat::closest(&meta.name, seed, local)
-    } else {
-        None
-    };
+    typosquat::closest(&meta.name, seed, local)
+}
+
+pub fn assess(
+    meta: &PackageMeta,
+    ecosystem: Ecosystem,
+    local: &[String],
+    profile: &Profile,
+    now: i64,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    let suspect = suspect_for(meta, ecosystem, local, profile);
     let typosquat_high = match suspect {
         Some(suspect) => {
             let high = suspect.homoglyph || suspect.distance <= 1;
@@ -492,6 +567,7 @@ mod tests {
             deprecated: None,
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
             review_url: None,
+            latest_version: None,
         }
     }
 
@@ -504,6 +580,166 @@ mod tests {
             .iter()
             .find(|finding| finding.id == id)
             .unwrap_or_else(|| panic!("missing finding {id}"))
+    }
+
+    fn fixed_advisory(id: &str, fixed: &[&str]) -> Advisory {
+        Advisory {
+            id: id.to_string(),
+            summary: "a real vulnerability".to_string(),
+            severity: Severity::High,
+            aliases: Vec::new(),
+            url: format!("https://osv.dev/vulnerability/{id}"),
+            fixed_versions: fixed.iter().map(|version| version.to_string()).collect(),
+            details_missing: false,
+        }
+    }
+
+    fn advice_report(meta: PackageMeta, advisories: Option<&AdvisoryList>) -> PackageReport {
+        super::report(
+            meta,
+            Ecosystem::Npm,
+            None,
+            advisories,
+            &[],
+            Profile::NPM,
+            NOW,
+        )
+    }
+
+    #[test]
+    fn advisory_advice_prefers_the_fixed_version_on_the_audited_major() {
+        let mut meta = meta();
+        meta.version = "2.1.0".to_string();
+        meta.latest_version = Some("3.0.0".to_string());
+        let list = AdvisoryList {
+            advisories: vec![fixed_advisory("GHSA-a", &["1.2.3", "2.0.1"])],
+            hidden: 0,
+        };
+
+        let report = advice_report(meta, Some(&list));
+        let upgrade = &report.upgrades[0];
+        assert_eq!(
+            upgrade.fixed,
+            vec!["2.0.1".to_string(), "1.2.3".to_string()]
+        );
+        assert_eq!(upgrade.newest.as_deref(), Some("3.0.0"));
+        assert_eq!(upgrade.fixes, vec!["GHSA-a".to_string()]);
+        assert!(!upgrade.fix_unknown);
+    }
+
+    #[test]
+    fn no_fix_published_is_not_unknown() {
+        let mut meta = meta();
+        meta.latest_version = Some("2.0.0".to_string());
+        let list = AdvisoryList {
+            advisories: vec![fixed_advisory("GHSA-a", &[])],
+            hidden: 0,
+        };
+
+        let report = advice_report(meta, Some(&list));
+        let upgrade = &report.upgrades[0];
+        assert!(upgrade.fixed.is_empty());
+        assert!(!upgrade.fix_unknown);
+        assert_eq!(upgrade.newest.as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn an_unhydrated_advisory_is_unknown_not_unfixed() {
+        let list = AdvisoryList {
+            advisories: vec![Advisory {
+                id: "GHSA-x".to_string(),
+                summary: "OSV did not return details for this advisory".to_string(),
+                severity: Severity::Warn,
+                aliases: Vec::new(),
+                url: "https://osv.dev/vulnerability/GHSA-x".to_string(),
+                fixed_versions: Vec::new(),
+                details_missing: true,
+            }],
+            hidden: 0,
+        };
+
+        let report = advice_report(meta(), Some(&list));
+        let upgrade = &report.upgrades[0];
+        assert!(upgrade.fix_unknown);
+        assert!(upgrade.fixed.is_empty());
+    }
+
+    #[test]
+    fn a_mixed_unknown_advisory_is_not_listed_as_fixed() {
+        let list = AdvisoryList {
+            advisories: vec![
+                fixed_advisory("GHSA-fixed", &["2.0.1"]),
+                Advisory {
+                    id: "GHSA-unknown".to_string(),
+                    summary: "OSV did not return details for this advisory".to_string(),
+                    severity: Severity::Warn,
+                    aliases: Vec::new(),
+                    url: "https://osv.dev/vulnerability/GHSA-unknown".to_string(),
+                    fixed_versions: Vec::new(),
+                    details_missing: true,
+                },
+            ],
+            hidden: 0,
+        };
+
+        let report = advice_report(meta(), Some(&list));
+        let upgrade = &report.upgrades[0];
+        assert_eq!(upgrade.fixed, vec!["2.0.1".to_string()]);
+        assert!(upgrade.fix_unknown);
+        assert_eq!(upgrade.fixes, vec!["GHSA-fixed".to_string()]);
+    }
+
+    #[test]
+    fn newest_equal_to_the_audited_version_is_dropped() {
+        let mut meta = meta();
+        meta.latest_version = Some(meta.version.clone());
+        let list = AdvisoryList {
+            advisories: vec![fixed_advisory("GHSA-a", &["2.0.0"])],
+            hidden: 0,
+        };
+
+        let report = advice_report(meta, Some(&list));
+        assert_eq!(report.upgrades[0].newest, None);
+    }
+
+    #[test]
+    fn install_scripts_alone_produce_no_advice() {
+        let mut meta = meta();
+        meta.latest_version = Some("9.9.9".to_string());
+        meta.install_scripts.push(InstallScript {
+            name: "postinstall".to_string(),
+            command: "node setup.js".to_string(),
+        });
+
+        let report = advice_report(meta, Some(&AdvisoryList::default()));
+        assert!(report.upgrades.is_empty());
+    }
+
+    #[test]
+    fn a_typosquat_suggests_the_real_package_and_no_version() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+
+        let report = advice_report(meta, None);
+        let upgrade = &report.upgrades[0];
+        assert_eq!(upgrade.replace_with.as_deref(), Some("cross-env"));
+        assert!(upgrade.fixed.is_empty());
+        assert_eq!(upgrade.newest, None);
+    }
+
+    #[test]
+    fn a_typosquat_with_an_advisory_keeps_both_facts() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+        let list = AdvisoryList {
+            advisories: vec![fixed_advisory("GHSA-a", &["2.0.0"])],
+            hidden: 0,
+        };
+
+        let report = advice_report(meta, Some(&list));
+        let upgrade = &report.upgrades[0];
+        assert_eq!(upgrade.replace_with.as_deref(), Some("cross-env"));
+        assert_eq!(upgrade.fixed, vec!["2.0.0".to_string()]);
     }
 
     #[test]
@@ -912,6 +1148,8 @@ mod tests {
             severity,
             aliases: vec!["CVE-2000-0001".to_string()],
             url: format!("https://osv.dev/vulnerability/{id}"),
+            fixed_versions: Vec::new(),
+            details_missing: false,
         }
     }
 
