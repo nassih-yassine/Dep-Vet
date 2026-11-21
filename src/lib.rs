@@ -22,6 +22,7 @@ pub mod pypi;
 pub mod registry;
 pub mod report;
 pub mod rubygems;
+pub mod rules;
 pub mod signals;
 pub mod typosquat;
 pub mod version;

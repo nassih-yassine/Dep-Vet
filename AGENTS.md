@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 433 unit + 112 end-to-end tests
+cargo test --locked                      # 456 unit + 115 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -270,6 +270,16 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   from the workflow), and the job has `actions: write`. If auto-merge is off,
   the PR waits for a human.
   Do not commit generated data by hand outside the script.
+- **Archive inspection is download-only.** `src/archive` extracts in memory with
+  `Limits` (25 MB compressed, 100 MB total, 10k entries, 5 MB/file); nothing is
+  written to disk and nothing is executed. Absolute paths, `..`, symlinks,
+  hardlinks, and non-file entries are skipped and counted. `src/inspect` resolves
+  per-ecosystem archive URLs and trusted checksums; a mismatch is a HIGH finding
+  (`ARCHIVE-CHECKSUM-001`). JSR has no documented tarball URL; Maven without a
+  sources jar and NuGet compiled packages report source analysis as not checked.
+  Rules in `src/rules.rs`: a lone API match is WARN with medium confidence;
+  network plus credential access, or `eval(atob(...))`, is HIGH. Comments are
+  skipped, and findings sort by (file, line, rule) for reproducible output.
 - **Release-transition signals are history-based and gated.** `HISTORY_WINDOW_DAYS`
   (30) bounds them: PyPI and crates.io fetch two extra documents only for a
   version inside it. `previous_release` picks by timestamp, never list order.

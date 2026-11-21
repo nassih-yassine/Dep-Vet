@@ -197,6 +197,30 @@ no line.
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
 
+### Inspect a release archive
+
+Metadata cannot show what a release actually contains. `inspect` downloads the
+archive, verifies its checksum, extracts it in memory, and scans source text:
+
+```sh
+dep-vet inspect npm lodash@4.17.20
+dep-vet inspect pypi flask==2.0.0
+dep-vet inspect maven org.slf4j:slf4j-api@2.0.17   # sources jar when published
+dep-vet inspect nuget Newtonsoft.Json@12.0.1      # compiled: reports that
+```
+
+Nothing is executed and nothing is extracted to disk. Limits are 25 MB
+compressed, 100 MB uncompressed, 10,000 entries, and 5 MB per file. Entries
+with absolute paths, `..`, symlinks, or hardlinks are skipped. A checksum
+mismatch is a HIGH finding, not a warning.
+
+Rules are deliberately conservative: one suspicious API call is a WARN, and
+only a combination (network plus credential access in one file, or an encoded
+payload passed to `eval`) reaches HIGH. The first set covers JavaScript,
+Python, shell, Rust `build.rs`, Go, and PHP. Maven jars and NuGet packages
+contain compiled artifacts, so their source analysis is reported as not
+checked; JSR archives are not available yet.
+
 ### Release transitions
 
 A compromised package rarely looks like a typosquat. The exploitable moment is
@@ -555,6 +579,9 @@ clean.
   scripts, added dependencies, and publisher changes come from the registry;
   dep-vet never unpacks a release. History is requested only for versions from
   the last 30 days.
+- **Archive inspection never executes a package.** It downloads, verifies,
+  extracts in memory, and reads text. No install hooks run, no script is
+  sourced, and no file is written outside the process.
 - **Advice is a pointer, not a guarantee.** `fixed in` is what OSV publishes for
   that advisory; `newest` is the highest published version and may be a breaking
   major or still vulnerable. dep-vet never upgrades, rewrites, or tests anything.

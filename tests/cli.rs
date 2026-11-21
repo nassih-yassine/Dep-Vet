@@ -20,8 +20,30 @@ struct MockRegistry {
 
 impl MockRegistry {
     fn start(routes: HashMap<String, (u16, String)>) -> Self {
+        let binary: HashMap<String, (u16, Vec<u8>)> = routes
+            .into_iter()
+            .map(|(path, (status, body))| (path, (status, body.into_bytes())))
+            .collect();
+        Self::start_binary(binary)
+    }
+
+    /// Routes with byte bodies (archives), built after the port is known so a
+    /// tarball URL can point back at this server.
+    fn start_with(build: impl FnOnce(&str) -> HashMap<String, (u16, Vec<u8>)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
         let port = listener.local_addr().unwrap().port();
+        let base = format!("http://127.0.0.1:{port}");
+        let routes = build(&base);
+        Self::serve(listener, base, routes)
+    }
+
+    fn start_binary(routes: HashMap<String, (u16, Vec<u8>)>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
+        let port = listener.local_addr().unwrap().port();
+        Self::serve(listener, format!("http://127.0.0.1:{port}"), routes)
+    }
+
+    fn serve(listener: TcpListener, base: String, routes: HashMap<String, (u16, Vec<u8>)>) -> Self {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&requests);
 
@@ -38,21 +60,19 @@ impl MockRegistry {
                 let (status, body) = routes
                     .get(&path)
                     .cloned()
-                    .unwrap_or_else(|| (404, "{\"error\":\"Not found\"}".to_string()));
+                    .unwrap_or_else(|| (404, b"{\"error\":\"Not found\"}".to_vec()));
                 let reason = if status == 200 { "OK" } else { "Not Found" };
-                let response = format!(
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                let header = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
-                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
                 let _ = stream.flush();
             }
         });
 
-        Self {
-            base: format!("http://127.0.0.1:{port}"),
-            requests,
-        }
+        Self { base, requests }
     }
 
     fn command(&self) -> Command {
@@ -2151,6 +2171,95 @@ fn a_lookalike_more_popular_than_its_target_is_clean() {
         "the candidate's popularity was not checked: {:?}",
         registry.requests()
     );
+}
+
+fn tar_gz(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    for (path, bytes) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_path(path).unwrap();
+        header.set_cksum();
+        builder.append(&header, *bytes).unwrap();
+    }
+    builder.into_inner().unwrap().finish().unwrap()
+}
+
+#[test]
+fn inspect_downloads_verifies_and_scans_an_archive() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let archive = tar_gz(&[("lib/install.js", b"eval(atob(payload))\n")]);
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(&archive));
+    let registry = MockRegistry::start_with(|base| {
+        let doc = format!(
+            r#"{{"name":"evil-pkg","version":"1.0.0","dist":{{"tarball":"{base}/evil.tgz","integrity":"sha512-{digest}"}}}}"#
+        );
+        let mut routes = HashMap::new();
+        routes.insert("/evil-pkg/1.0.0".to_string(), (200, doc.into_bytes()));
+        routes.insert("/evil.tgz".to_string(), (200, archive.clone()));
+        routes
+    });
+
+    let output = registry
+        .command()
+        .args(["inspect", "npm", "evil-pkg@1.0.0", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["integrity"], "verified");
+    assert_eq!(value["files_scanned"], 1);
+    let obfuscated = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["rule"] == "JS-OBF-001")
+        .expect("missing encoded-execution finding");
+    assert_eq!(obfuscated["file"], "lib/install.js");
+    assert_eq!(value["exit_code"], 2);
+}
+
+#[test]
+fn inspect_reports_a_checksum_mismatch_as_high() {
+    use base64::Engine as _;
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let wrong = base64::engine::general_purpose::STANDARD.encode([0u8; 64]);
+    let registry = MockRegistry::start_with(|base| {
+        let doc = format!(
+            r#"{{"name":"bad-sum","version":"1.0.0","dist":{{"tarball":"{base}/bad.tgz","integrity":"sha512-{wrong}"}}}}"#
+        );
+        let mut routes = HashMap::new();
+        routes.insert("/bad-sum/1.0.0".to_string(), (200, doc.into_bytes()));
+        routes.insert("/bad.tgz".to_string(), (200, archive.clone()));
+        routes
+    });
+
+    registry
+        .command()
+        .args(["inspect", "npm", "bad-sum@1.0.0", "--json"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("ARCHIVE-CHECKSUM-001"))
+        .stdout(predicate::str::contains("MISMATCH"));
+}
+
+#[test]
+fn inspect_jsr_is_honestly_unavailable() {
+    let registry = MockRegistry::start(HashMap::new());
+    registry
+        .command()
+        .args(["inspect", "jsr", "@std/assert@1.0.19"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("not documented yet"));
 }
 
 #[test]

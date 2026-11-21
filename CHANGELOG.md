@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Archive inspection.** `dep-vet inspect <ecosystem> <pkg>[@version]`
+  downloads the release, verifies its checksum when published, extracts it in
+  memory under hard caps, and scans source text for suspicious behavior (JS,
+  Python, shell, Rust `build.rs`, Go, PHP). Path traversal, absolute paths,
+  symlinks, hardlinks, oversized archives, and decompression bombs are rejected
+  or bounded. Checksum mismatch is HIGH. Nothing is executed.
+- **Rule findings** carry rule id, severity, confidence, file, and line, and are
+  deterministic across runs.
+
 - **Retries with backoff.** Network errors, 429, and 5xx now retry up to three
   times with exponential backoff, and `Retry-After` is honoured up to five
   seconds. Statuses are read as data, so a rate-limit hint is not lost.

@@ -208,6 +208,93 @@ fn render_advice(upgrades: &[Upgrade], version: &str) -> String {
     out
 }
 
+pub fn render_inspection_json(
+    report: &crate::inspect::InspectionReport,
+) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Json<'a> {
+        #[serde(flatten)]
+        report: &'a crate::inspect::InspectionReport,
+        verdict: Severity,
+        exit_code: u8,
+    }
+
+    serde_json::to_string_pretty(&Json {
+        report,
+        verdict: report.verdict(),
+        exit_code: report.exit_code(),
+    })
+}
+
+pub fn render_inspection_human(report: &crate::inspect::InspectionReport, color: bool) -> String {
+    let mut out = format!(
+        "inspection: {}/{}@{}\n\n",
+        report.ecosystem, report.name, report.version
+    );
+    push_field(
+        &mut out,
+        "archive",
+        &format!(
+            "{} {}, {} bytes",
+            report.archive_kind,
+            report.integrity,
+            thousands(report.bytes as u64)
+        ),
+    );
+    push_field(
+        &mut out,
+        "files",
+        &format!(
+            "{} scanned, {} skipped",
+            report.files_scanned, report.files_skipped
+        ),
+    );
+    if !report.not_checked.is_empty() {
+        push_field(&mut out, "not checked", &report.not_checked.join(", "));
+    }
+
+    out.push('\n');
+    if report.findings.is_empty() {
+        out.push_str("  no findings: no rule matched the files in this archive\n");
+    } else {
+        out.push_str(&format!(
+            "  {} finding{}\n\n",
+            report.findings.len(),
+            if report.findings.len() == 1 { "" } else { "s" }
+        ));
+        for finding in &report.findings {
+            out.push_str(&format!(
+                "  {}  {} {}\n",
+                paint(
+                    &format!("[{}]", finding.severity.label()),
+                    verdict_color(finding.severity),
+                    color
+                ),
+                finding.rule,
+                finding.title
+            ));
+            if !finding.file.is_empty() {
+                out.push_str(&format!("        {}:{}\n", finding.file, finding.line));
+            }
+            for line in wrap(&finding.evidence, 88) {
+                out.push_str(&format!("        {line}\n"));
+            }
+            out.push_str(&format!("        {}\n", finding.recommendation));
+            out.push('\n');
+        }
+    }
+    out.push_str(&format!(
+        "  verdict {} (exit {})\n",
+        paint(
+            report.verdict().label(),
+            verdict_color(report.verdict()),
+            color
+        ),
+        report.exit_code()
+    ));
+    out
+}
+
 pub fn render_lock_json(report: &LockReport) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
     struct Json<'a> {

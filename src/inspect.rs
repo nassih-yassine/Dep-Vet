@@ -372,3 +372,87 @@ mod tests {
         );
     }
 }
+
+/// A finished inspection, ready for rendering.
+#[derive(Debug, serde::Serialize)]
+pub struct InspectionReport {
+    pub ecosystem: Ecosystem,
+    pub name: String,
+    pub version: String,
+    pub archive_url: String,
+    pub archive_kind: &'static str,
+    pub bytes: usize,
+    pub integrity: String,
+    pub files_scanned: usize,
+    pub files_skipped: usize,
+    pub findings: Vec<crate::rules::RuleFinding>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_checked: Vec<String>,
+}
+
+impl InspectionReport {
+    pub fn verdict(&self) -> crate::model::Severity {
+        self.findings
+            .iter()
+            .map(|finding| finding.severity)
+            .max()
+            .unwrap_or(crate::model::Severity::Info)
+    }
+
+    pub fn exit_code(&self) -> u8 {
+        self.verdict().exit_code()
+    }
+}
+
+pub fn build_report(
+    ecosystem: Ecosystem,
+    spec: &PackageSpec,
+    prepared: Prepared,
+) -> InspectionReport {
+    let mut findings = crate::rules::scan(&prepared.extracted.files);
+    let integrity = match &prepared.integrity {
+        Integrity::Verified => "verified".to_string(),
+        Integrity::Unverified => "unverified".to_string(),
+        Integrity::Mismatch { expected, actual } => {
+            findings.push(crate::rules::RuleFinding {
+                rule: "ARCHIVE-CHECKSUM-001",
+                title: "archive checksum does not match the registry",
+                severity: crate::model::Severity::High,
+                confidence: crate::model::Confidence::High,
+                file: String::new(),
+                line: 0,
+                evidence: format!("expected {expected}, got {actual}"),
+                recommendation: "Do not install; the download does not match the published release.",
+            });
+            format!("MISMATCH (expected {expected}, got {actual})")
+        }
+    };
+    findings.sort_by(|left, right| {
+        left.file
+            .cmp(&right.file)
+            .then(left.line.cmp(&right.line))
+            .then(left.rule.cmp(right.rule))
+    });
+
+    let mut not_checked = Vec::new();
+    if prepared.extracted.files.is_empty() {
+        not_checked.push("source analysis (no text files in the archive)".to_string());
+    }
+    InspectionReport {
+        ecosystem,
+        name: spec.name.clone(),
+        version: spec.version.clone().unwrap_or_default(),
+        archive_url: prepared.url,
+        archive_kind: match prepared.kind {
+            ArchiveKind::TarGz => "tar.gz",
+            ArchiveKind::Zip => "zip",
+            ArchiveKind::Gem => "gem",
+        },
+        bytes: prepared.bytes,
+        integrity,
+        files_scanned: prepared.extracted.files.len(),
+        files_skipped: prepared.extracted.skipped_binary + prepared.extracted.skipped_unsafe,
+        findings,
+        not_checked,
+    }
+}

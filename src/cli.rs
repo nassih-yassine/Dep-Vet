@@ -140,6 +140,19 @@ pub enum Command {
         json: bool,
     },
 
+    /// Inspect a release archive without installing it
+    Inspect {
+        /// Ecosystem: npm, pypi, crates, go, jsr, gem, nuget, maven, composer
+        ecosystem: String,
+
+        /// Package with optional exact version: lodash@4.17.20
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -203,6 +216,23 @@ mod tests {
                 assert!(!json);
             }
             _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
+    fn parses_inspect_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "inspect", "npm", "lodash@4.17.20"]).unwrap();
+        match cli.command {
+            Command::Inspect {
+                ecosystem,
+                package,
+                json,
+            } => {
+                assert_eq!(ecosystem, "npm");
+                assert_eq!(package, "lodash@4.17.20");
+                assert!(!json);
+            }
+            _ => panic!("expected inspect command"),
         }
     }
 

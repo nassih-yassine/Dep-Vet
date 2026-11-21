@@ -96,6 +96,30 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             emit_package(cli, *json, &report)
         }
 
+        Command::Inspect {
+            ecosystem,
+            package,
+            json,
+        } => {
+            let ecosystem = inspect_ecosystem(ecosystem)?;
+            let spec = inspect_spec(ecosystem, package)?;
+            let http = Arc::new(HttpClient::from_env(cli.no_cache));
+            let prepared = dep_vet::inspect::inspect_archive(
+                &http,
+                ecosystem,
+                &spec,
+                dep_vet::archive::Limits::default(),
+            )?;
+            let report = dep_vet::inspect::build_report(ecosystem, &spec, prepared);
+            let output = if *json {
+                dep_vet::report::render_inspection_json(&report)?
+            } else {
+                dep_vet::report::render_inspection_human(&report, use_color(cli))
+            };
+            print!("{output}");
+            Ok(report.exit_code())
+        }
+
         Command::Composer { package, json } => {
             let spec = PackageSpec::parse_composer(package)?;
             let mut report = auditor.audit_composer(&spec, now_seconds(), None)?;
@@ -610,6 +634,35 @@ fn skipped_errors(contents: &lockfile::LockContents) -> Vec<LockFetchError> {
             message: reason.clone(),
         })
         .collect()
+}
+
+fn inspect_ecosystem(value: &str) -> anyhow::Result<Ecosystem> {
+    Ok(match value.to_ascii_lowercase().as_str() {
+        "npm" => Ecosystem::Npm,
+        "pypi" => Ecosystem::Pypi,
+        "crates" => Ecosystem::CratesIo,
+        "go" => Ecosystem::Go,
+        "jsr" => Ecosystem::Jsr,
+        "gem" | "rubygems" => Ecosystem::RubyGems,
+        "nuget" => Ecosystem::NuGet,
+        "maven" => Ecosystem::Maven,
+        "composer" => Ecosystem::Composer,
+        other => anyhow::bail!("unknown ecosystem '{other}'"),
+    })
+}
+
+fn inspect_spec(ecosystem: Ecosystem, input: &str) -> anyhow::Result<PackageSpec> {
+    Ok(match ecosystem {
+        Ecosystem::Npm => PackageSpec::parse(input)?,
+        Ecosystem::Pypi => PackageSpec::parse_pypi(input)?,
+        Ecosystem::CratesIo => PackageSpec::parse_crates(input)?,
+        Ecosystem::Go => PackageSpec::parse_go(input)?,
+        Ecosystem::Jsr => PackageSpec::parse_jsr(input)?,
+        Ecosystem::RubyGems => PackageSpec::parse_gem(input)?,
+        Ecosystem::NuGet => PackageSpec::parse_nuget(input)?,
+        Ecosystem::Maven => PackageSpec::parse_maven(input)?,
+        Ecosystem::Composer => PackageSpec::parse_composer(input)?,
+    })
 }
 
 fn spec_for(
