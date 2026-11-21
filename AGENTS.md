@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 425 unit + 112 end-to-end tests
+cargo test --locked                      # 433 unit + 112 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -107,6 +107,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   a `TcpListener` and overrides `DEPVET_REGISTRY_BASE`, `DEPVET_DOWNLOADS_BASE`,
   and `DEPVET_OSV_BASE`, with `DEPVET_NO_CACHE=1` except in cache tests. A test
   that reaches npmjs.org, osv.dev, or `~/.cache/dep-vet` is a bug.
+- **Findings carry rule-level confidence.** `Finding::confidence()` maps the
+  finding id to high/medium/low and is serialized next to `severity` by
+  `report::serialize_findings`. Advisories and install scripts are high;
+  typosquats, publisher changes, added dependencies, dormancy, and missing
+  checks are medium. Adding a finding id means adding it to this mapping and to
+  `KNOWN_FINDINGS`; the allowlist completeness test covers the latter.
 - **The cache policy is deliberate.** Fresh entry skips the network; stale
   entries are used for network errors, 5xx, and 429; a 404 never falls back, or
   deleted packages would look alive. See `HttpError::is_transient`.
@@ -116,11 +122,15 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `CI`/`TERM=dumb` gate), and must be cleared by `Drop` before the report, even
   on a panic. An empty list draws nothing. A mixed Deno tree restarts the count
   at the JSR pass; that is two lists, not a retry.
-- **Transient network errors are retried once.** A timeout or dropped
-  connection gets one immediate retry before the stale fallback, because one
-  slow response used to turn a green CI run red. Never retry 404 (deleted
-  package) or 429 (rate limit; stale cache handles it). Do not add a third
-  attempt without a backoff and a reason: retries multiply latency.
+- **Transient failures retry with bounded backoff.** Network errors, 429, and
+  5xx get up to `MAX_ATTEMPTS` (3) tries with exponential backoff (150ms, 300ms)
+  and a server `Retry-After` capped at 5s. 404 never retries. Statuses are
+  handled as data (`http_status_as_error(false)`) so `Retry-After` is readable.
+  Tests for failed requests therefore take a few hundred milliseconds; do not
+  remove the sleeps to make them fast.
+- **Advisories use a five-minute TTL.** `http.rs` picks `ADVISORY_TTL_SECONDS`
+  for `api.osv.dev` keys; everything else uses `DEPVET_CACHE_TTL_SECONDS`
+  (24h default). A day-old advisory is the one staleness that matters.
 - **Cache lifecycle:** entries older than `RETENTION_SECONDS` (30 days) are
   deleted on open, and `PRAGMA user_version` drops the table when the schema
   changes. Never add a column without bumping `SCHEMA_VERSION`.

@@ -46,5 +46,10 @@ jobs:
       - name: Lint
         run: cargo clippy --locked --all-targets -- -D warnings
 
+      - name: Audit crate advisories
+        run: |
+          cargo install cargo-audit --locked --quiet
+          cargo audit
+
       - name: Test
         run: cargo test --locked --all-targets

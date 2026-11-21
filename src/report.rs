@@ -3,8 +3,34 @@
 use owo_colors::OwoColorize;
 use serde::Serialize;
 
-use crate::model::{AuditReport, LockFetchError, LockReport, PackageReport, Severity, Upgrade};
+use crate::model::{
+    AuditReport, Finding, LockFetchError, LockReport, PackageReport, Severity, Upgrade,
+};
 use crate::version::leading_number;
+
+/// Findings carry a rule-level confidence next to their severity. It is added
+/// at the serialization boundary so rule structs stay unchanged.
+pub fn serialize_findings<S>(findings: &[Finding], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+    #[derive(Serialize)]
+    struct WithConfidence<'a> {
+        #[serde(flatten)]
+        finding: &'a Finding,
+        confidence: crate::model::Confidence,
+    }
+
+    let mut sequence = serializer.serialize_seq(Some(findings.len()))?;
+    for finding in findings {
+        sequence.serialize_element(&WithConfidence {
+            finding,
+            confidence: finding.confidence(),
+        })?;
+    }
+    sequence.end()
+}
 
 pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
@@ -626,6 +652,36 @@ mod tests {
         finding.evidence[0].value = "line one\nline two".to_string();
         let text = render_human(&report(vec![finding]), false);
         assert!(text.contains("postinstall: line one line two"));
+    }
+
+    #[test]
+    fn json_findings_carry_confidence_next_to_severity() {
+        let json = render_json(&report(vec![finding(Severity::High)])).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["findings"][0]["severity"], "high");
+        assert_eq!(value["findings"][0]["confidence"], "high");
+        assert_eq!(value["findings"][0]["id"], "install-scripts");
+    }
+
+    #[test]
+    fn clean_package_json_omits_empty_optional_blocks() {
+        let json = render_json(&report(Vec::new())).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let object = value.as_object().unwrap();
+        for key in ["upgrades", "review_url"] {
+            assert!(!object.contains_key(key), "{key} should be omitted");
+        }
+        for key in [
+            "ecosystem",
+            "name",
+            "version",
+            "findings",
+            "registry_url",
+            "verdict",
+            "exit_code",
+        ] {
+            assert!(object.contains_key(key), "{key} missing");
+        }
     }
 
     #[test]

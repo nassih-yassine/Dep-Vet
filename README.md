@@ -567,6 +567,13 @@ clean.
   against the base lockfile; `dep-vet npm` uses the nearest `package-lock.json`
   when one exists, and `--no-local` turns that off. Either way the seed list is
   also consulted.
+- **Network failures are retried with backoff.** Network errors, 429, and 5xx
+  get up to three attempts with exponential backoff, and a registry's
+  `Retry-After` is honoured up to five seconds. Advisories are cached for five
+  minutes, not the 24 hours used for registry metadata.
+- **Findings carry confidence.** JSON findings include `confidence`
+  (`high`/`medium`/`low`) next to `severity`: how sure the rule is, as opposed
+  to how bad the finding would be.
 - **Tree audits batch their lookups.** One OSV query per 500 packages and one
   npm downloads request per 128 names; a failed batch makes those packages
   "could not check" rather than clean. Single-package commands still fetch

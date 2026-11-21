@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Retries with backoff.** Network errors, 429, and 5xx now retry up to three
+  times with exponential backoff, and `Retry-After` is honoured up to five
+  seconds. Statuses are read as data, so a rate-limit hint is not lost.
+- **Advisories stay fresh.** OSV responses are cached for five minutes while
+  registry metadata keeps the 24-hour TTL.
+- **Confidence in JSON.** Every finding carries `confidence` next to
+  `severity`, so a weak signal is not read as a certainty. Existing fields are
+  unchanged.
+
 - **Release-transition signals.** dep-vet now flags the shape of a compromised
   release: a version published after a year of dormancy (INFO, all ecosystems),
   changed install scripts in npm (HIGH when they fetch or decode code),
