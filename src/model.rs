@@ -56,16 +56,7 @@ impl PackageSpec {
             None => (trimmed, None),
         };
 
-        validate_name(name)?;
-        let version = match version {
-            Some(version) => Some(validate_version(version)?),
-            None => None,
-        };
-
-        Ok(Self {
-            name: name.to_string(),
-            version,
-        })
+        Self::new(name, version.map(str::to_string))
     }
 }
 
