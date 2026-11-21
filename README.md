@@ -220,8 +220,9 @@ src/date.rs       RFC 3339 parsing, no date crate
 src/main.rs       wiring, color choice, exit codes
 ```
 
-Feature work happens on a branch and merges after review. Bug fixes start with a
-failing test, as the `GitHub Actions` publisher false positive did.
+Feature work happens on a branch and merges once the push gate is green. Bug
+fixes start with a failing test, as the `GitHub Actions` publisher false positive
+did.
 
 ## Roadmap
 
