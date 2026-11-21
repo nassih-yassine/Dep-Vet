@@ -51,6 +51,7 @@ pub enum Format {
     Uv,
     Cargo,
     Go,
+    Gemfile,
 }
 
 impl Format {
@@ -59,6 +60,7 @@ impl Format {
             Self::Npm | Self::Bun | Self::Pnpm | Self::Yarn | Self::Deno => {
                 crate::model::Ecosystem::Npm
             }
+            Self::Gemfile => crate::model::Ecosystem::RubyGems,
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
@@ -79,6 +81,7 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         "pnpm-lock.yaml" => Ok(Format::Pnpm),
         "yarn.lock" => Ok(Format::Yarn),
         "deno.lock" => Ok(Format::Deno),
+        "Gemfile.lock" => Ok(Format::Gemfile),
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
         "poetry.lock" => Ok(Format::Poetry),
@@ -95,6 +98,7 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
         Format::Pnpm => parse_pnpm(body),
         Format::Yarn => Ok(parse_yarn(body)),
         Format::Deno => parse_deno(body),
+        Format::Gemfile => Ok(parse_gemfile(body)),
         Format::Pip => Ok(parse_pip(body)),
         Format::Poetry => parse_poetry(body),
         Format::Uv => parse_uv(body),
@@ -556,6 +560,51 @@ fn parse_yarn(body: &str) -> LockContents {
                 version,
             }),
             _ => skipped.push((selector, "unreadable yarn selector".to_string())),
+        }
+    }
+
+    finish(packages, skipped)
+}
+
+/// Bundler writes `GEM` specs as `    name (version)` with nested dependencies
+/// indented further. Only remote `GEM` entries are auditable; `PATH` and `GIT`
+/// sections are local sources.
+fn parse_gemfile(body: &str) -> LockContents {
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+    let mut section = "";
+
+    for raw in body.lines() {
+        let line = raw.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        if !line.starts_with(' ') {
+            section = line.trim();
+            continue;
+        }
+        if section != "GEM" {
+            continue;
+        }
+        let indent = line.chars().take_while(|ch| *ch == ' ').count();
+        if indent != 4 {
+            continue;
+        }
+        let entry = line.trim();
+        let Some((name, rest)) = entry.split_once(" (") else {
+            continue;
+        };
+        let Some(version) = rest.strip_suffix(')') else {
+            skipped.push((entry.to_string(), "unreadable Gemfile summary".to_string()));
+            continue;
+        };
+        if name.is_empty() || version.is_empty() {
+            skipped.push((entry.to_string(), "unreadable Gemfile summary".to_string()));
+        } else {
+            packages.push(LockedPackage {
+                name: name.to_string(),
+                version: version.to_string(),
+            });
         }
     }
 
@@ -1118,6 +1167,44 @@ broken@1.0.0:
     }
 
     #[test]
+    fn gemfile_reads_gem_specs_only() {
+        let body = r#"GEM
+  remote: https://rubygems.org/
+  specs:
+    rails (7.1.0)
+      actionpack (= 7.1.0)
+      activesupport (= 7.1.0)
+    nokogiri (1.16.0-x86_64-linux)
+
+PATH
+  remote: .
+  specs:
+    local-gem (0.1.0)
+
+GIT
+  remote: https://github.com/example/git-gem.git
+  specs:
+    git-gem (0.2.0)
+
+PLATFORMS
+  x86_64-linux
+
+DEPENDENCIES
+  rails
+  local-gem!
+"#;
+        let contents = parse(Format::Gemfile, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("nokogiri", "1.16.0-x86_64-linux"),
+                package("rails", "7.1.0")
+            ]
+        );
+        assert!(contents.skipped.is_empty());
+    }
+
+    #[test]
     fn detects_each_supported_lockfile() {
         assert_eq!(detect(Path::new("package-lock.json")).unwrap(), Format::Npm);
         assert_eq!(detect(Path::new("Cargo.lock")).unwrap(), Format::Cargo);
@@ -1128,6 +1215,7 @@ broken@1.0.0:
         assert_eq!(detect(Path::new("pnpm-lock.yaml")).unwrap(), Format::Pnpm);
         assert_eq!(detect(Path::new("yarn.lock")).unwrap(), Format::Yarn);
         assert_eq!(detect(Path::new("deno.lock")).unwrap(), Format::Deno);
+        assert_eq!(detect(Path::new("Gemfile.lock")).unwrap(), Format::Gemfile);
         assert_eq!(detect(Path::new("requirements.txt")).unwrap(), Format::Pip);
         assert_eq!(
             detect(Path::new("dev-requirements.txt")).unwrap(),

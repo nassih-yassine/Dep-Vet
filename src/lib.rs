@@ -15,6 +15,7 @@ pub mod osv;
 pub mod pypi;
 pub mod registry;
 pub mod report;
+pub mod rubygems;
 pub mod signals;
 pub mod typosquat;
 pub mod watch;

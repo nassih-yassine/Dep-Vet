@@ -37,6 +37,16 @@ impl PackageSpec {
         Ok(Self { name, version })
     }
 
+    /// RubyGems reference: `name` or `name@1.2.3`.
+    pub fn parse_gem(input: &str) -> Result<Self, SpecError> {
+        let spec = Self::parse(input)?;
+        let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+        if !spec.name.chars().all(allowed) || spec.name.is_empty() {
+            return Err(SpecError::InvalidName(spec.name));
+        }
+        Ok(spec)
+    }
+
     /// JSR reference: `@scope/name` or `@scope/name@1.2.3`.
     pub fn parse_jsr(input: &str) -> Result<Self, SpecError> {
         let spec = Self::parse(input)?;
@@ -251,6 +261,8 @@ pub enum Ecosystem {
     CratesIo,
     Go,
     Jsr,
+    #[serde(rename = "rubygems")]
+    RubyGems,
 }
 
 impl Ecosystem {
@@ -261,6 +273,7 @@ impl Ecosystem {
             Self::CratesIo => "crates",
             Self::Go => "go",
             Self::Jsr => "jsr",
+            Self::RubyGems => "gem",
         }
     }
 
@@ -273,6 +286,7 @@ impl Ecosystem {
             Self::Go => "Go",
             // OSV does not publish advisories for JSR; nothing queries this.
             Self::Jsr => "JSR",
+            Self::RubyGems => "RubyGems",
         }
     }
 }
@@ -286,6 +300,7 @@ impl Ecosystem {
             Self::CratesIo => format!("https://crates.io/crates/{name}/{version}"),
             Self::Go => format!("https://pkg.go.dev/{name}@{version}"),
             Self::Jsr => format!("https://jsr.io/{name}/{version}"),
+            Self::RubyGems => format!("https://rubygems.org/gems/{name}/{version}"),
         }
     }
 
@@ -297,6 +312,7 @@ impl Ecosystem {
             Self::CratesIo => format!("https://crates.io/crates/{name}"),
             Self::Go => format!("https://pkg.go.dev/{name}"),
             Self::Jsr => format!("https://jsr.io/{name}"),
+            Self::RubyGems => format!("https://rubygems.org/gems/{name}"),
         }
     }
 }
@@ -378,6 +394,19 @@ impl Profile {
         execution: false,
         maintainers: false,
         advisories: false,
+        repository: true,
+        downloads: false,
+        deprecation: true,
+        typosquat: true,
+        freshness: true,
+    };
+
+    /// RubyGems exposes no owner list, weekly downloads, or install-time file
+    /// data. Advisories, repository, freshness, and deprecation work.
+    pub const RUBYGEMS: Self = Self {
+        execution: false,
+        maintainers: false,
+        advisories: true,
         repository: true,
         downloads: false,
         deprecation: true,
@@ -730,6 +759,19 @@ mod tests {
         assert_eq!(Ecosystem::Pypi.osv_name(), "PyPI");
         assert_eq!(Ecosystem::CratesIo.osv_name(), "crates.io");
         assert_eq!(Ecosystem::Go.osv_name(), "Go");
+        assert_eq!(Ecosystem::RubyGems.osv_name(), "RubyGems");
+    }
+
+    #[test]
+    fn parses_gem_specs() {
+        assert_eq!(PackageSpec::parse_gem("rack").unwrap(), spec("rack", None));
+        assert_eq!(
+            PackageSpec::parse_gem("rack@3.2.9").unwrap(),
+            spec("rack", Some("3.2.9"))
+        );
+        for input in ["@scope/x", "foo/bar", "foo bar", "rack@"] {
+            assert!(PackageSpec::parse_gem(input).is_err(), "accepted {input:?}");
+        }
     }
 
     #[test]

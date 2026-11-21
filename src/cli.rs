@@ -100,6 +100,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Vet a RubyGems gem before adding it
+    Gem {
+        /// Gem name with optional exact version: rack@3.2.9
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -163,6 +173,18 @@ mod tests {
                 assert!(!json);
             }
             _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
+    fn parses_gem_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "gem", "rack@3.2.9"]).unwrap();
+        match cli.command {
+            Command::Gem { package, json } => {
+                assert_eq!(package, "rack@3.2.9");
+                assert!(!json);
+            }
+            _ => panic!("expected gem command"),
         }
     }
 
