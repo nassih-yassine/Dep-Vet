@@ -11,6 +11,7 @@ pub mod date;
 pub mod go;
 pub mod http;
 pub mod inspect;
+pub mod intent;
 pub mod jsr;
 pub mod lockfile;
 pub mod maven;
