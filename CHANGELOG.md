@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.1 — 2026-11-21
+
+Fixes found by auditing dep-vet's own repositories.
+
+- crates.io publisher mismatches are INFO: owner lists omit GitHub org members,
+  so `regex` and `pkg-config` looked like handoffs.
+- Legitimate neighbour crates (`inotify`, `rustix`, `shlex`) are in the ranked
+  seed, so they are no longer typosquats of `notify`, `rustls`, `sqlx`.
+- pnpm lockfiles are parsed without a YAML dependency, removing unmaintained
+  `unsafe-libyaml` (RUSTSEC-2024-0449) from dep-vet's own tree.
+- CI now audits dep-vet's own `Cargo.lock` on every push.
+- Yarn Berry's `__metadata` block is no longer reported as an unreadable
+  package, which made every Berry audit exit 3.
+- `.depvet.toml` rejects unknown keys instead of silently ignoring typos.
+
 ## 0.2.0 — 2026-11-21
 
 First release with more than npm.

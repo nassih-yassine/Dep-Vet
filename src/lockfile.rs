@@ -533,6 +533,10 @@ fn parse_yarn(body: &str) -> LockContents {
         if version.starts_with("0.0.0-use.local") {
             continue;
         }
+        // Yarn Berry records its own format version here; it is not a package.
+        if selector == "__metadata" {
+            continue;
+        }
         match selector.rsplit_once('@') {
             Some((name, _range)) if !name.is_empty() => packages.push(LockedPackage {
                 name: name.to_string(),
@@ -1036,6 +1040,11 @@ __metadata:
 "#;
         let contents = parse(Format::Yarn, berry).unwrap();
         assert_eq!(contents.packages, vec![package("is-number", "7.0.0")]);
+        assert!(
+            contents.skipped.is_empty(),
+            "__metadata is not a package: {:?}",
+            contents.skipped
+        );
     }
 
     #[test]

@@ -29,12 +29,14 @@ pub const KNOWN_FINDINGS: &[&str] = &[
 ];
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Allowlist {
     #[serde(default)]
     allow: Vec<AllowEntry>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AllowEntry {
     package: String,
     #[serde(default)]
@@ -272,6 +274,29 @@ reason = "reviewed"
         )
         .unwrap_err();
         assert!(matches!(error, AllowError::UnknownFinding { .. }));
+    }
+
+    #[test]
+    fn a_misspelled_key_is_an_error() {
+        let error = Allowlist::parse(
+            Path::new(".depvet.toml"),
+            r#"[[allows]]
+package = "x"
+reason = "why"
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(error, AllowError::Toml { .. }));
+
+        let error = Allowlist::parse(
+            Path::new(".depvet.toml"),
+            r#"[[allow]]
+packages = "x"
+reason = "why"
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(error, AllowError::Toml { .. }));
     }
 
     #[test]
