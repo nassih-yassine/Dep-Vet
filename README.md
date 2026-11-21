@@ -143,6 +143,7 @@ dep-vet audit yarn.lock              # Yarn classic and Berry
 dep-vet audit deno.lock              # Deno: npm and JSR entries
 dep-vet audit Gemfile.lock           # RubyGems
 dep-vet audit packages.lock.json     # NuGet
+dep-vet audit packages.config        # legacy NuGet
 dep-vet audit composer.lock          # Composer
 dep-vet audit gradle.lockfile        # Gradle dependency locking
 ```
@@ -168,6 +169,7 @@ What each format contributes, and what it cannot:
 | `deno.lock` | `npm` and `jsr` entries | JSR advisories, which OSV does not publish |
 | `Gemfile.lock` | remote `GEM` specs | `PATH`/`GIT` sections; yanked versions are absent from the API |
 | `packages.lock.json` | resolved dependencies for every target framework | unresolved entries; project references |
+| `packages.config` | `<package id version />` elements | elements without a version; unrelated XML |
 | `composer.lock` | `packages` and `packages-dev` | dev-only advisories are still reported |
 | `gradle.lockfile` | `group:artifact:version` lines, including `buildscript-`/`settings-` variants | unlocked configurations; Gradle without dependency locking |
 
@@ -421,7 +423,8 @@ clean.
   both `audit` and `lock`, including
   `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`, `poetry.lock`, and
   `uv.lock`, `Pipfile.lock`, `Gemfile.lock`, `packages.lock.json`,
-  `composer.lock`, `gradle.lockfile`. JSR has no advisory source,
+  `composer.lock`, `gradle.lockfile`, `packages.config`. JSR has no advisory
+  source,
   so JSR reports say advisory coverage is unavailable. RubyGems has no owner
   list, weekly downloads, or install-time file data; yanked versions disappear
   from its API, so asking for one reports "not found" rather than "yanked".

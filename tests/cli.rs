@@ -2866,3 +2866,34 @@ fn audit_reads_gradle_lockfile() {
     assert_eq!(value["packages"][0]["version"], "1.7.36");
     assert_eq!(value["errors"].as_array().unwrap().len(), 0);
 }
+
+#[test]
+fn audit_reads_legacy_nuget_packages_config() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("packages.config"),
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<packages>
+  <package id="Newtonsoft.Json" version="13.0.1" targetFramework="net472" />
+  <package id="Broken.Without.Version" targetFramework="net472" />
+</packages>
+"#,
+    )
+    .unwrap();
+
+    let registry = nuget_registry("newtonsoft.json");
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "packages.config", "--json"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(value["packages"][0]["name"], "Newtonsoft.Json");
+    assert_eq!(value["errors"][0]["package"], "Broken.Without.Version");
+}

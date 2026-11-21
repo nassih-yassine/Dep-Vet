@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Legacy NuGet:** `packages.config` audits its `<package id version />`
+  elements through the NuGet auditor. Elements missing a version are reported
+  as unchecked.
 - **Pipenv:** `Pipfile.lock` audits the `default` and `develop` pins through
   PyPI. Path, git, and URL references and `*` versions are reported as
   unchecked rather than ignored.
