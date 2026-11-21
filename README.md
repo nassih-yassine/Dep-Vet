@@ -139,6 +139,7 @@ dep-vet audit uv.lock                # PyPI via uv
 dep-vet audit bun.lock               # Bun
 dep-vet audit pnpm-lock.yaml         # pnpm
 dep-vet audit yarn.lock              # Yarn classic and Berry
+dep-vet audit deno.lock              # Deno (npm entries; JSR noted)
 ```
 
 Vets **every** package the lockfile installs, not just the diff, and reports the
@@ -158,6 +159,7 @@ What each format contributes, and what it cannot:
 | `bun.lock` | `packages` tuples (JSON with comments) | unreadable entries |
 | `pnpm-lock.yaml` | v5, v6, and v9 package keys; peer suffixes stripped | unrecognized keys |
 | `yarn.lock` | classic and Berry entries | entries without a version; workspace links ignored |
+| `deno.lock` | `npm` entries | JSR packages, listed as a run note that does not fail |
 
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
@@ -383,8 +385,9 @@ clean.
 ## Scope and limits
 
 - **npm, PyPI, crates.io, and Go**, for both `audit` and `lock`, including
-  `bun.lock`, `pnpm-lock.yaml`, and `yarn.lock` (classic and Berry). Deno and
-  other formats are not parsed.
+  `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`, `poetry.lock`, and
+  `uv.lock`. Deno's JSR packages are not audited: there is no JSR source yet, and
+  the report says so as a run note instead of failing.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the
@@ -459,7 +462,7 @@ did.
 
 1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
    against your own dependencies.
-2. `deno.lock` and other remaining formats.
+2. JSR support for Deno, and other remaining formats.
 
 ## License
 

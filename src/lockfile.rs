@@ -22,6 +22,8 @@ pub struct LockedPackage {
 pub struct LockContents {
     pub packages: Vec<LockedPackage>,
     pub skipped: Vec<(String, String)>,
+    /// Things that were intentionally not audited but must not fail the run.
+    pub notes: Vec<String>,
 }
 
 impl LockContents {
@@ -29,6 +31,7 @@ impl LockContents {
         Self {
             packages,
             skipped: Vec::new(),
+            notes: Vec::new(),
         }
     }
 }
@@ -39,6 +42,7 @@ pub enum Format {
     Bun,
     Pnpm,
     Yarn,
+    Deno,
     Pip,
     Poetry,
     Uv,
@@ -49,7 +53,9 @@ pub enum Format {
 impl Format {
     pub fn ecosystem(self) -> crate::model::Ecosystem {
         match self {
-            Self::Npm | Self::Bun | Self::Pnpm | Self::Yarn => crate::model::Ecosystem::Npm,
+            Self::Npm | Self::Bun | Self::Pnpm | Self::Yarn | Self::Deno => {
+                crate::model::Ecosystem::Npm
+            }
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
@@ -69,6 +75,7 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         "bun.lock" => Ok(Format::Bun),
         "pnpm-lock.yaml" => Ok(Format::Pnpm),
         "yarn.lock" => Ok(Format::Yarn),
+        "deno.lock" => Ok(Format::Deno),
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
         "poetry.lock" => Ok(Format::Poetry),
@@ -84,6 +91,7 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
         Format::Bun => parse_bun(body),
         Format::Pnpm => parse_pnpm(body),
         Format::Yarn => Ok(parse_yarn(body)),
+        Format::Deno => parse_deno(body),
         Format::Pip => Ok(parse_pip(body)),
         Format::Poetry => parse_poetry(body),
         Format::Uv => parse_uv(body),
@@ -389,6 +397,34 @@ fn strip_jsonc(input: &str) -> String {
     cleaned
 }
 
+fn parse_deno(body: &str) -> Result<LockContents, LockError> {
+    let lockfile: DenoLock =
+        serde_json::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for key in lockfile.npm.keys() {
+        match key.rsplit_once('@') {
+            Some((name, version)) if !name.is_empty() && !version.is_empty() => {
+                packages.push(LockedPackage {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                });
+            }
+            _ => skipped.push((key.clone(), "unreadable deno npm entry".to_string())),
+        }
+    }
+
+    let mut contents = finish(packages, skipped);
+    if !lockfile.jsr.is_empty() {
+        contents.notes.push(format!(
+            "{} JSR package(s) not audited: dep-vet has no JSR source yet",
+            lockfile.jsr.len()
+        ));
+    }
+    Ok(contents)
+}
+
 fn parse_pnpm(body: &str) -> Result<LockContents, LockError> {
     let lockfile: PnpmLock =
         serde_yaml_ng::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
@@ -673,7 +709,19 @@ fn push_go_requirement(
 fn finish(mut packages: Vec<LockedPackage>, skipped: Vec<(String, String)>) -> LockContents {
     packages.sort();
     packages.dedup();
-    LockContents { packages, skipped }
+    LockContents {
+        packages,
+        skipped,
+        notes: Vec::new(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DenoLock {
+    #[serde(default)]
+    npm: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    jsr: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -977,6 +1025,44 @@ broken@1.0.0:
     }
 
     #[test]
+    fn deno_reads_npm_entries_and_notes_jsr() {
+        let body = r#"{
+            "version": "5",
+            "jsr": {
+                "@std/assert@1.0.0": { "integrity": "abc" },
+                "@std/internal@1.0.14": { "integrity": "def" }
+            },
+            "npm": {
+                "chalk@5.3.0": { "integrity": "sha512-x" },
+                "@scope/pkg@1.2.3": { "integrity": "sha512-y" }
+            }
+        }"#;
+        let contents = parse(Format::Deno, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![package("@scope/pkg", "1.2.3"), package("chalk", "5.3.0")]
+        );
+        assert_eq!(contents.notes.len(), 1);
+        assert!(contents.notes[0].contains("2 JSR package"));
+    }
+
+    #[test]
+    fn deno_with_only_jsr_has_no_packages_but_a_note() {
+        let body = r#"{ "version": "5", "jsr": { "@std/assert@1.0.0": {} } }"#;
+        let contents = parse(Format::Deno, body).unwrap();
+        assert!(contents.packages.is_empty());
+        assert_eq!(contents.notes.len(), 1);
+    }
+
+    #[test]
+    fn deno_rejects_malformed_json() {
+        assert!(matches!(
+            parse(Format::Deno, "{ nope"),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
     fn detects_each_supported_lockfile() {
         assert_eq!(detect(Path::new("package-lock.json")).unwrap(), Format::Npm);
         assert_eq!(detect(Path::new("Cargo.lock")).unwrap(), Format::Cargo);
@@ -986,13 +1072,14 @@ broken@1.0.0:
         assert_eq!(detect(Path::new("bun.lock")).unwrap(), Format::Bun);
         assert_eq!(detect(Path::new("pnpm-lock.yaml")).unwrap(), Format::Pnpm);
         assert_eq!(detect(Path::new("yarn.lock")).unwrap(), Format::Yarn);
+        assert_eq!(detect(Path::new("deno.lock")).unwrap(), Format::Deno);
         assert_eq!(detect(Path::new("requirements.txt")).unwrap(), Format::Pip);
         assert_eq!(
             detect(Path::new("dev-requirements.txt")).unwrap(),
             Format::Pip
         );
         assert!(matches!(
-            detect(Path::new("deno.lock")),
+            detect(Path::new("go.sum")),
             Err(LockError::UnsupportedFormat(_))
         ));
     }

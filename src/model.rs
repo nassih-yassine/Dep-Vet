@@ -385,6 +385,8 @@ pub struct LockReport {
     pub base: String,
     pub new_packages: Vec<PackageReport>,
     pub errors: Vec<LockFetchError>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// A whole lockfile, audited in place. No base revision, no diff.
@@ -393,6 +395,9 @@ pub struct AuditReport {
     pub lockfile: String,
     pub packages: Vec<PackageReport>,
     pub errors: Vec<LockFetchError>,
+    /// Deliberate omissions that must not fail the run (for example JSR).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 impl AuditReport {
