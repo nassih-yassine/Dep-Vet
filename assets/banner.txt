@@ -1,0 +1,22 @@
+██████╗ ███████╗██████╗       ██╗   ██╗███████╗████████╗
+██╔══██╗██╔════╝██╔══██╗      ██║   ██║██╔════╝╚══██╔══╝
+██║  ██║█████╗  ██████╔╝█████╗██║   ██║█████╗     ██║
+██║  ██║██╔══╝  ██╔═══╝ ╚════╝╚██╗ ██╔╝██╔══╝     ██║
+██████╔╝███████╗██║             ╚████╔╝ ███████╗   ██║
+╚═════╝ ╚══════╝╚═╝              ╚═══╝  ╚══════╝   ╚═╝
+
+        ┌────────────────────────────────────────────────┐
+        │                                                │
+        │       THE DEPENDENCY TRUST PROTOCOL             │
+        │                                                │
+        │   ◈  INSPECT       Dependency intelligence     │
+        │   ◈  ANALYZE       Malicious code detection    │
+        │   ◈  VERIFY        Publisher provenance        │
+        │   ◈  DIFF          Release behavior changes    │
+        │   ◈  ENFORCE       Supply-chain security       │
+        │                                                │
+        └────────────────────────────────────────────────┘
+
+        ZERO BLIND TRUST. FULL SUPPLY-CHAIN VISIBILITY.
+
+        [ SYSTEM READY ]  [ RUST POWERED ]  [ SECURITY FIRST ]

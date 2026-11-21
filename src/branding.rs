@@ -2,53 +2,12 @@
 
 use owo_colors::OwoColorize;
 
-pub const LOGO_BLOCKS: &str = r#"██████╗ ███████╗██████╗       ██╗   ██╗███████╗████████╗
-██╔══██╗██╔════╝██╔══██╗      ██║   ██║██╔════╝╚══██╔══╝
-██║  ██║█████╗  ██████╔╝█████╗██║   ██║█████╗     ██║
-██║  ██║██╔══╝  ██╔═══╝ ╚════╝╚██╗ ██╔╝██╔══╝     ██║
-██████╔╝███████╗██║             ╚████╔╝ ███████╗   ██║
-╚═════╝ ╚══════╝╚═╝              ╚═══╝  ╚══════╝   ╚═╝
+/// The one copy of the wordmark. Edit `assets/banner.txt`; both `--help` and
+/// interactive reports read this included text.
+pub const LOGO_BLOCKS: &str = include_str!("../assets/banner.txt");
 
-        ┌────────────────────────────────────────────────┐
-        │                                                │
-        │       THE DEPENDENCY TRUST PROTOCOL             │
-        │                                                │
-        │   ◈  INSPECT       Dependency intelligence     │
-        │   ◈  ANALYZE       Malicious code detection    │
-        │   ◈  VERIFY        Publisher provenance        │
-        │   ◈  DIFF          Release behavior changes    │
-        │   ◈  ENFORCE       Supply-chain security       │
-        │                                                │
-        └────────────────────────────────────────────────┘
-
-        ZERO BLIND TRUST. FULL SUPPLY-CHAIN VISIBILITY.
-
-        [ SYSTEM READY ]  [ RUST POWERED ]  [ SECURITY FIRST ]"#;
-
-/// Header printed above `--help`. Kept as a literal because `concat!` only
-/// accepts literals; `help_header_matches_the_logo` guards against drift.
-pub const HELP_HEADER: &str = r#"██████╗ ███████╗██████╗       ██╗   ██╗███████╗████████╗
-██╔══██╗██╔════╝██╔══██╗      ██║   ██║██╔════╝╚══██╔══╝
-██║  ██║█████╗  ██████╔╝█████╗██║   ██║█████╗     ██║
-██║  ██║██╔══╝  ██╔═══╝ ╚════╝╚██╗ ██╔╝██╔══╝     ██║
-██████╔╝███████╗██║             ╚████╔╝ ███████╗   ██║
-╚═════╝ ╚══════╝╚═╝              ╚═══╝  ╚══════╝   ╚═╝
-
-        ┌────────────────────────────────────────────────┐
-        │                                                │
-        │       THE DEPENDENCY TRUST PROTOCOL             │
-        │                                                │
-        │   ◈  INSPECT       Dependency intelligence     │
-        │   ◈  ANALYZE       Malicious code detection    │
-        │   ◈  VERIFY        Publisher provenance        │
-        │   ◈  DIFF          Release behavior changes    │
-        │   ◈  ENFORCE       Supply-chain security       │
-        │                                                │
-        └────────────────────────────────────────────────┘
-
-        ZERO BLIND TRUST. FULL SUPPLY-CHAIN VISIBILITY.
-
-        [ SYSTEM READY ]  [ RUST POWERED ]  [ SECURITY FIRST ]"#;
+/// Header printed above `--help`. Same source as the banner.
+pub const HELP_HEADER: &str = LOGO_BLOCKS;
 
 pub fn banner(color: bool) -> String {
     if color {
@@ -70,8 +29,9 @@ mod tests {
     }
 
     #[test]
-    fn help_header_matches_the_logo() {
+    fn help_uses_the_same_text_as_the_banner() {
         assert_eq!(HELP_HEADER, LOGO_BLOCKS);
+        assert!(!HELP_HEADER.trim().is_empty(), "assets/banner.txt is empty");
     }
 
     #[test]
