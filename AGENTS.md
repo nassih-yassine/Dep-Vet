@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 375 unit + 102 end-to-end tests
+cargo test --locked                      # 380 unit + 103 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -110,6 +110,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **The cache policy is deliberate.** Fresh entry skips the network; stale
   entries are used for network errors, 5xx, and 429; a 404 never falls back, or
   deleted packages would look alive. See `HttpError::is_transient`.
+- **Progress is stderr and TTY only.** `src/progress.rs` draws one
+  `auditing N/M packages…` line for `audit`/`lock`; it must never touch stdout,
+  never appear in pipes or CI (including CI runners with a pseudo-TTY, hence the
+  `CI`/`TERM=dumb` gate), and must be cleared by `Drop` before the report, even
+  on a panic. An empty list draws nothing. A mixed Deno tree restarts the count
+  at the JSR pass; that is two lists, not a retry.
 - **Transient network errors are retried once.** A timeout or dropped
   connection gets one immediate retry before the stale fallback, because one
   slow response used to turn a green CI run red. Never retry 404 (deleted

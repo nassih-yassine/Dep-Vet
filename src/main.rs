@@ -512,6 +512,14 @@ fn audit_packages(
 ) -> (Vec<PackageReport>, Vec<LockFetchError>) {
     let mut reports = Vec::new();
     let mut errors = Vec::new();
+    // A long tree audit looks frozen without this; pipes and CI stay silent,
+    // including CI runners that allocate a pseudo-TTY.
+    let draw = dep_vet::progress::should_draw(
+        io::stderr().is_terminal(),
+        std::env::var_os("CI").is_some(),
+        std::env::var("TERM").is_ok_and(|term| term == "dumb"),
+    );
+    let mut progress = dep_vet::progress::Progress::new(packages.len(), draw);
 
     let concurrency = if ecosystem == Ecosystem::Maven {
         MAVEN_CONCURRENCY
@@ -590,8 +598,10 @@ fn audit_packages(
                 // One unpublished dependency must not hide the rest.
                 Err(error) => errors.push(error),
             }
+            progress.advance();
         }
     }
+    drop(progress);
 
     (reports, errors)
 }
