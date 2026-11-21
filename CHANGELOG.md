@@ -1,12 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-11-21
 
-- **Upgrade advice.** Reports now end with what to do: the version OSV says fixes
-  the advisory (or `no fixed version published` / `fix unknown`), the newest
+- **Upgrade advice.** Reports end with what to do: the version OSV says fixes the
+  advisory (or `no fixed version published` / `fix unknown`), the newest
   published version as a labelled hint, and the real package behind a lookalike
   name. `audit` and `lock` close with one worst-first block. Advice never changes
   a verdict or an exit code.
+- **Google Maven.** AndroidX, AGP, Firebase, and Play artifacts are read from
+  `dl.google.com/dl/android/maven2`, so `gradle.lockfile` audits work for
+  Android projects instead of failing on every AndroidX dependency. Google
+  publishes no timestamps, so those reports list freshness as not checked and
+  note that OSV only indexes Maven Central.
+- **Maven fixes.** Versions beyond the search API's 200-row page are no longer
+  reported as missing, "first seen" is the real oldest release, and "latest"
+  skips milestones, RCs, and snapshots. Central's burst rate limit is reported
+  as rate limiting, not a missing package, and Maven tree audits run one
+  package at a time.
+- **Parser fixes.** Composer without publish times picks the first listed
+  release; `packages.config` no longer reads `developmentDependency` as `id`.
+
+## 0.7.1 — 2026-11-21
+
+Maven version-window fixes, Composer latest ordering, and the `packages.config`
+attribute boundary.
 
 ## 0.7.0 — 2026-11-21
 
