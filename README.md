@@ -185,9 +185,6 @@ contains the wordmark or ANSI colors.
 }
 ```
 
-`hidden_advisories` is non-zero when the advisory list was truncated at the
-25-per-package cap; the report also carries an INFO finding saying so.
-
 ### Cache
 
 Responses are cached in SQLite at `~/.cache/dep-vet/http-cache.db` (or
