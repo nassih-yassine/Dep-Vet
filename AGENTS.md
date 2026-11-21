@@ -513,6 +513,6 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Maven dependency trees (no lockfile format), Gradle projects without dependency
-locking, SARIF/SBOM output, and publisher history beyond the previous release.
+Maven dependency trees (no lockfile format), SARIF/SBOM output, and publisher
+history beyond the previous release.
 Roadmap only: do not describe these as existing in code, README, or help text.
