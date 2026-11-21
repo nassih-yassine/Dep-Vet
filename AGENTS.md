@@ -32,7 +32,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 235 unit + 76 end-to-end tests
+cargo test --locked                      # 240 unit + 77 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -135,6 +135,10 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - **Lockfile audits run 4 packages at a time.** `MAX_CONCURRENT_AUDITS` in
   `main.rs` bounds the burst; output order still follows the sorted diff, and
   per-package failures stay in `errors`.
+- **Advisories are deduplicated by alias.** OSV lists one issue as PYSEC, GHSA,
+  and CVE records. `dedupe` unions records whose id/alias sets overlap, keeps the
+  highest severity, prefers a real summary over the placeholder, and preserves
+  first-occurrence order. Do not remove it: finding counts double otherwise.
 - **Advisory details are fetched 8 at a time.** `MAX_CONCURRENT_FETCHES` caps
   in-flight OSV requests; 25 at once invited 429s, and a 429 mid-list turns
   every remaining advisory into "details unavailable".

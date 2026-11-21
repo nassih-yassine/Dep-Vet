@@ -96,7 +96,7 @@ impl OsvClient {
         let response = self.http.post_json(&url, &body)?;
         let (ids, hidden) = take_capped(parse_advisory_ids(&response)?);
         Ok(AdvisoryList {
-            advisories: self.advisories(&ids),
+            advisories: dedupe(self.advisories(&ids)),
             hidden,
         })
     }
@@ -153,6 +153,97 @@ fn parse_advisory_ids(body: &str) -> Result<Vec<String>, OsvError> {
 
 fn advisory_batches(ids: &[String]) -> impl Iterator<Item = &[String]> {
     ids.chunks(MAX_CONCURRENT_FETCHES)
+}
+
+/// OSV lists one issue under several databases (PYSEC, GHSA, CVE). Merge any
+/// records whose id or alias sets overlap so a vulnerability is counted once.
+fn dedupe(advisories: Vec<Advisory>) -> Vec<Advisory> {
+    if advisories.len() < 2 {
+        return advisories;
+    }
+
+    let mut parent: Vec<usize> = (0..advisories.len()).collect();
+    fn find(parent: &mut Vec<usize>, index: usize) -> usize {
+        if parent[index] != index {
+            let root = find(parent, parent[index]);
+            parent[index] = root;
+        }
+        parent[index]
+    }
+    fn union(parent: &mut Vec<usize>, a: usize, b: usize) {
+        let (root_a, root_b) = (find(parent, a), find(parent, b));
+        if root_a != root_b {
+            parent[root_b] = root_a;
+        }
+    }
+
+    let mut owner: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (index, advisory) in advisories.iter().enumerate() {
+        for token in std::iter::once(&advisory.id).chain(advisory.aliases.iter()) {
+            let token = token.to_ascii_lowercase();
+            match owner.get(&token) {
+                Some(&first) => union(&mut parent, first, index),
+                None => {
+                    owner.insert(token, index);
+                }
+            }
+        }
+    }
+
+    let mut groups: Vec<(usize, Vec<Advisory>)> = Vec::new();
+    let mut group_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (index, advisory) in advisories.into_iter().enumerate() {
+        let root = find(&mut parent, index);
+        match group_of.get(&root) {
+            Some(&group) => groups[group].1.push(advisory),
+            None => {
+                group_of.insert(root, groups.len());
+                groups.push((index, vec![advisory]));
+            }
+        }
+    }
+
+    groups
+        .into_iter()
+        .map(|(_, group)| merge_group(group))
+        .collect()
+}
+
+fn merge_group(mut group: Vec<Advisory>) -> Advisory {
+    if group.len() == 1 {
+        return group.remove(0);
+    }
+    group.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then_with(|| a.id.len().cmp(&b.id.len()))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let severity = group[0].severity;
+    let summary = group
+        .iter()
+        .map(|advisory| advisory.summary.as_str())
+        .find(|summary| *summary != "advisory without a summary")
+        .unwrap_or("advisory without a summary")
+        .to_string();
+    let mut aliases: Vec<String> = group
+        .iter()
+        .flat_map(|advisory| {
+            std::iter::once(advisory.id.clone()).chain(advisory.aliases.iter().cloned())
+        })
+        .filter(|alias| !alias.eq_ignore_ascii_case(&group[0].id))
+        .collect();
+    aliases.sort();
+    aliases.dedup();
+
+    Advisory {
+        id: group[0].id.clone(),
+        summary,
+        severity,
+        aliases,
+        url: group[0].url.clone(),
+    }
 }
 
 /// Keeps the first `MAX_ADVISORIES` ids and reports how many were dropped, so
@@ -355,6 +446,92 @@ mod tests {
         let sizes: Vec<usize> = advisory_batches(&ids).map(<[String]>::len).collect();
         assert_eq!(sizes, vec![8, 8, 8, 1]);
         assert_eq!(sizes.iter().max(), Some(&MAX_CONCURRENT_FETCHES));
+    }
+
+    fn advisory(id: &str, aliases: &[&str], severity: Severity, summary: &str) -> Advisory {
+        Advisory {
+            id: id.to_string(),
+            summary: summary.to_string(),
+            severity,
+            aliases: aliases.iter().map(|alias| alias.to_string()).collect(),
+            url: format!("https://osv.dev/vulnerability/{id}"),
+        }
+    }
+
+    #[test]
+    fn one_vulnerability_listed_twice_becomes_one_finding() {
+        let merged = dedupe(vec![
+            advisory(
+                "PYSEC-2026-1",
+                &["CVE-2026-1", "GHSA-aaaa"],
+                Severity::Warn,
+                "real summary",
+            ),
+            advisory(
+                "GHSA-aaaa",
+                &["CVE-2026-1", "PYSEC-2026-1"],
+                Severity::High,
+                "real summary",
+            ),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].severity, Severity::High);
+        assert_eq!(merged[0].id, "GHSA-aaaa");
+        assert!(
+            merged[0]
+                .aliases
+                .iter()
+                .any(|alias| alias == "PYSEC-2026-1" || alias == "CVE-2026-1")
+        );
+    }
+
+    #[test]
+    fn merging_is_transitive_through_aliases() {
+        let merged = dedupe(vec![
+            advisory("A-1", &["CVE-1"], Severity::Warn, "one"),
+            advisory("B-1", &["CVE-1", "CVE-2"], Severity::Warn, "one"),
+            advisory("C-1", &["CVE-2"], Severity::Warn, "one"),
+        ]);
+        assert_eq!(merged.len(), 1);
+        for alias in ["B-1", "C-1", "CVE-1", "CVE-2"] {
+            assert!(
+                merged[0].aliases.iter().any(|candidate| candidate == alias),
+                "missing alias {alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_advisories_keep_their_order() {
+        let merged = dedupe(vec![
+            advisory("A-1", &[], Severity::Warn, "a"),
+            advisory("B-1", &[], Severity::High, "b"),
+        ]);
+        assert_eq!(
+            merged.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["A-1", "B-1"]
+        );
+    }
+
+    #[test]
+    fn a_placeholder_summary_yields_to_a_real_one() {
+        let merged = dedupe(vec![
+            advisory(
+                "PYSEC-1",
+                &["CVE-9"],
+                Severity::Warn,
+                "advisory without a summary",
+            ),
+            advisory("GHSA-1", &["CVE-9"], Severity::Warn, "Prototype pollution"),
+        ]);
+        assert_eq!(merged[0].summary, "Prototype pollution");
+    }
+
+    #[test]
+    fn dedupe_leaves_single_records_alone() {
+        let merged = dedupe(vec![advisory("A-1", &["CVE-1"], Severity::Info, "a")]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].aliases, vec!["CVE-1"]);
     }
 
     #[test]
