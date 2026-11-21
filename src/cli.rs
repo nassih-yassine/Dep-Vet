@@ -110,6 +110,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Vet a NuGet package before adding it
+    Nuget {
+        /// Package id with optional exact version: Newtonsoft.Json@13.0.3
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -173,6 +183,18 @@ mod tests {
                 assert!(!json);
             }
             _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
+    fn parses_nuget_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "nuget", "Newtonsoft.Json@13.0.3"]).unwrap();
+        match cli.command {
+            Command::Nuget { package, json } => {
+                assert_eq!(package, "Newtonsoft.Json@13.0.3");
+                assert!(!json);
+            }
+            _ => panic!("expected nuget command"),
         }
     }
 

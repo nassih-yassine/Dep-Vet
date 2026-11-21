@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 276 unit + 86 end-to-end tests
+cargo test --locked                      # 291 unit + 89 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -80,6 +80,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/go.rs` | deps.dev Go module index, versions, publish times, deprecation |
 | `src/jsr.rs` | JSR meta/package APIs, repository, archived flag |
 | `src/rubygems.rs` | RubyGems versions, timestamps, source URL, yank flag |
+| `src/nuget.rs` | NuGet flat container, registration pages, times, deprecation |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -120,6 +121,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **NuGet basics.** IDs are case-insensitive, so URLs lowercase them but the
+  canonical name keeps the caller's casing for OSV. Registration pages may be
+  inline or linked (`@id`); both are handled and best-effort. `1900-01-01` is
+  NuGet's "unknown" date and must be filtered out of freshness. `packages.lock.json`
+  resolves per target framework; `type: Project` entries are skipped.
 - **RubyGems hides yanked versions.** `/api/v1/versions/{gem}.json` omits them,
   so an exact yanked version reports VersionNotFound, not "deprecated". Gemfile
   versions may carry a platform suffix (`1.16.0-x86_64-linux`); `Release::matches`
@@ -290,5 +296,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Other ecosystems (Maven, NuGet) and remaining lockfile formats. Roadmap only:
-do not describe these as existing in code, README, or help text.
+Other ecosystems (Maven) and remaining lockfile formats. Roadmap only: do not
+describe these as existing in code, README, or help text.

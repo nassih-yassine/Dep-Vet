@@ -62,6 +62,7 @@ impl MockRegistry {
             .env("DEPVET_CRATES_BASE", &self.base)
             .env("DEPVET_JSR_BASE", &self.base)
             .env("DEPVET_RUBYGEMS_BASE", &self.base)
+            .env("DEPVET_NUGET_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
@@ -2440,4 +2441,96 @@ fn unknown_gem_is_a_tool_error() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("was not found on RubyGems"));
+}
+
+const NUGET_FLAT: &str = r#"{ "versions": ["12.0.3", "13.0.1", "13.0.4-beta1"] }"#;
+
+const NUGET_REGISTRATION: &str = r#"{
+    "items": [ { "items": [
+        { "catalogEntry": { "version": "12.0.3", "published": "2020-01-01T00:00:00Z", "listed": true } },
+        { "catalogEntry": { "version": "13.0.1", "published": "2024-03-01T00:00:00Z", "listed": true } }
+    ] } ]
+}"#;
+
+fn nuget_registry(id: &str) -> MockRegistry {
+    let mut routes = HashMap::new();
+    routes.insert(
+        format!("/v3-flatcontainer/{id}/index.json"),
+        (200, NUGET_FLAT.to_string()),
+    );
+    routes.insert(
+        format!("/v3/registration5-gz-semver2/{id}/index.json"),
+        (200, NUGET_REGISTRATION.to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    MockRegistry::start(routes)
+}
+
+#[test]
+fn nuget_reports_metadata_and_missing_signals() {
+    let registry = nuget_registry("newtonsoft.json");
+    let output = registry
+        .command()
+        .args(["nuget", "Newtonsoft.Json", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["ecosystem"], "nuget");
+    assert_eq!(value["version"], "13.0.1");
+    let not_checked = value["not_checked"].as_array().unwrap();
+    for signal in ["execution", "maintainers", "repository", "downloads"] {
+        assert!(not_checked.iter().any(|entry| entry == signal), "{signal}");
+    }
+}
+
+#[test]
+fn audit_reads_nuget_packages_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("packages.lock.json"),
+        r#"{
+            "version": 1,
+            "dependencies": {
+                "net8.0": {
+                    "Newtonsoft.Json": { "type": "Direct", "resolved": "13.0.1" },
+                    "My.Project": { "type": "Project" }
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let registry = nuget_registry("newtonsoft.json");
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "packages.lock.json", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(value["packages"][0]["name"], "Newtonsoft.Json");
+    assert_eq!(value["errors"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn unknown_nuget_package_is_a_tool_error() {
+    let registry = nuget_registry("newtonsoft.json");
+    registry
+        .command()
+        .args(["nuget", "Ghost.Package"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("was not found on NuGet"));
 }
