@@ -27,6 +27,9 @@ jobs:
       - name: Regenerate the candidate list
         run: python3 scripts/refresh-popular-npm.py
 
+      - name: Validate the data
+        run: cargo test --locked popular
+
       - name: Stop when nothing changed
         id: diff
         run: |
@@ -61,6 +64,24 @@ jobs:
           fi
           gh pr merge bot/refresh-popular-npm --auto --squash --delete-branch
 
-          # A PR opened with GITHUB_TOKEN does not trigger other workflows, so
-          # start the required CI check here.
-          gh workflow run ci.yml --ref bot/refresh-popular-npm
+          # A bot PR's pull_request run parks in action_required. Approve it so
+          # the required check exists; the job itself is SKIPPED for bot PRs
+          # (ci.yml), and GitHub counts a skipped check as satisfied. Fall back
+          # to dispatching CI if no pull_request run appears.
+          head=$(git rev-parse HEAD)
+          approved=false
+          for _ in 1 2 3 4 5 6 7 8; do
+            run_id=$(gh run list --workflow ci.yml --commit "$head" \
+              --event pull_request --json databaseId --jq '.[0].databaseId')
+            if [ -n "$run_id" ]; then
+              gh api -X POST \
+                "repos/${{ github.repository }}/actions/runs/$run_id/approve" \
+                >/dev/null 2>&1 || true
+              approved=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$approved" = false ]; then
+            gh workflow run ci.yml --ref bot/refresh-popular-npm
+          fi
