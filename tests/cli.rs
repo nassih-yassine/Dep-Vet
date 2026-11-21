@@ -1000,3 +1000,54 @@ fn advisory_details_are_parallel_but_keep_batch_order() {
         .collect();
     assert_eq!(ids, vec!["GHSA-aaa", "GHSA-bbb", "GHSA-ccc"]);
 }
+
+#[test]
+fn lock_audits_all_new_packages_in_sorted_order() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.commit("base");
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[
+            ("express", "5.1.0"),
+            ("zeta-pkg", "1.0.0"),
+            ("alpha-pkg", "1.0.0"),
+            ("beta-pkg", "1.0.0"),
+        ]),
+    );
+
+    let registry = registry_with(
+        &[
+            PackageFixture::clean("zeta-pkg"),
+            PackageFixture::clean("alpha-pkg"),
+            PackageFixture::clean("beta-pkg"),
+        ],
+        None,
+    );
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let names: Vec<&str> = value["new_packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|package| package["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["alpha-pkg", "beta-pkg", "zeta-pkg"]);
+
+    let requests = registry.requests();
+    for name in ["alpha-pkg", "beta-pkg", "zeta-pkg"] {
+        assert!(
+            requests.iter().any(|path| path == &format!("/{name}")),
+            "{name} was not audited: {requests:?}"
+        );
+    }
+}
