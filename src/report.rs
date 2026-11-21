@@ -121,7 +121,10 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
 
     out.push_str(&format!(
         "  review: {}\n",
-        report.ecosystem.package_url(&report.name, &report.version)
+        report
+            .review_url
+            .clone()
+            .unwrap_or_else(|| report.ecosystem.package_url(&report.name, &report.version))
     ));
     out
 }
@@ -350,6 +353,7 @@ mod tests {
             hidden_advisories: 0,
             not_checked: Vec::new(),
             registry_url: "https://registry.npmjs.org/evil-pkg".to_string(),
+            review_url: None,
             findings,
         }
     }

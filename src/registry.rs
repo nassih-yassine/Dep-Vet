@@ -35,6 +35,9 @@ pub struct PackageMeta {
     pub repository: Option<String>,
     pub deprecated: Option<String>,
     pub registry_url: String,
+    /// Where a human should look this version up. `None` uses the
+    /// ecosystem's default page.
+    pub review_url: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -247,6 +250,7 @@ fn parse_packument(
         repository,
         deprecated: normalize_deprecated(doc.deprecated.clone()),
         registry_url: url.to_string(),
+        review_url: None,
     })
 }
 

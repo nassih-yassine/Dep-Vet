@@ -64,6 +64,7 @@ impl MockRegistry {
             .env("DEPVET_RUBYGEMS_BASE", &self.base)
             .env("DEPVET_NUGET_BASE", &self.base)
             .env("DEPVET_MAVEN_BASE", &self.base)
+            .env("DEPVET_GOOGLE_MAVEN_BASE", &self.base)
             .env("DEPVET_COMPOSER_BASE", &self.base)
             .env("DEPVET_PACKAGIST_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
@@ -2886,4 +2887,58 @@ fn audit_reads_legacy_nuget_packages_config() {
     assert_eq!(value["packages"].as_array().unwrap().len(), 1);
     assert_eq!(value["packages"][0]["name"], "Newtonsoft.Json");
     assert_eq!(value["errors"][0]["package"], "Broken.Without.Version");
+}
+
+const GOOGLE_METADATA: &str = r#"<?xml version='1.0' encoding='UTF-8'?>
+<metadata>
+  <groupId>androidx.core</groupId>
+  <artifactId>core-ktx</artifactId>
+  <versioning>
+    <versions>
+      <version>1.12.0</version>
+      <version>1.13.1</version>
+    </versions>
+  </versioning>
+</metadata>"#;
+
+#[test]
+fn maven_reads_androidx_from_google_maven() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/androidx/core/core-ktx/maven-metadata.xml".to_string(),
+        (200, GOOGLE_METADATA.to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["maven", "androidx.core:core-ktx@1.13.1", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["version"], "1.13.1");
+    assert_eq!(
+        value["review_url"],
+        "https://maven.google.com/web/index.html#androidx.core:core-ktx:1.13.1"
+    );
+    let not_checked = value["not_checked"].as_array().unwrap();
+    for signal in [
+        "execution",
+        "maintainers",
+        "repository",
+        "downloads",
+        "deprecation",
+    ] {
+        assert!(not_checked.iter().any(|entry| entry == signal), "{signal}");
+    }
+    // Google metadata has no publish times.
+    assert!(not_checked.iter().any(|entry| entry == "freshness"));
 }

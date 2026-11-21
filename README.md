@@ -431,7 +431,9 @@ clean.
   NuGet exposes no owners, downloads, repository, or build-time file data; its
   1900-01-01 "unknown" publish dates are ignored. Maven Central has no owners,
   downloads, repository, or deprecation concept, and no standard lockfile, so
-  `dep-vet maven` only vets a single coordinate. Composer has maintainers,
+  `dep-vet maven` only vets a single coordinate. AndroidX, AGP, Firebase, and
+  Play artifacts come from Google Maven, which has no publish timestamps, so
+  their `freshness` signal is reported as `not checked`. Composer has maintainers,
   repository metadata, and an abandoned flag, but no install-time file list and
   no weekly download figure.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or

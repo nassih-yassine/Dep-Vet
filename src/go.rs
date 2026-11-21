@@ -134,6 +134,7 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         repository: None,
         deprecated,
         registry_url: url.to_string(),
+        review_url: None,
     })
 }
 

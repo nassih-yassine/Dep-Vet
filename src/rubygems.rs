@@ -154,6 +154,7 @@ fn parse_versions(
         repository,
         deprecated,
         registry_url: url.to_string(),
+        review_url: None,
     })
 }
 

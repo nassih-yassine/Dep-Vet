@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 336 unit + 99 end-to-end tests
+cargo test --locked                      # 343 unit + 100 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -149,6 +149,20 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   unavailable"), never look like agreement. Composer names are lowercase and
   `parse_composer` lowercases them for OSV. Downloads are monthly-only on
   Packagist, so the weekly download signal stays `not checked`.
+- **Google Maven is a second source, not an ecosystem.** AndroidX, AGP,
+  Firebase, and Play groups (`androidx.`, `com.android.`, `com.google.android.`,
+  `com.google.firebase`, `com.google.mlkit`, `com.google.ar.`) are looked up in
+  `dl.google.com/dl/android/maven2` first; everything else goes to Central and
+  falls back to Google on not-found. Google's `maven-metadata.xml` has versions
+  but no timestamps, so those reports add `freshness` to `not_checked` and carry
+  a `review_url` pointing at maven.google.com instead of search.maven.org.
+  `PackageMeta.review_url` is the one override the renderer honors; every other
+  ecosystem leaves it `None` and uses `Ecosystem::package_url`.
+- **Maven Central 403 is a rate limit, not a missing package.** Sonatype's WAF
+  answers 403 when a client bursts the search API; `MavenError::Throttled` says
+  so instead of "not found". Tree audits therefore run Maven one package at a
+  time (`MAVEN_CONCURRENCY`), and those 403s are never cached as empty results.
+  Do not lower the 200-row page by asking for more rows: it is capped.
 - **Maven search returns at most 200 rows.** `spring-core` has 300+ versions, so
   an exact version is filtered in the query (`AND v:"3.2.0.RELEASE"`), and a
   truncated page triggers one extra request for the last row so "first seen" is

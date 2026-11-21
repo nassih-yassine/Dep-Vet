@@ -127,6 +127,7 @@ fn parse_crate(
             .filter(|url| !url.trim().is_empty()),
         deprecated,
         registry_url: url.to_string(),
+        review_url: None,
     })
 }
 

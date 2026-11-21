@@ -143,6 +143,7 @@ fn parse_versions(
         repository: None,
         deprecated,
         registry_url: url.to_string(),
+        review_url: None,
     })
 }
 

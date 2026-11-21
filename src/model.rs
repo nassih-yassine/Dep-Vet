@@ -701,6 +701,10 @@ pub struct PackageReport {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_checked: Vec<&'static str>,
     pub registry_url: String,
+    /// Overrides the ecosystem's default review page when a package does not
+    /// live on its main registry (Google Maven, for example).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_url: Option<String>,
     pub findings: Vec<Finding>,
 }
 
@@ -1083,6 +1087,7 @@ mod tests {
             hidden_advisories: 0,
             not_checked: Vec::new(),
             registry_url: String::new(),
+            review_url: None,
             findings,
         }
     }
