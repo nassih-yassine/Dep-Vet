@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The Action survives read-only tokens.** Inputs flow through quoted `env:`
+  values, the report is written to the step summary before commenting, a
+  read-only token (Dependabot/fork PRs) emits a warning instead of failing, and
+  dep-vet's exit code is preserved (warnings pass). A `vX.Y.Z` ref now installs
+  with `--tag` instead of `--branch`.
 - **Stale advisory data is bounded and disclosed.** OSV answers served from
   cache after a failed refresh are refused beyond 24 hours, and anything served
   within that window adds an INFO `advisories-stale` finding with its age. The

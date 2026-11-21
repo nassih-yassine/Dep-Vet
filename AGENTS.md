@@ -440,8 +440,14 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   65,536 characters. The full report is printed to the job log as well.
 - **Workflow YAML is not covered by `cargo test`.** Validate it with
   `ruby -ryaml -e 'YAML.load_file(...)'`, and exercise the embedded shell with a
-  stubbed `gh` and `dep-vet` before pushing. Third-party actions are avoided on
-  purpose: this repo should not add supply-chain surface to a supply-chain tool.
+  stubbed `gh` and `dep-vet` before pushing. Inputs reach the script only through
+  quoted `env:` values (`LOCKFILE`, `BASE_INPUT`, `PR_BASE`, `PR_NUMBER`,
+  `REPOSITORY`); never interpolate `inputs.*` into shell text. The report is
+  written to `$GITHUB_STEP_SUMMARY` before any comment attempt, a read-only
+  token prints `::warning::` and continues, and the job exits only on status >=
+  2 so warnings still pass. A `vX.Y.Z` ref installs with `--tag`, other refs
+  with `--branch`. Third-party actions are avoided on purpose: this repo should
+  not add supply-chain surface to a supply-chain tool.
 - **`lockfile::at_ref` must run git in the lockfile's directory.** A bare
   filename has `parent() == Some("")`, which git rejects; the empty-parent case
   falls back to `.` and has a regression test.

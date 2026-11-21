@@ -9,14 +9,16 @@ name: dep-vet
 #         contents: read
 #         pull-requests: write
 #
-# It installs dep-vet from source (no release binaries yet), vets every package
-# the lockfile change adds against the PR base, and keeps one sticky comment.
+# It installs the dep-vet release named by `ref` (falling back to a source
+# build), vets every package the lockfile change adds against the PR base, and
+# keeps one sticky PR comment. The report always lands in the job log and the
+# step summary, so a read-only token only loses the comment.
 
 on:
   workflow_call:
     inputs:
       lockfile:
-        description: Path to the npm lockfile
+        description: Path to the lockfile
         type: string
         default: package-lock.json
       base:
@@ -55,15 +57,24 @@ jobs:
             exit 0
           fi
           echo "no release for $REF; building from source"
-          cargo install --git https://github.com/nassih-yassine/Dep-Vet.git --branch "$REF" --locked
+          if printf '%s' "$REF" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            cargo install --git https://github.com/nassih-yassine/Dep-Vet.git --tag "$REF" --locked
+          else
+            cargo install --git https://github.com/nassih-yassine/Dep-Vet.git --branch "$REF" --locked
+          fi
 
       - name: Vet new dependencies
         env:
           GH_TOKEN: ${{ github.token }}
+          LOCKFILE: ${{ inputs.lockfile }}
+          BASE_INPUT: ${{ inputs.base }}
+          PR_BASE: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
         run: |
+          base="${BASE_INPUT:-origin/$PR_BASE}"
           set +e
-          dep-vet lock "${{ inputs.lockfile }}" \
-            --base "origin/${{ inputs.base || github.base_ref }}" > dep-vet-report.txt 2>&1
+          dep-vet lock "$LOCKFILE" --base "$base" > dep-vet-report.txt 2>&1
           status=$?
           set -e
 
@@ -85,20 +96,41 @@ jobs:
             mv dep-vet-comment-cut.md dep-vet-comment.md
           fi
 
-          # The full report always lands in the job log, whatever the comment holds.
+          # The full report always lands in the job log and the step summary,
+          # whether or not a comment can be written.
           cat dep-vet-report.txt
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### dep-vet: new dependency review"
+              echo
+              echo '```'
+              cat dep-vet-report.txt
+              echo '```'
+              echo
+              echo "exit code: \`$status\` (0 clean, 1 warnings, 2 high risk, 3 could not check)"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-          existing=$(gh api \
-            "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments?per_page=100" \
-            --jq 'map(select(.body | startswith("<!-- dep-vet -->"))) | first | .id // empty')
-
-          if [ -n "$existing" ]; then
-            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" \
-              -F body=@dep-vet-comment.md > /dev/null
-          else
-            gh api -X POST \
-              "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
-              -F body=@dep-vet-comment.md > /dev/null
+          # Dependabot and fork PRs can carry a read-only token. Losing the
+          # comment is a warning, not a failed audit; the exit code below still
+          # reflects dep-vet's verdict.
+          commented=false
+          if existing=$(gh api \
+            "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq 'map(select(.body | startswith("<!-- dep-vet -->"))) | first | .id // empty'); then
+            if [ -n "$existing" ]; then
+              if gh api -X PATCH "repos/$REPOSITORY/issues/comments/$existing" \
+                -F body=@dep-vet-comment.md > /dev/null; then
+                commented=true
+              fi
+            elif gh api -X POST \
+              "repos/$REPOSITORY/issues/$PR_NUMBER/comments" \
+              -F body=@dep-vet-comment.md > /dev/null; then
+              commented=true
+            fi
+          fi
+          if [ "$commented" != true ]; then
+            echo "::warning::dep-vet could not write the PR comment (read-only token?); the report is in the step summary and job log."
           fi
 
           # Warnings pass; high risk and incomplete audits fail the job.

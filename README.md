@@ -606,12 +606,17 @@ jobs:
 
 It diffs the lockfile against `origin/<base>`, comments the report, and fails
 the job on high risk (exit 2) or an incomplete audit (exit 3). Warnings (exit 1)
-pass with the findings visible in the comment. Very long reports are truncated
-in the comment; the full output always lands in the job log.
+pass with the findings visible in the report. Very long reports are truncated in
+the comment; the full output always lands in the job log **and the step
+summary**, so a read-only token (Dependabot and fork PRs) only loses the comment
+and emits a warning, never the report or dep-vet's exit code.
 
-The action installs the prebuilt binary for the `ref` input (default `v0.8.0`)
-and falls back to building from source when that ref has no release. Pinning
-`uses:` alone does not pin the binary: set `ref` to the tag you reviewed.
+`lockfile` and `base` are passed as quoted environment values, so paths with
+spaces and an explicit base revision work. The action installs the prebuilt
+binary for the `ref` input (default `v0.10.0`) and falls back to a source build
+when that ref has no release; a `vX.Y.Z` ref is installed with `--tag`, other
+refs with `--branch`. Pinning `uses:` alone does not pin the binary: set `ref`
+to the tag you reviewed.
 
 ### Color
 
