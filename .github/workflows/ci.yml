@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Bot branches need an explicit trigger: PRs opened with GITHUB_TOKEN do not
+  # start other workflows, so refresh-popular.yml dispatches this one.
+  workflow_dispatch:
 
 permissions:
   contents: read

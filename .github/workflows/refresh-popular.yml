@@ -59,3 +59,7 @@ jobs:
           auto-merge lands it."
           fi
           gh pr merge bot/refresh-popular-npm --auto --squash --delete-branch
+
+          # A PR opened with GITHUB_TOKEN does not trigger other workflows, so
+          # start the required CI check here.
+          gh workflow run ci.yml --ref bot/refresh-popular-npm
