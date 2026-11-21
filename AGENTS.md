@@ -29,10 +29,10 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test                              # 141 unit + 35 end-to-end tests
+cargo test --locked                      # 142 unit + 36 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
-cargo clippy --all-targets -- -D warnings
+cargo clippy --locked --all-targets -- -D warnings
 cargo fmt --check
 ```
 
@@ -78,8 +78,11 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   and `DEPVET_OSV_BASE`, with `DEPVET_NO_CACHE=1` except in cache tests. A test
   that reaches npmjs.org, osv.dev, or `~/.cache/dep-vet` is a bug.
 - **The cache policy is deliberate.** Fresh entry skips the network; stale
-  entries are used only for network errors and 5xx; a 404 never falls back, or
+  entries are used for network errors, 5xx, and 429; a 404 never falls back, or
   deleted packages would look alive. See `HttpError::is_transient`.
+- **Cache lifecycle:** entries older than `RETENTION_SECONDS` (30 days) are
+  deleted on open, and `PRAGMA user_version` drops the table when the schema
+  changes. Never add a column without bumping `SCHEMA_VERSION`.
 - **`querybatch` returns advisory IDs only.** Summary, aliases, and severity
   come from `GET /v1/vulns/{id}`. Treating the batch as full records shows
   "advisory without a summary" for every real advisory.
@@ -100,6 +103,12 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   name 404s and hides the real advisories.
 - **`docs/` is local-only.** It is in `.gitignore` on purpose; do not track it,
   link to it from user-facing docs, or delete it from disk.
+- **CI uses `--locked`.** Keep it on clippy and test commands, or CI can pass on
+  crate versions that are not in `Cargo.lock`.
+- **The action's `ref` input is the real pin.** `uses: ...@v1` pins the workflow
+  file, not the binary; the install step builds `ref` (tag or branch).
+- **PR comments are capped at 60,000 bytes** because GitHub rejects bodies over
+  65,536 characters. The full report is printed to the job log as well.
 - **Workflow YAML is not covered by `cargo test`.** Validate it with
   `ruby -ryaml -e 'YAML.load_file(...)'`, and exercise the embedded shell with a
   stubbed `gh` and `dep-vet` before pushing. Third-party actions are avoided on

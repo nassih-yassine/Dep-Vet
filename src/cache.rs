@@ -7,6 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension};
 
 pub const DEFAULT_TTL_SECONDS: i64 = 24 * 60 * 60;
+/// Entries older than this are deleted on open; the data is refetchable.
+pub const RETENTION_SECONDS: i64 = 30 * 24 * 60 * 60;
+/// Bump when the table shape changes; old caches are dropped, not misread.
+const SCHEMA_VERSION: i64 = 1;
 
 pub struct Cache {
     connection: Connection,
@@ -27,6 +31,13 @@ impl Cache {
 
     pub fn open(path: impl AsRef<Path>, ttl_seconds: i64) -> rusqlite::Result<Self> {
         let connection = Connection::open(path)?;
+
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version != SCHEMA_VERSION {
+            connection.execute("DROP TABLE IF EXISTS http_cache", ())?;
+            connection.execute(&format!("PRAGMA user_version = {SCHEMA_VERSION}"), ())?;
+        }
+
         connection.execute(
             "CREATE TABLE IF NOT EXISTS http_cache (
                 key        TEXT PRIMARY KEY,
@@ -35,6 +46,11 @@ impl Cache {
             )",
             (),
         )?;
+        connection.execute(
+            "DELETE FROM http_cache WHERE fetched_at < ?1",
+            (now_seconds() - RETENTION_SECONDS,),
+        )?;
+
         Ok(Self {
             connection,
             ttl_seconds,
@@ -157,12 +173,45 @@ mod tests {
     fn survives_reopening() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("cache.db");
+        let now = now_seconds();
         {
             let cache = Cache::open(&path, 60).unwrap();
-            cache.put("k", "body", 1000).unwrap();
+            cache.put("k", "body", now).unwrap();
         }
         let cache = Cache::open(&path, 60).unwrap();
-        assert_eq!(cache.fresh("k", 1000).unwrap().as_deref(), Some("body"));
+        assert_eq!(cache.fresh("k", now).unwrap().as_deref(), Some("body"));
+    }
+
+    #[test]
+    fn entries_older_than_retention_are_pruned_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.db");
+        {
+            let cache = Cache::open(&path, 60).unwrap();
+            cache
+                .put("old", "body", now_seconds() - RETENTION_SECONDS - 10)
+                .unwrap();
+            cache.put("new", "body", now_seconds()).unwrap();
+        }
+        let cache = Cache::open(&path, 60).unwrap();
+        assert_eq!(cache.stale("old").unwrap(), None);
+        assert_eq!(cache.stale("new").unwrap().as_deref(), Some("body"));
+    }
+
+    #[test]
+    fn a_different_schema_version_drops_old_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cache.db");
+        {
+            let cache = Cache::open(&path, 60).unwrap();
+            cache.put("k", "body", now_seconds()).unwrap();
+        }
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute("PRAGMA user_version = 0", ()).unwrap();
+        }
+        let cache = Cache::open(&path, 60).unwrap();
+        assert_eq!(cache.stale("k").unwrap(), None);
     }
 
     #[test]

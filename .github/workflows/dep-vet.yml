@@ -23,6 +23,10 @@ on:
         description: Git revision to diff against; defaults to the pull request base branch
         type: string
         default: ""
+      ref:
+        description: Dep-Vet tag or branch to build (a tag is what makes `uses:` pinning meaningful)
+        type: string
+        default: main
 
 permissions:
   contents: read
@@ -39,7 +43,15 @@ jobs:
           fetch-depth: 0
 
       - name: Install dep-vet
-        run: cargo install --git https://github.com/nassih-yassine/Dep-Vet.git --locked
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          url=https://github.com/nassih-yassine/Dep-Vet.git
+          if git ls-remote --exit-code --tags "$url" "refs/tags/$REF" >/dev/null 2>&1; then
+            cargo install --git "$url" --tag "$REF" --locked
+          else
+            cargo install --git "$url" --branch "$REF" --locked
+          fi
 
       - name: Vet new dependencies
         env:
@@ -61,6 +73,16 @@ jobs:
             echo
             echo "exit code: \`$status\` (0 clean, 1 warnings, 2 high risk, 3 could not check)"
           } > dep-vet-comment.md
+
+          # GitHub rejects comment bodies over 65,536 characters.
+          if [ "$(wc -c < dep-vet-comment.md)" -gt 60000 ]; then
+            head -c 60000 dep-vet-comment.md | iconv -f utf-8 -t utf-8 -c > dep-vet-comment-cut.md
+            printf '\n\n_Report truncated; full output in the job log._\n' >> dep-vet-comment-cut.md
+            mv dep-vet-comment-cut.md dep-vet-comment.md
+          fi
+
+          # The full report always lands in the job log, whatever the comment holds.
+          cat dep-vet-report.txt
 
           existing=$(gh api \
             "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments?per_page=100" \
