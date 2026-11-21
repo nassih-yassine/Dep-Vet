@@ -130,6 +130,13 @@ pub enum Command {
         action: HookAction,
     },
 
+    /// Serve the Model Context Protocol over stdio
+    Mcp {
+        /// Print a ready .mcp.json snippet and the `claude mcp add` line
+        #[arg(long)]
+        print_config: bool,
+    },
+
     /// Vet the packages an install command would fetch
     Guard {
         /// Audit the packages (otherwise only parse the command)

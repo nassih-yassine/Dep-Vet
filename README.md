@@ -657,6 +657,23 @@ bases and the cache bypass, so the command string cannot redirect the audit.
 `DEPVET_CACHE_DIR` and `DEPVET_DEBUG` still pass, so a cache can be shared and a
 failed check can be inspected on purpose.
 
+### MCP server
+
+```sh
+dep-vet mcp                      # stdio JSON-RPC, one JSON object per line
+dep-vet mcp --print-config       # .mcp.json snippet + claude mcp add line
+```
+
+Tools: `vet_package {ecosystem, name, version?}`, `vet_command {command}`, and
+`vet_lockfile_change {lockfile, base?}`. Each returns structured content plus a
+text summary; tool-level failures are `isError` results, while bad arguments and
+unknown tools are JSON-RPC errors. stdout carries only MCP messages — logs go to
+stderr and the progress bar is never drawn.
+
+Inputs are untrusted: ecosystems are validated, commands are capped at 64 KiB,
+lockfile paths are canonicalized and must stay under the server's working
+directory, and outputs are capped. Nothing is executed.
+
 ### Color
 
 Color is enabled only on a terminal. `--no-color` and `NO_COLOR` turn it off,

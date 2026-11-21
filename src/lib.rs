@@ -17,6 +17,7 @@ pub mod intent;
 pub mod jsr;
 pub mod lockfile;
 pub mod maven;
+pub mod mcp;
 pub mod model;
 pub mod nuget;
 pub mod osv;

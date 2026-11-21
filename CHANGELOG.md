@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **MCP server.** `dep-vet mcp` speaks newline-delimited JSON-RPC over stdio
+  with three tools: `vet_package`, `vet_command`, and `vet_lockfile_change`.
+  stdout stays pure, paths are confined to the working directory, and
+  `--print-config` prints a ready `.mcp.json` snippet.
 - **Agent install guard.** `dep-vet guard --check -- <command>` parses npm,
   PyPI, crates.io, Go, RubyGems, NuGet, Composer, and ephemeral runner installs,
   audits the named packages, and names anything it could not check. The parser
