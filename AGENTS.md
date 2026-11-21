@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 254 unit + 82 end-to-end tests
+cargo test --locked                      # 265 unit + 83 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -78,6 +78,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
 | `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |
 | `src/go.rs` | deps.dev Go module index, versions, publish times, deprecation |
+| `src/jsr.rs` | JSR meta/package APIs, repository, archived flag |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -118,6 +119,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **JSR has no advisory source.** `Profile::JSR` sets `advisories: false`; the
+  report emits an INFO "advisory coverage unavailable" instead of querying OSV.
+  No owners, downloads, or execution either. `deno.lock` keeps npm and JSR
+  entries in separate lists (`LockContents.packages` vs `.jsr`) because a Deno
+  lockfile mixes registries; both are audited.
 - **Go can check almost nothing structural.** No install hooks, owner list,
   downloads, or repository in the module index: `Profile::GO` disables all four
   and the report says `not checked`. Go advisories still work through OSV.
@@ -278,5 +284,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-JSR support and other remaining formats. Roadmap only: do not describe these
-as existing in code, README, or help text.
+Other ecosystems and remaining lockfile formats. Roadmap only: do not describe
+these as existing in code, README, or help text.

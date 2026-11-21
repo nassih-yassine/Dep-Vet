@@ -21,6 +21,8 @@ pub struct LockedPackage {
 #[derive(Debug)]
 pub struct LockContents {
     pub packages: Vec<LockedPackage>,
+    /// Deno lockfiles mix registries; JSR entries use their own source.
+    pub jsr: Vec<LockedPackage>,
     pub skipped: Vec<(String, String)>,
     /// Things that were intentionally not audited but must not fail the run.
     pub notes: Vec<String>,
@@ -30,6 +32,7 @@ impl LockContents {
     fn packages_only(packages: Vec<LockedPackage>) -> Self {
         Self {
             packages,
+            jsr: Vec::new(),
             skipped: Vec::new(),
             notes: Vec::new(),
         }
@@ -415,13 +418,23 @@ fn parse_deno(body: &str) -> Result<LockContents, LockError> {
         }
     }
 
-    let mut contents = finish(packages, skipped);
-    if !lockfile.jsr.is_empty() {
-        contents.notes.push(format!(
-            "{} JSR package(s) not audited: dep-vet has no JSR source yet",
-            lockfile.jsr.len()
-        ));
+    let mut jsr_packages = Vec::new();
+    for key in lockfile.jsr.keys() {
+        match key.rsplit_once('@') {
+            Some((name, version)) if name.starts_with('@') && !version.is_empty() => {
+                jsr_packages.push(LockedPackage {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                });
+            }
+            _ => skipped.push((key.clone(), "unreadable deno jsr entry".to_string())),
+        }
     }
+    jsr_packages.sort();
+    jsr_packages.dedup();
+
+    let mut contents = finish(packages, skipped);
+    contents.jsr = jsr_packages;
     Ok(contents)
 }
 
@@ -738,6 +751,7 @@ fn finish(mut packages: Vec<LockedPackage>, skipped: Vec<(String, String)>) -> L
     packages.dedup();
     LockContents {
         packages,
+        jsr: Vec::new(),
         skipped,
         notes: Vec::new(),
     }
@@ -1077,16 +1091,22 @@ broken@1.0.0:
             contents.packages,
             vec![package("@scope/pkg", "1.2.3"), package("chalk", "5.3.0")]
         );
-        assert_eq!(contents.notes.len(), 1);
-        assert!(contents.notes[0].contains("2 JSR package"));
+        assert_eq!(
+            contents.jsr,
+            vec![
+                package("@std/assert", "1.0.0"),
+                package("@std/internal", "1.0.14")
+            ]
+        );
+        assert!(contents.notes.is_empty());
     }
 
     #[test]
-    fn deno_with_only_jsr_has_no_packages_but_a_note() {
+    fn deno_with_only_jsr_has_no_npm_packages() {
         let body = r#"{ "version": "5", "jsr": { "@std/assert@1.0.0": {} } }"#;
         let contents = parse(Format::Deno, body).unwrap();
         assert!(contents.packages.is_empty());
-        assert_eq!(contents.notes.len(), 1);
+        assert_eq!(contents.jsr, vec![package("@std/assert", "1.0.0")]);
     }
 
     #[test]

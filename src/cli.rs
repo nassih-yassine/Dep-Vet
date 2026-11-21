@@ -90,6 +90,16 @@ pub enum Command {
         lockfile: Option<std::path::PathBuf>,
     },
 
+    /// Vet a JSR package before adding it
+    Jsr {
+        /// Scoped package with optional exact version: @std/assert@1.0.19
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -153,6 +163,18 @@ mod tests {
                 assert!(!json);
             }
             _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
+    fn parses_jsr_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "jsr", "@std/assert@1.0.19"]).unwrap();
+        match cli.command {
+            Command::Jsr { package, json } => {
+                assert_eq!(package, "@std/assert@1.0.19");
+                assert!(!json);
+            }
+            _ => panic!("expected jsr command"),
         }
     }
 

@@ -29,6 +29,7 @@ pub fn report(
                 findings.push(advisories_hidden(list.hidden));
             }
         }
+        None if !profile.advisories => findings.push(advisory_coverage_missing(ecosystem)),
         None => findings.push(advisory_check_unavailable()),
     }
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
@@ -106,6 +107,23 @@ pub fn advisory_findings(advisories: &[Advisory]) -> Vec<Finding> {
         .collect()
 }
 
+fn advisory_coverage_missing(ecosystem: Ecosystem) -> Finding {
+    Finding {
+        id: "advisory-check-unavailable",
+        severity: Severity::Info,
+        title: "advisory coverage unavailable".to_string(),
+        detail: format!(
+            "OSV does not publish advisories for {ecosystem}; this report covers metadata only"
+        ),
+        allowed: false,
+        evidence: vec![Evidence {
+            label: "OSV ecosystems".to_string(),
+            value: "https://osv.dev/#use".to_string(),
+            url: Some("https://osv.dev/#use".to_string()),
+        }],
+    }
+}
+
 /// The per-run cap dropped advisories; the report must not look complete.
 pub fn advisories_hidden(hidden: usize) -> Finding {
     Finding {
@@ -161,6 +179,7 @@ pub fn assess(
         Ecosystem::Pypi => typosquat::POPULAR_PYPI,
         Ecosystem::CratesIo => typosquat::POPULAR_CRATES,
         Ecosystem::Go => typosquat::POPULAR_GO,
+        Ecosystem::Jsr => typosquat::POPULAR_JSR,
     };
     let suspect = if profile.typosquat {
         typosquat::closest(&meta.name, seed, local)

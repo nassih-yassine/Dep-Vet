@@ -28,7 +28,7 @@
 ---
 
 `npm install` runs code, and so does a Python sdist build. `dep-vet` reads
-public registry metadata and OSV advisories for **npm, PyPI, crates.io, and Go modules**, then tells you
+public registry metadata and OSV advisories for **npm, PyPI, crates.io, Go modules, and JSR**, then tells you
 what a package will do at that moment: whether it runs install-time code, how
 old it is, who published this version, whether its name is one typo away from a
 package you trust, what vulnerabilities apply to this exact version, and whether
@@ -139,7 +139,7 @@ dep-vet audit uv.lock                # PyPI via uv
 dep-vet audit bun.lock               # Bun
 dep-vet audit pnpm-lock.yaml         # pnpm
 dep-vet audit yarn.lock              # Yarn classic and Berry
-dep-vet audit deno.lock              # Deno (npm entries; JSR noted)
+dep-vet audit deno.lock              # Deno: npm and JSR entries
 ```
 
 Vets **every** package the lockfile installs, not just the diff, and reports the
@@ -159,7 +159,7 @@ What each format contributes, and what it cannot:
 | `bun.lock` | `packages` tuples (JSON with comments) | unreadable entries |
 | `pnpm-lock.yaml` | v5, v6, and v9 package keys; peer suffixes stripped | unrecognized keys |
 | `yarn.lock` | classic and Berry entries | entries without a version; workspace links ignored |
-| `deno.lock` | `npm` entries | JSR packages, listed as a run note that does not fail |
+| `deno.lock` | `npm` and `jsr` entries | JSR advisories, which OSV does not publish |
 
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
@@ -174,6 +174,18 @@ Audits the lockfile once, then again every time it changes on disk. Saves are
 debounced (300 ms), so an editor writing the file several times produces one
 rerun. `Ctrl-C` stops it. Without an argument it watches the nearest
 `package-lock.json`.
+
+### Check a JSR package
+
+```sh
+dep-vet jsr @std/assert             # latest
+dep-vet jsr @std/assert@1.0.19      # exact version
+```
+
+JSR gives versions, publish times, a GitHub repository, and an archived flag.
+It has no owner list, download figure, install hooks, or OSV advisories; the
+report lists those as `not checked`, and says advisory coverage is unavailable
+instead of implying the package is clean.
 
 ### Check a PyPI package
 
@@ -395,10 +407,10 @@ clean.
 
 ## Scope and limits
 
-- **npm, PyPI, crates.io, and Go**, for both `audit` and `lock`, including
+- **npm, PyPI, crates.io, Go, and JSR**, for both `audit` and `lock`, including
   `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`, `poetry.lock`, and
-  `uv.lock`. Deno's JSR packages are not audited: there is no JSR source yet, and
-  the report says so as a run note instead of failing.
+  `uv.lock`. JSR has no advisory source, so JSR reports say advisory coverage is
+  unavailable.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the
@@ -419,7 +431,7 @@ clean.
   skipped. Lockfile audits run 4 packages at a time.
 - The npm popular-name list is download-ranked; a weekly workflow runs
   `scripts/refresh-popular-npm.py`, opens a bot PR, and auto-merges after CI.
-  PyPI, crates.io, and Go seeds are curated.
+  PyPI, crates.io, Go, and JSR seeds are curated.
 
 ## Development
 
@@ -462,6 +474,7 @@ src/registry.rs   npm packument fetch + parsing, download counts
 src/pypi.rs       PyPI JSON API, sdist-only detection, yanked releases
 src/crates.rs     crates.io API, owner list, yanked releases
 src/go.rs         Go module index, versions, publish times, deprecation
+src/jsr.rs        JSR versions, repository, archived flag
 src/osv.rs        advisory IDs from querybatch, details per advisory
 src/http.rs       one agent, body limit, cache read/write policy
 src/cache.rs      SQLite cache with TTL and stale fallback
@@ -479,7 +492,7 @@ did.
 
 ## Roadmap
 
-1. JSR support for Deno, and other remaining formats.
+1. Other ecosystems (RubyGems, Maven) and remaining lockfile formats.
 
 ## License
 

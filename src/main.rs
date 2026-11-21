@@ -8,6 +8,7 @@ use dep_vet::cli::{Cli, Command};
 use dep_vet::crates::{CratesClient, CratesError};
 use dep_vet::go::{GoClient, GoError};
 use dep_vet::http::HttpClient;
+use dep_vet::jsr::{JsrClient, JsrError};
 use dep_vet::lockfile;
 use dep_vet::model::Ecosystem;
 use dep_vet::model::{
@@ -75,6 +76,13 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
             let mut report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            allowlist.apply(&mut report);
+            emit_package(cli, *json, &report)
+        }
+
+        Command::Jsr { package, json } => {
+            let spec = PackageSpec::parse_jsr(package)?;
+            let mut report = auditor.audit_jsr(&spec, now_seconds())?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
@@ -154,8 +162,14 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 Vec::new()
             };
 
+            let now = now_seconds();
             let (mut new_packages, mut errors) =
-                audit_packages(&auditor, ecosystem, &added, &local, now_seconds());
+                audit_packages(&auditor, ecosystem, &added, &local, now);
+            let added_jsr = lockfile::added(&current.jsr, &base_contents.jsr);
+            let (jsr_reports, jsr_errors) =
+                audit_packages(&auditor, Ecosystem::Jsr, &added_jsr, &[], now);
+            new_packages.extend(jsr_reports);
+            errors.extend(jsr_errors);
             errors.extend(skipped_errors(&current));
             for report in &mut new_packages {
                 allowlist.apply(report);
@@ -199,6 +213,7 @@ struct Auditor {
     pypi: PypiClient,
     crates: CratesClient,
     go: GoClient,
+    jsr: JsrClient,
     osv: OsvClient,
 }
 
@@ -209,6 +224,7 @@ impl Auditor {
             pypi: PypiClient::from_env(Arc::clone(http)),
             crates: CratesClient::from_env(Arc::clone(http)),
             go: GoClient::from_env(Arc::clone(http)),
+            jsr: JsrClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
         }
     }
@@ -234,6 +250,19 @@ impl Auditor {
             advisories.as_ref(),
             local,
             Profile::NPM,
+            now,
+        ))
+    }
+
+    fn audit_jsr(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, JsrError> {
+        let meta = self.jsr.fetch(spec)?;
+        Ok(signals::report(
+            meta,
+            Ecosystem::Jsr,
+            None,
+            None,
+            &[],
+            Profile::JSR,
             now,
         ))
     }
@@ -301,13 +330,13 @@ fn run_audit(
     let contents = lockfile::read(path)?;
     // No tree context: every package would otherwise look suspicious
     // to every other one. The seed list is the comparison set.
-    let (mut reports, mut errors) = audit_packages(
-        auditor,
-        format.ecosystem(),
-        &contents.packages,
-        &[],
-        now_seconds(),
-    );
+    let now = now_seconds();
+    let (mut reports, mut errors) =
+        audit_packages(auditor, format.ecosystem(), &contents.packages, &[], now);
+    let (jsr_reports, jsr_errors) =
+        audit_packages(auditor, Ecosystem::Jsr, &contents.jsr, &[], now);
+    reports.extend(jsr_reports);
+    errors.extend(jsr_errors);
     errors.extend(skipped_errors(&contents));
     for report in &mut reports {
         allowlist.apply(report);
@@ -347,6 +376,7 @@ fn spec_for(
         Ecosystem::Pypi => PackageSpec::parse_pypi(&format!("{name}=={version}")),
         Ecosystem::CratesIo => PackageSpec::parse_crates(&format!("{name}@{version}")),
         Ecosystem::Go => PackageSpec::parse_go(&format!("{name}@{version}")),
+        Ecosystem::Jsr => PackageSpec::parse_jsr(&format!("{name}@{version}")),
     }
 }
 
@@ -387,6 +417,9 @@ fn audit_packages(
                                 }
                                 Ecosystem::Go => {
                                     auditor.audit_go(&spec, now).map_err(|e| e.to_string())
+                                }
+                                Ecosystem::Jsr => {
+                                    auditor.audit_jsr(&spec, now).map_err(|e| e.to_string())
                                 }
                             };
                             audited.map_err(|message| LockFetchError {

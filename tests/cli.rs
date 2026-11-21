@@ -60,6 +60,7 @@ impl MockRegistry {
             .env("DEPVET_OSV_BASE", &self.base)
             .env("DEPVET_PYPI_BASE", &self.base)
             .env("DEPVET_CRATES_BASE", &self.base)
+            .env("DEPVET_JSR_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
@@ -2073,8 +2074,69 @@ fn advisories_listed_under_several_ids_are_merged() {
     assert_eq!(value["findings"].as_array().unwrap().len(), 1);
 }
 
+const JSR_META: &str = r#"{
+    "scope": "std",
+    "name": "assert",
+    "latest": "1.0.0",
+    "versions": { "1.0.0": { "createdAt": "2026-02-20T07:56:26.774Z" } }
+}"#;
+
+const JSR_PACKAGE: &str = r#"{
+    "scope": "std",
+    "name": "assert",
+    "isArchived": false,
+    "githubRepository": { "owner": "denoland", "name": "std" }
+}"#;
+
+fn jsr_routes(routes: &mut HashMap<String, (u16, String)>) {
+    routes.insert(
+        "/@std/assert/meta.json".to_string(),
+        (200, JSR_META.to_string()),
+    );
+    routes.insert(
+        "/api/scopes/std/packages/assert".to_string(),
+        (200, JSR_PACKAGE.to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+}
+
 #[test]
-fn audit_reads_deno_lock_and_notes_jsr() {
+fn jsr_package_reports_metadata_and_missing_coverage() {
+    let mut routes = HashMap::new();
+    jsr_routes(&mut routes);
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["jsr", "@std/assert", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["ecosystem"], "jsr");
+    assert_eq!(value["version"], "1.0.0");
+    assert_eq!(value["repository"], "https://github.com/denoland/std");
+    let not_checked = value["not_checked"].as_array().unwrap();
+    for signal in ["execution", "maintainers", "downloads", "advisories"] {
+        assert!(
+            not_checked.iter().any(|entry| entry == signal),
+            "missing {signal}"
+        );
+    }
+    assert_eq!(
+        value["findings"][0]["title"],
+        "advisory coverage unavailable"
+    );
+}
+
+#[test]
+fn audit_reads_deno_lock_and_audits_jsr_entries() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
         directory.path().join("deno.lock"),
@@ -2090,7 +2152,10 @@ fn audit_reads_deno_lock_and_notes_jsr() {
         version: "5.3.0",
         ..PackageFixture::clean("chalk")
     };
-    let registry = registry_with(&[chalk], None);
+    let mut routes = HashMap::new();
+    routes.insert(chalk.route(), (200, chalk.to_json()));
+    jsr_routes(&mut routes);
+    let registry = MockRegistry::start(routes);
     let output = registry
         .command()
         .current_dir(directory.path())
@@ -2102,13 +2167,15 @@ fn audit_reads_deno_lock_and_notes_jsr() {
         .clone();
 
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(value["packages"][0]["name"], "chalk");
-    assert!(
-        value["notes"][0]
-            .as_str()
-            .unwrap()
-            .contains("1 JSR package")
-    );
+    let names: Vec<&str> = value["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|package| package["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["chalk", "@std/assert"]);
+    assert!(value["notes"].as_array().is_none(), "no notes expected");
+    assert_eq!(value["errors"].as_array().unwrap().len(), 0);
 }
 
 #[test]
