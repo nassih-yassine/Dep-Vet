@@ -59,6 +59,17 @@ impl Cache {
 
     /// Entry that is still inside the TTL.
     pub fn fresh(&self, key: &str, now: i64) -> rusqlite::Result<Option<String>> {
+        self.fresh_with(key, now, self.ttl_seconds)
+    }
+
+    /// Freshness under a caller-chosen TTL. Advisories must not be a day old,
+    /// while packuments can be.
+    pub fn fresh_with(
+        &self,
+        key: &str,
+        now: i64,
+        ttl_seconds: i64,
+    ) -> rusqlite::Result<Option<String>> {
         let entry: Option<(String, i64)> = self
             .connection
             .query_row(
@@ -70,7 +81,7 @@ impl Cache {
         Ok(entry
             // A timestamp in the future means the clock moved backwards; do
             // not treat that entry as fresh forever.
-            .filter(|(_, fetched_at)| *fetched_at <= now && now - *fetched_at < self.ttl_seconds)
+            .filter(|(_, fetched_at)| *fetched_at <= now && now - *fetched_at < ttl_seconds)
             .map(|(body, _)| body))
     }
 
@@ -83,6 +94,10 @@ impl Cache {
                 |row| row.get(0),
             )
             .optional()
+    }
+
+    pub fn ttl_seconds(&self) -> i64 {
+        self.ttl_seconds
     }
 
     pub fn put(&self, key: &str, body: &str, now: i64) -> rusqlite::Result<()> {
@@ -135,6 +150,15 @@ mod tests {
         let (_directory, cache) = cache();
         assert_eq!(cache.fresh("nope", 1000).unwrap(), None);
         assert_eq!(cache.stale("nope").unwrap(), None);
+    }
+
+    #[test]
+    fn a_caller_can_shorten_the_ttl() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Cache::open(directory.path().join("cache.db"), 86_400).unwrap();
+        cache.put("k", "body", now_seconds() - 600).unwrap();
+        assert!(cache.fresh("k", now_seconds()).unwrap().is_some());
+        assert!(cache.fresh_with("k", now_seconds(), 300).unwrap().is_none());
     }
 
     #[test]

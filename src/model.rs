@@ -732,7 +732,44 @@ pub struct PackageReport {
     /// What to do about this package, when there is something to do.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub upgrades: Vec<Upgrade>,
+    #[serde(serialize_with = "crate::report::serialize_findings")]
     pub findings: Vec<Finding>,
+}
+
+/// How sure the rule is, separate from how bad the finding would be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    Low,
+    Medium,
+    High,
+}
+
+impl Finding {
+    /// Rule-level confidence. Severity says how bad this would be; confidence
+    /// says how sure the evidence is. Both are needed before acting on a line.
+    pub fn confidence(&self) -> Confidence {
+        match self.id {
+            "advisory"
+            | "install-scripts"
+            | "install-scripts-changed"
+            | "build-from-source"
+            | "advisories-truncated"
+            | "advisory-check-unavailable"
+            | "advisory-coverage-partial" => Confidence::High,
+            "typosquat"
+            | "publisher-not-maintainer"
+            | "publisher-changed"
+            | "dependency-added"
+            | "release-after-dormancy"
+            | "deprecated"
+            | "fresh-package"
+            | "fresh-version"
+            | "maintainer-check-unavailable"
+            | "no-repository" => Confidence::Medium,
+            _ => Confidence::Medium,
+        }
+    }
 }
 
 /// One actionable line for a package. The fixed version is what OSV publishes;
@@ -1133,6 +1170,17 @@ mod tests {
                 "accepted {input:?}"
             );
         }
+    }
+
+    #[test]
+    fn confidence_follows_the_rule_not_the_severity() {
+        let mut item = finding(Severity::Warn);
+        item.id = "typosquat";
+        assert_eq!(item.confidence(), Confidence::Medium);
+        item.id = "advisory";
+        assert_eq!(item.confidence(), Confidence::High);
+        item.id = "something-new";
+        assert_eq!(item.confidence(), Confidence::Medium);
     }
 
     #[test]

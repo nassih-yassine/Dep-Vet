@@ -2,7 +2,8 @@
 //!
 //! Cache policy in three lines: a fresh entry skips the network; a network or
 //! server failure falls back to a stale entry; everything else is an error.
-//! A dropped connection or timeout is retried once before that fallback.
+//! Transient failures retry with bounded exponential backoff and honour
+//! `Retry-After`, because registries rate-limit bursts.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -15,12 +16,30 @@ pub const MAX_BODY_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {
     #[error("HTTP {status} from {url}")]
-    Status { status: u16, url: String },
+    Status {
+        status: u16,
+        url: String,
+        retry_after: Option<u64>,
+    },
     #[error("network error fetching {url}: {message}")]
     Network { url: String, message: String },
 }
 
+/// Initial attempt plus two retries.
+pub const MAX_ATTEMPTS: u32 = 3;
+/// Advisories change hourly; a day-old answer is the one staleness that matters.
+pub const ADVISORY_TTL_SECONDS: i64 = 300;
+const RETRY_BASE_MS: u64 = 150;
+const RETRY_CAP_SECONDS: u64 = 5;
+
 impl HttpError {
+    fn retry_after(&self) -> Option<u64> {
+        match self {
+            Self::Status { retry_after, .. } => *retry_after,
+            Self::Network { .. } => None,
+        }
+    }
+
     /// Server-side problems may be papered over with a stale cache entry;
     /// a 404 must never be, or deleted packages would look alive.
     fn is_transient(&self) -> bool {
@@ -51,6 +70,9 @@ impl HttpClient {
     pub fn with_cache(cache: Option<Cache>) -> Self {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(20)))
+            // Statuses are data here: 404, 429, and 5xx carry meaning and
+            // headers (Retry-After) that an opaque error would drop.
+            .http_status_as_error(false)
             .user_agent(concat!("dep-vet/", env!("CARGO_PKG_VERSION")))
             .build();
         Self {
@@ -76,17 +98,28 @@ impl HttpClient {
         let now = now_seconds();
         if let Some(cache) = &self.cache
             && let Ok(cache) = cache.lock()
-            && let Ok(Some(body)) = cache.fresh(key, now)
         {
-            return Ok(body);
+            let ttl = if is_advisory(key) {
+                ADVISORY_TTL_SECONDS
+            } else {
+                cache.ttl_seconds()
+            };
+            if let Ok(Some(body)) = cache.fresh_with(key, now, ttl) {
+                return Ok(body);
+            }
         }
 
-        let mut result = fetch();
-        // One retry for a timeout or dropped connection. 404 and 429 are
-        // deliberate answers, not blips: 429 has its own stale-cache path.
-        if matches!(result, Err(HttpError::Network { .. })) {
-            result = fetch();
-        }
+        let mut attempt = 0;
+        let result = loop {
+            match fetch() {
+                Ok(body) => break Ok(body),
+                Err(error) if error.is_transient() && attempt + 1 < MAX_ATTEMPTS => {
+                    std::thread::sleep(retry_delay(attempt, error.retry_after()));
+                    attempt += 1;
+                }
+                Err(error) => break Err(error),
+            }
+        };
 
         match result {
             Ok(body) => {
@@ -112,31 +145,63 @@ impl HttpClient {
 
     fn fetch_get(&self, url: &str) -> Result<String, HttpError> {
         match self.agent.get(url).call() {
-            Ok(mut response) => read_body(&mut response, url),
-            Err(ureq::Error::StatusCode(status)) => Err(HttpError::Status {
-                status,
-                url: url.to_string(),
-            }),
-            Err(error) => Err(HttpError::Network {
-                url: url.to_string(),
-                message: error.to_string(),
-            }),
+            Ok(response) => read_response(response, url),
+            Err(error) => Err(network_error(error, url)),
         }
     }
 
     fn fetch_post(&self, url: &str, body: &serde_json::Value) -> Result<String, HttpError> {
         match self.agent.post(url).send_json(body) {
-            Ok(mut response) => read_body(&mut response, url),
-            Err(ureq::Error::StatusCode(status)) => Err(HttpError::Status {
-                status,
-                url: url.to_string(),
-            }),
-            Err(error) => Err(HttpError::Network {
-                url: url.to_string(),
-                message: error.to_string(),
-            }),
+            Ok(response) => read_response(response, url),
+            Err(error) => Err(network_error(error, url)),
         }
     }
+}
+
+fn network_error(error: ureq::Error, url: &str) -> HttpError {
+    HttpError::Network {
+        url: url.to_string(),
+        message: error.to_string(),
+    }
+}
+
+fn read_response(
+    mut response: ureq::http::Response<ureq::Body>,
+    url: &str,
+) -> Result<String, HttpError> {
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_retry_after);
+        return Err(HttpError::Status {
+            status,
+            url: url.to_string(),
+            retry_after,
+        });
+    }
+    read_body(&mut response, url)
+}
+
+fn is_advisory(key: &str) -> bool {
+    key.contains("api.osv.dev")
+}
+
+fn parse_retry_after(value: &str) -> Option<u64> {
+    value.trim().parse::<u64>().ok()
+}
+
+/// Bounded exponential backoff. A server-provided Retry-After wins, capped so
+/// one registry cannot stall a whole audit.
+fn retry_delay(attempt: u32, retry_after: Option<u64>) -> Duration {
+    if let Some(seconds) = retry_after {
+        return Duration::from_secs(seconds.min(RETRY_CAP_SECONDS));
+    }
+    let factor = 1_u64 << attempt.min(5);
+    let millis = (RETRY_BASE_MS * factor).min(RETRY_CAP_SECONDS * 1000);
+    Duration::from_millis(millis)
 }
 
 fn read_body(
@@ -204,6 +269,7 @@ mod tests {
                 Err(HttpError::Status {
                     status: 503,
                     url: "https://example.test/x".to_string(),
+                    retry_after: None,
                 })
             })
             .unwrap();
@@ -221,6 +287,7 @@ mod tests {
                 Err(HttpError::Status {
                     status: 429,
                     url: "https://example.test/x".to_string(),
+                    retry_after: None,
                 })
             })
             .unwrap();
@@ -238,6 +305,7 @@ mod tests {
                 Err(HttpError::Status {
                     status: 404,
                     url: "https://example.test/x".to_string(),
+                    retry_after: None,
                 })
             })
             .unwrap_err();
@@ -265,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn a_second_network_error_is_not_retried_again() {
+    fn a_network_error_retries_up_to_the_cap() {
         let http = HttpClient::with_cache(None);
         let mut attempts = 0;
 
@@ -277,7 +345,7 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, HttpError::Network { .. }));
-        assert_eq!(attempts, 2);
+        assert_eq!(attempts, MAX_ATTEMPTS);
     }
 
     #[test]
@@ -290,10 +358,70 @@ mod tests {
             Err(HttpError::Status {
                 status: 404,
                 url: "https://example.test/x".to_string(),
+                retry_after: None,
             })
         });
 
         assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn advisories_go_stale_five_minutes_after_fetch() {
+        let (_directory, cache) = cache(86_400);
+        let http = HttpClient::with_cache(Some(cache));
+        let key = "https://api.osv.dev/v1/querybatch";
+        let mut calls = 0;
+
+        let first = http
+            .cached(key, || {
+                calls += 1;
+                Ok("live".to_string())
+            })
+            .unwrap();
+        assert_eq!(first, "live");
+
+        {
+            let cache = http.cache.as_ref().unwrap().lock().unwrap();
+            cache.put(key, "old", now_seconds() - 600).unwrap();
+        }
+        let again = http
+            .cached(key, || {
+                calls += 1;
+                Ok("refetched".to_string())
+            })
+            .unwrap();
+        assert_eq!(again, "refetched");
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn metadata_keeps_the_default_ttl() {
+        let (_directory, cache) = cache(86_400);
+        cache
+            .put(
+                "https://registry.npmjs.org/x",
+                "cached",
+                now_seconds() - 600,
+            )
+            .unwrap();
+        let http = HttpClient::with_cache(Some(cache));
+        let body = http
+            .cached("https://registry.npmjs.org/x", || {
+                panic!("metadata should still be fresh")
+            })
+            .unwrap();
+        assert_eq!(body, "cached");
+    }
+
+    #[test]
+    fn backoff_grows_and_honours_retry_after() {
+        assert_eq!(retry_delay(0, None), Duration::from_millis(150));
+        assert_eq!(retry_delay(1, None), Duration::from_millis(300));
+        assert_eq!(retry_delay(10, None), Duration::from_millis(4800));
+        assert_eq!(retry_delay(0, Some(2)), Duration::from_secs(2));
+        assert_eq!(retry_delay(0, Some(99)), Duration::from_secs(5));
+        assert_eq!(parse_retry_after("3"), Some(3));
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2026 07:28:00 GMT"), None);
     }
 
     #[test]
