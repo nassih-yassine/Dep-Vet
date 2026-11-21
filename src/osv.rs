@@ -99,16 +99,22 @@ impl OsvClient {
     /// Details are independent requests; fetch them together and keep the
     /// batch order so the report is stable.
     fn advisories(&self, ids: &[String]) -> Vec<Advisory> {
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = ids
-                .iter()
-                .map(|id| (id, scope.spawn(move || self.advisory(id))))
-                .collect();
-            handles
-                .into_iter()
-                .map(|(id, handle)| handle.join().unwrap_or_else(|_| Advisory::unavailable(id)))
-                .collect()
-        })
+        advisory_batches(ids)
+            .flat_map(|batch| {
+                std::thread::scope(|scope| {
+                    let handles: Vec<_> = batch
+                        .iter()
+                        .map(|id| (id, scope.spawn(move || self.advisory(id))))
+                        .collect();
+                    handles
+                        .into_iter()
+                        .map(|(id, handle)| {
+                            handle.join().unwrap_or_else(|_| Advisory::unavailable(id))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect()
     }
 
     fn advisory(&self, id: &str) -> Advisory {
