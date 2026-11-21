@@ -186,8 +186,8 @@ $ dep-vet audit composer.lock
     crossenv 0.0.2-security    → cross-env
 ```
 
-`fixed in` is the version OSV says fixes the advisory, linked to the advisory
-above it. When no fix was published the line says so; when OSV would not return
+`fixed in` is the version OSV says fixes the advisory; the advisory ids point
+back to the linked findings above. When no fix was published the line says so; when OSV would not return
 the advisory's details it says `fix unknown`, never "no fix". `newest` is a
 separate hint and never claims the new version is safe. A lookalike name
 suggests the package it resembles, never a version. Advice never changes the

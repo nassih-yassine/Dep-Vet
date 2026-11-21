@@ -357,6 +357,9 @@ struct AffectedPackage {
 
 #[derive(Debug, Deserialize)]
 struct AffectedRange {
+    /// OSV names the range kind; `GIT` fixes are commits, not versions.
+    #[serde(rename = "type", default)]
+    kind: String,
     #[serde(default)]
     events: Vec<AffectedEvent>,
 }
@@ -378,6 +381,9 @@ fn fixed_for(record: &VulnRecord, ecosystem: Ecosystem, name: &str) -> Vec<Strin
             continue;
         }
         for range in &affected.ranges {
+            if !matches!(range.kind.as_str(), "ECOSYSTEM" | "SEMVER") {
+                continue;
+            }
             for event in &range.events {
                 if let Some(version) = &event.fixed
                     && !fixed.contains(version)
@@ -468,6 +474,19 @@ mod tests {
             advisory.fixed_versions,
             vec!["1.2.3".to_string(), "2.0.1".to_string()]
         );
+    }
+
+    #[test]
+    fn git_ranges_do_not_contribute_commit_hashes_as_versions() {
+        let body = r#"{ "id": "X", "affected": [
+            { "package": { "ecosystem": "npm", "name": "x" },
+              "ranges": [
+                { "type": "GIT", "events": [ { "fixed": "0f09c3a9b462" } ] },
+                { "type": "ECOSYSTEM", "events": [ { "fixed": "1.2.3" } ] }
+              ] }
+        ] }"#;
+        let advisory = parse_advisory(body, Ecosystem::Npm, "x").unwrap();
+        assert_eq!(advisory.fixed_versions, vec!["1.2.3".to_string()]);
     }
 
     #[test]

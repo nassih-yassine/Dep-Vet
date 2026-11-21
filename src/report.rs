@@ -165,10 +165,11 @@ fn render_advice(upgrades: &[Upgrade], version: &str) -> String {
                 line.push_str("   (major jump, may break)");
             }
             out.push_str(&format!("    {line}\n"));
-        } else if upgrade.fix_unknown {
-            out.push_str("    fix unknown (advisory details unavailable)\n");
-        } else {
+        } else if !upgrade.fix_unknown {
             out.push_str("    no fixed version published\n");
+        }
+        if upgrade.fix_unknown {
+            out.push_str("    fix unknown (advisory details unavailable)\n");
         }
 
         if let Some(newest) = &upgrade.newest {
@@ -529,6 +530,18 @@ mod tests {
         let out = render_human(&report, false);
         assert!(out.contains("fix unknown"), "{out}");
         assert!(!out.contains("no fixed version published"), "{out}");
+    }
+
+    #[test]
+    fn a_mixed_unknown_advisory_is_printed_as_unknown() {
+        let mut item = upgrade(&["2.0.1"], None);
+        item.fix_unknown = true;
+        item.fixes = vec!["GHSA-fixed".to_string()];
+        let report = report_with_upgrades(vec![item], "2.0.0");
+        let out = render_human(&report, false);
+        assert!(out.contains("fixed in 2.0.1"), "{out}");
+        assert!(out.contains("fix unknown"), "{out}");
+        assert!(!out.contains("GHSA-unknown"), "{out}");
     }
 
     #[test]

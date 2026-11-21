@@ -87,8 +87,8 @@ fn upgrade_advice(
     if let Some(list) = advisories {
         for advisory in &list.advisories {
             if advisory.details_missing {
+                // Its fix is unknown, so it must not be attached to a version.
                 fix_unknown = true;
-                fixes.push(advisory.id.clone());
                 continue;
             }
             if advisory.fixed_versions.is_empty() {
@@ -662,6 +662,31 @@ mod tests {
         let upgrade = &report.upgrades[0];
         assert!(upgrade.fix_unknown);
         assert!(upgrade.fixed.is_empty());
+    }
+
+    #[test]
+    fn a_mixed_unknown_advisory_is_not_listed_as_fixed() {
+        let list = AdvisoryList {
+            advisories: vec![
+                fixed_advisory("GHSA-fixed", &["2.0.1"]),
+                Advisory {
+                    id: "GHSA-unknown".to_string(),
+                    summary: "OSV did not return details for this advisory".to_string(),
+                    severity: Severity::Warn,
+                    aliases: Vec::new(),
+                    url: "https://osv.dev/vulnerability/GHSA-unknown".to_string(),
+                    fixed_versions: Vec::new(),
+                    details_missing: true,
+                },
+            ],
+            hidden: 0,
+        };
+
+        let report = advice_report(meta(), Some(&list));
+        let upgrade = &report.upgrades[0];
+        assert_eq!(upgrade.fixed, vec!["2.0.1".to_string()]);
+        assert!(upgrade.fix_unknown);
+        assert_eq!(upgrade.fixes, vec!["GHSA-fixed".to_string()]);
     }
 
     #[test]
