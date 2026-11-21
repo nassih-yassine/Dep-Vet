@@ -16,6 +16,16 @@ const DEFAULT_OSV_BASE: &str = "https://api.osv.dev";
 const OSV_VULN_URL: &str = "https://osv.dev/vulnerability";
 /// Bound the number of detail requests for packages with a long advisory list.
 pub const MAX_ADVISORIES: usize = 25;
+/// OSV accepts up to 1000 queries per batch; 500 bounds the response size.
+pub const MAX_QUERIES_PER_BATCH: usize = 500;
+
+/// One package version to ask OSV about.
+#[derive(Debug, Clone)]
+pub struct OsvQuery {
+    pub ecosystem: Ecosystem,
+    pub name: String,
+    pub version: String,
+}
 /// At most this many detail requests in flight. 25 at once invited 429s.
 const MAX_CONCURRENT_FETCHES: usize = 8;
 
@@ -96,56 +106,130 @@ impl OsvClient {
         name: &str,
         version: &str,
     ) -> Result<AdvisoryList, OsvError> {
+        let mut lists = self.query_batch(&[OsvQuery {
+            ecosystem,
+            name: name.to_string(),
+            version: version.to_string(),
+        }])?;
+        lists
+            .pop()
+            .ok_or_else(|| OsvError::Decode("empty batch".to_string()))
+    }
+
+    /// Ask about many packages at once. Results stay in input order; each
+    /// advisory body is fetched once and filtered per package, so fixed
+    /// versions remain package-specific.
+    pub fn query_batch(&self, queries: &[OsvQuery]) -> Result<Vec<AdvisoryList>, OsvError> {
         let url = format!("{}/v1/querybatch", self.base.trim_end_matches('/'));
-        let body = serde_json::json!({
-            "queries": [{
-                "package": { "name": name, "ecosystem": ecosystem.osv_name() },
-                "version": version
-            }]
-        });
-        let response = self.http.post_json(&url, &body)?;
-        let (ids, hidden) = take_capped(parse_advisory_ids(&response)?);
-        Ok(AdvisoryList {
-            advisories: dedupe(self.advisories(&ids, ecosystem, name)),
-            hidden,
-        })
-    }
+        let mut lists = Vec::with_capacity(queries.len());
 
-    /// Details are independent requests; fetch them together and keep the
-    /// batch order so the report is stable.
-    fn advisories(&self, ids: &[String], ecosystem: Ecosystem, name: &str) -> Vec<Advisory> {
-        advisory_batches(ids)
-            .flat_map(|batch| {
-                std::thread::scope(|scope| {
-                    let handles: Vec<_> = batch
-                        .iter()
-                        .map(|id| (id, scope.spawn(move || self.advisory(id, ecosystem, name))))
-                        .collect();
-                    handles
-                        .into_iter()
-                        .map(|(id, handle)| {
-                            handle.join().unwrap_or_else(|_| Advisory::unavailable(id))
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect()
-    }
+        for chunk in queries.chunks(MAX_QUERIES_PER_BATCH) {
+            let body = serde_json::json!({
+                "queries": chunk
+                    .iter()
+                    .map(|query| serde_json::json!({
+                        "package": {
+                            "name": query.name,
+                            "ecosystem": query.ecosystem.osv_name()
+                        },
+                        "version": query.version
+                    }))
+                    .collect::<Vec<_>>()
+            });
+            let response = self.http.post_json(&url, &body)?;
+            // Cap before hydrating: the cap exists to bound detail requests.
+            let capped: Vec<(Vec<String>, usize)> = parse_batch_ids(&response)?
+                .into_iter()
+                .map(take_capped)
+                .collect();
 
-    fn advisory(&self, id: &str, ecosystem: Ecosystem, name: &str) -> Advisory {
-        let url = format!("{}/v1/vulns/{id}", self.base.trim_end_matches('/'));
-        match self
-            .http
-            .get(&url)
-            .ok()
-            .and_then(|body| parse_advisory(&body, ecosystem, name).ok())
-        {
-            Some(advisory) => advisory,
-            None => Advisory::unavailable(id),
+            let mut unique: Vec<String> = Vec::new();
+            for (ids, _) in &capped {
+                for id in ids {
+                    if !unique.contains(id) {
+                        unique.push(id.clone());
+                    }
+                }
+            }
+            let bodies = self.fetch_bodies(&unique);
+            lists.extend(lists_from(chunk, capped, &bodies));
         }
+
+        Ok(lists)
+    }
+
+    /// Raw advisory bodies keyed by id. A failed fetch is `None`, which becomes
+    /// an "unavailable" advisory rather than a missing one.
+    fn fetch_bodies(&self, ids: &[String]) -> std::collections::HashMap<String, Option<String>> {
+        let mut bodies = std::collections::HashMap::new();
+        for batch in advisory_batches(ids) {
+            let fetched: Vec<(String, Option<String>)> = std::thread::scope(|scope| {
+                let handles: Vec<_> = batch
+                    .iter()
+                    .map(|id| {
+                        let url = format!("{}/v1/vulns/{id}", self.base.trim_end_matches('/'));
+                        (id, scope.spawn(move || self.http.get(&url).ok()))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|(id, handle)| (id.clone(), handle.join().unwrap_or(None)))
+                    .collect()
+            });
+            bodies.extend(fetched);
+        }
+        bodies
     }
 }
 
+/// One id list per query, in query order. An empty result stays empty.
+fn parse_batch_ids(body: &str) -> Result<Vec<Vec<String>>, OsvError> {
+    let response: BatchResponse =
+        serde_json::from_str(body).map_err(|error| OsvError::Decode(error.to_string()))?;
+
+    Ok(response
+        .results
+        .into_iter()
+        .map(|result| {
+            let mut ids: Vec<String> = Vec::new();
+            for vuln in result.vulns {
+                if !ids.contains(&vuln.id) {
+                    ids.push(vuln.id);
+                }
+            }
+            ids
+        })
+        .collect())
+}
+
+/// Builds one list per query from already-fetched bodies, filtering an
+/// advisory's fixed versions by the package that asked.
+fn lists_from(
+    queries: &[OsvQuery],
+    ids: Vec<(Vec<String>, usize)>,
+    bodies: &std::collections::HashMap<String, Option<String>>,
+) -> Vec<AdvisoryList> {
+    queries
+        .iter()
+        .zip(ids)
+        .map(|(query, (ids, hidden))| {
+            let advisories = ids
+                .iter()
+                .map(|id| match bodies.get(id) {
+                    Some(Some(body)) => parse_advisory(body, query.ecosystem, &query.name)
+                        .unwrap_or_else(|_| Advisory::unavailable(id)),
+                    _ => Advisory::unavailable(id),
+                })
+                .collect();
+            AdvisoryList {
+                advisories: dedupe(advisories),
+                hidden,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn parse_advisory_ids(body: &str) -> Result<Vec<String>, OsvError> {
     let response: BatchResponse =
         serde_json::from_str(body).map_err(|error| OsvError::Decode(error.to_string()))?;
@@ -412,6 +496,57 @@ mod tests {
             r#"{{ "results": [ {{ "vulns": [ {} ] }} ] }}"#,
             vulns.join(",")
         )
+    }
+
+    #[test]
+    fn batch_ids_stay_aligned_with_empty_results() {
+        let body = r#"{"results":[{"vulns":[{"id":"A"}]},{},{"vulns":[{"id":"B"},{"id":"B"}]}]}"#;
+        assert_eq!(
+            parse_batch_ids(body).unwrap(),
+            vec![vec!["A".to_string()], Vec::new(), vec!["B".to_string()]]
+        );
+    }
+
+    #[test]
+    fn a_shared_advisory_is_filtered_per_queried_package() {
+        let record = r#"{
+            "id": "GHSA-shared",
+            "summary": "shared",
+            "affected": [
+                { "package": { "ecosystem": "npm", "name": "pkg-a" },
+                  "ranges": [ { "type": "ECOSYSTEM", "events": [ { "fixed": "2.0.0" } ] } ] },
+                { "package": { "ecosystem": "npm", "name": "pkg-b" },
+                  "ranges": [ { "type": "ECOSYSTEM", "events": [ { "fixed": "3.0.0" } ] } ] }
+            ]
+        }"#;
+        let queries = vec![
+            OsvQuery {
+                ecosystem: Ecosystem::Npm,
+                name: "pkg-a".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            OsvQuery {
+                ecosystem: Ecosystem::Npm,
+                name: "pkg-b".to_string(),
+                version: "1.0.0".to_string(),
+            },
+        ];
+        let ids = vec![
+            (vec!["GHSA-shared".to_string()], 0),
+            (vec!["GHSA-shared".to_string()], 0),
+        ];
+        let mut bodies = std::collections::HashMap::new();
+        bodies.insert("GHSA-shared".to_string(), Some(record.to_string()));
+
+        let lists = lists_from(&queries, ids, &bodies);
+        assert_eq!(
+            lists[0].advisories[0].fixed_versions,
+            vec!["2.0.0".to_string()]
+        );
+        assert_eq!(
+            lists[1].advisories[0].fixed_versions,
+            vec!["3.0.0".to_string()]
+        );
     }
 
     #[test]
