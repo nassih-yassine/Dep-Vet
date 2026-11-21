@@ -3,10 +3,16 @@
 
 use std::io::Write;
 
+const BAR_WIDTH: usize = 20;
+
 /// The line for `done` of `total`. Pure so the wording is testable without a
-/// terminal.
+/// terminal. Blocks are single-width, and `TERM=dumb` never reaches here.
 pub fn line(done: usize, total: usize) -> String {
-    format!("  auditing {done}/{total} packages…")
+    let filled = (done.min(total) * BAR_WIDTH)
+        .checked_div(total)
+        .unwrap_or(0);
+    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(BAR_WIDTH - filled));
+    format!("  auditing [{bar}] {done}/{total}")
 }
 
 /// Whether a run should draw. A terminal is not enough: CI runners often
@@ -122,7 +128,7 @@ mod tests {
         progress.render_to(&mut buffer).unwrap();
         assert_eq!(
             String::from_utf8(buffer).unwrap(),
-            "\r  auditing 0/2 packages…"
+            "\r  auditing [░░░░░░░░░░░░░░░░░░░░] 0/2"
         );
 
         let mut erased = Vec::new();
@@ -134,9 +140,11 @@ mod tests {
     }
 
     #[test]
-    fn formats_the_count() {
-        assert_eq!(line(0, 245), "  auditing 0/245 packages…");
-        assert_eq!(line(1, 1), "  auditing 1/1 packages…");
-        assert_eq!(line(245, 245), "  auditing 245/245 packages…");
+    fn formats_the_bar_and_count() {
+        assert_eq!(line(0, 4), "  auditing [░░░░░░░░░░░░░░░░░░░░] 0/4");
+        assert_eq!(line(2, 4), "  auditing [██████████░░░░░░░░░░] 2/4");
+        assert_eq!(line(1, 1), "  auditing [████████████████████] 1/1");
+        assert_eq!(line(245, 245), "  auditing [████████████████████] 245/245");
+        assert_eq!(line(0, 0), "  auditing [░░░░░░░░░░░░░░░░░░░░] 0/0");
     }
 }
