@@ -11,6 +11,7 @@ Keyless, no scraping, no ranking service. Takes a minute or two.
 
 import json
 import pathlib
+import sys
 import urllib.parse
 import urllib.request
 
@@ -33,6 +34,30 @@ def load_current():
         if line and not line.startswith("#"):
             names.append(line)
     return names
+
+
+def collect_downloads(payload, downloads):
+    """The bulk endpoint is nested, but a single-package response is flat."""
+    if isinstance(payload.get("downloads"), int):
+        name = payload.get("package")
+        if isinstance(name, str):
+            downloads[name] = payload["downloads"]
+        return
+    for name, entry in payload.items():
+        if isinstance(entry, dict):
+            downloads[name] = int(entry.get("downloads", 0) or 0)
+
+
+def self_test():
+    flat = {"downloads": 5, "package": "a"}
+    nested = {"a": {"downloads": 2}, "b": {"downloads": 3}}
+    collected = {}
+    collect_downloads(flat, collected)
+    assert collected == {"a": 5}, collected
+    collected = {}
+    collect_downloads(nested, collected)
+    assert collected == {"a": 2, "b": 3}, collected
+    print("self-test ok")
 
 
 def main():
@@ -60,8 +85,7 @@ def main():
             )
         except Exception:
             continue
-        for name, entry in payload.items():
-            downloads[name] = entry.get("downloads", 0)
+        collect_downloads(payload, downloads)
 
     for name in scoped:
         try:
@@ -90,4 +114,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--self-test" in sys.argv:
+        self_test()
+    else:
+        main()

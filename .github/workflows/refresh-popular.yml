@@ -28,7 +28,9 @@ jobs:
         run: python3 scripts/refresh-popular-npm.py
 
       - name: Validate the data
-        run: cargo test --locked popular
+        run: |
+          python3 scripts/refresh-popular-npm.py --self-test
+          cargo test --locked popular
 
       - name: Stop when nothing changed
         id: diff
