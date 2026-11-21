@@ -35,14 +35,21 @@ pub fn report(
     profile: Profile,
     now: i64,
 ) -> PackageReport {
+    // Age only excuses a weak resemblance. A one-edit lookalike stays
+    // suspicious however old it is: crossenv is nine years old and still malware.
+    let nearest = suspect_for(&meta, ecosystem, local, &profile);
+    let weak = nearest
+        .as_ref()
+        .is_none_or(|suspect| !suspect.homoglyph && suspect.distance > 1);
     let outmatched = match (weekly_downloads, meta.candidate_weekly_downloads) {
         (Some(own), Some(candidate)) => own >= candidate,
         (Some(own), None) => own >= ESTABLISHED_WEEKLY_DOWNLOADS,
         _ => false,
     };
-    let aged = meta
-        .first_published_at
-        .is_some_and(|first| now - first >= ESTABLISHED_AGE_DAYS * date::SECONDS_PER_DAY);
+    let aged = weak
+        && meta
+            .first_published_at
+            .is_some_and(|first| now - first >= ESTABLISHED_AGE_DAYS * date::SECONDS_PER_DAY);
     let established = outmatched || aged;
     let mut findings = assess(&meta, ecosystem, local, &profile, now);
     if established {
@@ -60,11 +67,7 @@ pub fn report(
     }
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
 
-    let suspect = if established {
-        None
-    } else {
-        suspect_for(&meta, ecosystem, local, &profile)
-    };
+    let suspect = if established { None } else { nearest };
     let upgrades = upgrade_advice(&meta, advisories, suspect.as_ref())
         .into_iter()
         .collect();
@@ -1134,9 +1137,35 @@ mod tests {
     }
 
     #[test]
-    fn a_six_year_old_name_is_not_an_accidental_typo() {
+    fn an_old_one_edit_lookalike_is_still_flagged() {
         let mut meta = meta();
         meta.name = "crossenv".to_string();
+        meta.first_published_at = Some(NOW - 9 * 365 * date::SECONDS_PER_DAY);
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(2_000),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "typosquat")
+        );
+        assert_eq!(
+            report.upgrades[0].replace_with.as_deref(),
+            Some("cross-env")
+        );
+    }
+
+    #[test]
+    fn a_six_year_old_name_is_not_an_accidental_typo() {
+        let mut meta = meta();
+        meta.name = "recat".to_string();
         meta.first_published_at = Some(NOW - 6 * 365 * date::SECONDS_PER_DAY);
         let report = super::report(
             meta,

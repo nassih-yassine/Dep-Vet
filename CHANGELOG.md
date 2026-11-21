@@ -10,8 +10,8 @@
   for versions published in the last 30 days, so older audits cost nothing
   extra.
 - **Typosquats judged by registry facts.** npm compares the package's weekly
-  downloads with the downloads of the name it resembles, and any ecosystem
-  dismisses a lookalike with more than five years of history. The generated seed
+  downloads with the downloads of the name it resembles, and weak
+  (two-or-more-edit) lookalikes are dismissed after five years of history. The generated seed
   now only supplies candidate names, so a gap in it can no longer recommend
   replacing a framework with an unrelated package.
 

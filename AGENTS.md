@@ -272,8 +272,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   WARN, enriched with the previous publisher. Composer platform packages
   (`php`, `ext-*`, `lib-*`, `composer-*`) and crates `dev` dependencies never
   count. Typosquat suppression compares the package's downloads with the
-  looked-alike name's and falls back to 1,000,000; any ecosystem suppresses
-  names older than five years.
+  looked-alike name's and falls back to 1,000,000. Age suppresses only a weak
+  resemblance (distance 2 or more, not a homoglyph): a nine-year-old one-edit
+  lookalike such as `crossenv` must stay flagged.
 - **Tree audits batch, single packages do not.** `advisories_for` sends one
   `querybatch` per 500 packages (JSR excluded); `downloads_for` sends one npm
   request per 128 unscoped names, with scoped names fetched singly because the
