@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 501 unit + 124 end-to-end tests
+cargo test --locked                      # 502 unit + 124 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -351,7 +351,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   year-long gaps; it failed dep-vet's own dogfood as WARN) and never escalates.
   `install-scripts-changed` compares hook commands with the previous release and
   escalates to HIGH only for known execution patterns; unchanged scripts stay
-  under the ordinary install-script finding. `dependency-added` is INFO unless
+  under the ordinary install-script finding. `risky_install_command` tokenises
+  on shell punctuation and matches whole words, so `node scripts/evaluate.js`
+  is not `eval`; it catches curl/wget/nc/base64/iex/eval, powershell/pwsh,
+  python -c, perl/ruby -e, php -r, node -e/-p/--eval, and bash/sh -c with a URL. `dependency-added` is INFO unless
   an added name resembles a seed name. `publisher-changed` is INFO and only for
   accounts already on the maintainer list; a new account remains the existing
   WARN, enriched with the previous publisher. Composer platform packages
