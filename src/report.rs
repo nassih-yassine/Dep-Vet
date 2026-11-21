@@ -3,7 +3,7 @@
 use owo_colors::OwoColorize;
 use serde::Serialize;
 
-use crate::model::{LockReport, PackageReport, Severity};
+use crate::model::{AuditReport, LockFetchError, LockReport, PackageReport, Severity};
 use crate::registry::package_page_url;
 
 pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> {
@@ -139,45 +139,101 @@ pub fn render_lock_json(report: &LockReport) -> Result<String, serde_json::Error
 }
 
 pub fn render_lock_human(report: &LockReport, color: bool) -> String {
-    let mut out = format!("{} vs {}\n\n", report.lockfile, report.base);
+    render_tree(TreeView {
+        header: format!("{} vs {}", report.lockfile, report.base),
+        empty: "no new packages".to_string(),
+        noun: "new package",
+        plural: "new packages",
+        packages: &report.new_packages,
+        errors: &report.errors,
+        verdict: report.verdict(),
+        exit_code: report.exit_code(),
+        color,
+    })
+}
 
-    if report.new_packages.is_empty() {
-        out.push_str("  no new packages\n");
+pub fn render_audit_json(report: &AuditReport) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Json<'a> {
+        #[serde(flatten)]
+        report: &'a AuditReport,
+        verdict: Severity,
+        exit_code: u8,
+    }
+
+    serde_json::to_string_pretty(&Json {
+        report,
+        verdict: report.verdict(),
+        exit_code: report.exit_code(),
+    })
+}
+
+pub fn render_audit_human(report: &AuditReport, color: bool) -> String {
+    render_tree(TreeView {
+        header: format!("{} (every installed package)", report.lockfile),
+        empty: "lockfile has no packages".to_string(),
+        noun: "package audited",
+        plural: "packages audited",
+        packages: &report.packages,
+        errors: &report.errors,
+        verdict: report.verdict(),
+        exit_code: report.exit_code(),
+        color,
+    })
+}
+
+struct TreeView<'a> {
+    header: String,
+    empty: String,
+    noun: &'static str,
+    plural: &'static str,
+    packages: &'a [PackageReport],
+    errors: &'a [LockFetchError],
+    verdict: Severity,
+    exit_code: u8,
+    color: bool,
+}
+
+fn render_tree(view: TreeView<'_>) -> String {
+    let mut out = format!("{}\n\n", view.header);
+
+    if view.packages.is_empty() {
+        out.push_str(&format!("  {}\n", view.empty));
     } else {
         out.push_str(&format!(
-            "  {} new package{}\n\n",
-            report.new_packages.len(),
-            if report.new_packages.len() == 1 {
-                ""
+            "  {} {}\n\n",
+            view.packages.len(),
+            if view.packages.len() == 1 {
+                view.noun
             } else {
-                "s"
+                view.plural
             }
         ));
-        for package in &report.new_packages {
+        for package in view.packages {
             let severity = package.verdict();
             out.push_str(&format!(
                 "  {:<44} {}\n",
                 format!("{}@{}", package.name, package.version),
-                paint(severity.label(), verdict_color(severity), color)
+                paint(severity.label(), verdict_color(severity), view.color)
             ));
         }
-        for package in report
-            .new_packages
+        for package in view
+            .packages
             .iter()
             .filter(|package| package.verdict() > Severity::Info)
         {
             out.push('\n');
-            out.push_str(&render_human(package, color));
+            out.push_str(&render_human(package, view.color));
         }
     }
 
-    if !report.errors.is_empty() {
+    if !view.errors.is_empty() {
         out.push_str(&format!(
             "\n  could not check {} package{}:\n",
-            report.errors.len(),
-            if report.errors.len() == 1 { "" } else { "s" }
+            view.errors.len(),
+            if view.errors.len() == 1 { "" } else { "s" }
         ));
-        for error in &report.errors {
+        for error in view.errors {
             out.push_str(&format!("    {}: {}\n", error.package, error.message));
         }
         out.push_str("  this report is incomplete\n");
@@ -186,11 +242,11 @@ pub fn render_lock_human(report: &LockReport, color: bool) -> String {
     out.push_str(&format!(
         "\n  verdict {} (exit {})\n",
         paint(
-            report.verdict().label(),
-            verdict_color(report.verdict()),
-            color
+            view.verdict.label(),
+            verdict_color(view.verdict),
+            view.color
         ),
-        report.exit_code()
+        view.exit_code
     ));
     out
 }
@@ -401,6 +457,50 @@ mod tests {
             new_packages: Vec::new(),
             errors: Vec::new(),
         }
+    }
+
+    fn audit_report() -> AuditReport {
+        AuditReport {
+            lockfile: "package-lock.json".to_string(),
+            packages: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn audit_report_lists_every_package() {
+        let mut audit = audit_report();
+        let mut risky = report(vec![finding(Severity::High)]);
+        risky.name = "evil-pkg".to_string();
+        let clean = report(vec![]);
+        audit.packages = vec![clean, risky];
+
+        let text = render_audit_human(&audit, false);
+        assert!(text.contains("every installed package"));
+        assert!(text.contains("2 packages audited"));
+        assert!(text.contains("evil-pkg@1.0.0"));
+        assert!(text.contains("HIGH (exit 2)"));
+    }
+
+    #[test]
+    fn audit_report_handles_an_empty_lockfile() {
+        let text = render_audit_human(&audit_report(), false);
+        assert!(text.contains("lockfile has no packages"));
+        assert!(text.contains("INFO (exit 0)"));
+    }
+
+    #[test]
+    fn audit_report_with_unchecked_packages_is_incomplete() {
+        let mut audit = audit_report();
+        audit.errors = vec![LockFetchError {
+            package: "ghost@1.0.0".to_string(),
+            message: "package 'ghost' was not found on npm".to_string(),
+        }];
+        let value: serde_json::Value =
+            serde_json::from_str(&render_audit_json(&audit).unwrap()).unwrap();
+        assert_eq!(value["errors"][0]["package"], "ghost@1.0.0");
+        assert_eq!(value["exit_code"], 3);
+        assert!(render_audit_human(&audit, false).contains("incomplete"));
     }
 
     #[test]

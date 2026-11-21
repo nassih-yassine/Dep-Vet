@@ -1444,3 +1444,88 @@ fn go_invalid_module_never_reaches_the_network() {
 
     assert!(registry.requests().is_empty());
 }
+
+#[test]
+fn audit_checks_every_package_in_the_lockfile() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("clean-pkg", "1.0.0"), ("evil-pkg", "1.0.0")]),
+    );
+
+    let evil = PackageFixture {
+        created_days_ago: 1,
+        published_days_ago: 1,
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        ..PackageFixture::clean("evil-pkg")
+    };
+    let registry = registry_with(&[PackageFixture::clean("clean-pkg"), evil], None);
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let names: Vec<&str> = value["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|package| package["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["clean-pkg", "evil-pkg"]);
+    assert_eq!(value["exit_code"], 2);
+}
+
+#[test]
+fn audit_reports_uncheckable_packages_as_incomplete() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("clean-pkg", "1.0.0"), ("ghost-pkg", "1.0.0")]),
+    );
+
+    let registry = registry_with(&[PackageFixture::clean("clean-pkg")], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("ghost-pkg@1.0.0"))
+        .stdout(predicate::str::contains("incomplete"));
+}
+
+#[test]
+fn audit_rejects_version_one_lockfiles() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("package-lock.json"),
+        r#"{ "lockfileVersion": 1, "dependencies": {} }"#,
+    )
+    .unwrap();
+
+    binary()
+        .current_dir(directory.path())
+        .args(["audit", "package-lock.json"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "lockfileVersion 1 is not supported",
+        ));
+}
+
+#[test]
+fn audit_without_a_lockfile_is_a_tool_error() {
+    let directory = tempfile::tempdir().unwrap();
+    binary()
+        .current_dir(directory.path())
+        .args(["audit", "package-lock.json"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("could not read"));
+}

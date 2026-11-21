@@ -29,7 +29,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 205 unit + 55 end-to-end tests
+cargo test --locked                      # 209 unit + 59 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -121,6 +121,10 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   because of an unrelated file. A name that is itself in the seed is never
   flagged for resembling a local one (`preact` vs `react`) — keep that guard
   and its test.
+- **`audit` is the whole tree, `lock` is the diff.** `audit` passes an empty
+  local typosquat list on purpose (every package in a tree resembles another),
+  and its cold cost is one audit per package. It shares `audit_packages` with
+  `lock`, so concurrency and error collection stay identical.
 - **Lockfile audits run 4 packages at a time.** `MAX_CONCURRENT_AUDITS` in
   `main.rs` bounds the burst; output order still follows the sorted diff, and
   per-package failures stay in `errors`.

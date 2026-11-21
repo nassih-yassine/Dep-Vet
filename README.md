@@ -111,6 +111,18 @@ If the current directory or a parent contains `package-lock.json`, its dependenc
 names join the typosquat list, so a package one edit from something you already
 use is flagged. `--no-local` ignores it.
 
+### Audit an installed tree
+
+```sh
+dep-vet audit package-lock.json
+```
+
+Vets **every** package the lockfile installs, not just the diff, and reports the
+worst verdict. A cold run costs one audit per package (four at a time); warm
+caches make a rerun instant. It exits `3` when any package could not be checked.
+Typosquat comparison uses the seed list here: in a whole tree, every dependency
+would resemble some other dependency.
+
 ### Check a PyPI package
 
 ```sh
@@ -230,6 +242,9 @@ Timestamps are Unix seconds. `verdict` and `exit_code` are derived from the
 findings, so consumers do not re-implement the severity rules. JSON output never
 contains the wordmark or ANSI colors.
 
+`dep-vet audit ... --json` returns `lockfile`, `packages`, `errors`, and the
+derived `verdict`/`exit_code`.
+
 `dep-vet lock ... --json` returns the same per-package objects plus the diff:
 
 ```json
@@ -342,8 +357,9 @@ clean.
   when one exists, and `--no-local` turns that off. Either way the seed list is
   also consulted.
 - **Advisories describe this version, not your tree.** `dep-vet npm` answers for
-  the package you named; `dep-vet lock` covers only the `name@version` pairs the
-  lockfile change adds, not the pre-existing tree.
+  the package you named, `dep-vet lock` for the `name@version` pairs a change
+  adds, and `dep-vet audit` for every installed package — never for the
+  transitive install scripts a package would execute.
 - **Lockfiles:** npm `package-lock.json` v2/v3 only. Yarn, pnpm, and bun
   lockfiles are not parsed yet.
 - Not an SBOM generator or a Dependabot replacement.
@@ -407,8 +423,7 @@ did.
 
 1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
    against your own dependencies.
-2. Advisory lookups for the whole installed tree, not one package.
-3. Lockfile audits for PyPI, Cargo, and Go.
+2. Lockfile audits for PyPI, Cargo, and Go.
 
 ## License
 
