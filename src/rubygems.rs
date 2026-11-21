@@ -291,7 +291,7 @@ mod tests {
     const VERSIONS: &str = r#"[
         {
             "number": "3.2.9",
-            "created_at": "2026-11-20T23:14:58.183Z",
+            "created_at": "2024-06-01T23:14:58.183Z",
             "platform": "ruby",
             "metadata": { "source_code_uri": "https://github.com/rack/rack" }
         },

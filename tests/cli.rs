@@ -2831,7 +2831,7 @@ fn audit_reads_berry_lock_without_calling_metadata_a_package() {
 }
 
 const GEM_VERSIONS: &str = r#"[
-    { "number": "3.2.9", "created_at": "2026-11-20T23:14:58.183Z", "platform": "ruby",
+    { "number": "3.2.9", "created_at": "2024-06-01T23:14:58.183Z", "platform": "ruby",
       "metadata": { "source_code_uri": "https://github.com/rack/rack" } },
     { "number": "3.0.0", "created_at": "2024-01-01T00:00:00.000Z", "platform": "ruby" }
 ]"#;
@@ -3132,7 +3132,7 @@ const COMPOSER_P2: &str = r#"{
         "monolog/monolog": [
             {
                 "version": "3.13.0",
-                "time": "2026-11-16T10:43:05+00:00",
+                "time": "2024-06-01T10:43:05+00:00",
                 "source": { "url": "https://github.com/Seldaek/monolog.git" }
             },
             {

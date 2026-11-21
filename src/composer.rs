@@ -280,7 +280,7 @@ mod tests {
                 },
                 {
                     "version": "3.13.0",
-                    "time": "2026-11-16T10:43:05+00:00",
+                    "time": "2024-06-01T10:43:05+00:00",
                     "source": { "url": "https://github.com/Seldaek/monolog.git" }
                 },
                 {

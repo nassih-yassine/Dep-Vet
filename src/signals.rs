@@ -13,6 +13,13 @@ use crate::version::leading_number;
 pub const FRESH_DAYS: i64 = 7;
 /// A version newer than this on a package with no history is worth a look.
 pub const RECENT_VERSION_DAYS: i64 = 7;
+/// History signals only concern releases this recent: older versions are
+/// covered by advisories, and fetching history for them would cost requests
+/// that change nothing.
+pub const HISTORY_WINDOW_DAYS: i64 = 30;
+/// Nothing published for this long, then a release, is the classic pattern of
+/// a hijacked or revived package.
+pub const DORMANCY_DAYS: i64 = 365;
 
 /// A package used this widely is not an accidental typo. The seed is generated
 /// and always has holes (`next` was missing once), and the alternative is
@@ -305,6 +312,29 @@ pub fn assess(
     let mut findings = Vec::new();
 
     let suspect = suspect_for(meta, ecosystem, local, profile);
+    if let (Some(published), Some(previous)) =
+        (meta.published_at, meta.release.previous_published_at)
+        && now - published <= HISTORY_WINDOW_DAYS * date::SECONDS_PER_DAY
+        && published - previous >= DORMANCY_DAYS * date::SECONDS_PER_DAY
+    {
+        findings.push(Finding {
+            id: "release-after-dormancy",
+            severity: Severity::Warn,
+            title: "a dormant package published this version".to_string(),
+            detail: format!(
+                "nothing was published between {} and {}, then this version appeared",
+                date::format_date(previous),
+                date::format_date(published)
+            ),
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "version publish time".to_string(),
+                value: meta.registry_url.clone(),
+                url: Some(meta.registry_url.clone()),
+            }],
+        });
+    }
+
     let typosquat_high = match suspect {
         Some(suspect) => {
             let high = suspect.homoglyph || suspect.distance <= 1;
@@ -714,6 +744,49 @@ mod tests {
 
         let report = advice_report(meta, Some(&list));
         assert_eq!(report.upgrades[0].newest, None);
+    }
+
+    fn dormant(meta: &mut PackageMeta, published_days_ago: i64, previous_days_ago: i64) {
+        meta.published_at = Some(NOW - published_days_ago * date::SECONDS_PER_DAY);
+        meta.release.previous_published_at = Some(NOW - previous_days_ago * date::SECONDS_PER_DAY);
+    }
+
+    #[test]
+    fn a_release_after_a_year_of_silence_is_flagged() {
+        let mut meta = meta();
+        dormant(&mut meta, 10, 376);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(ids(&findings).contains(&"release-after-dormancy"));
+    }
+
+    #[test]
+    fn dormancy_boundaries_are_exclusive() {
+        let mut short = meta();
+        dormant(&mut short, 10, 374);
+        assert!(
+            !ids(&assess(&short, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"release-after-dormancy")
+        );
+
+        let mut old = meta();
+        dormant(&mut old, 31, 400);
+        assert!(
+            !ids(&assess(&old, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"release-after-dormancy")
+        );
+
+        let mut no_history = meta();
+        no_history.published_at = Some(NOW - 5 * date::SECONDS_PER_DAY);
+        assert!(
+            !ids(&assess(
+                &no_history,
+                Ecosystem::Npm,
+                &[],
+                &Profile::NPM,
+                NOW
+            ))
+            .contains(&"release-after-dormancy")
+        );
     }
 
     #[test]
