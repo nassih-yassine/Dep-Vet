@@ -110,6 +110,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **The cache policy is deliberate.** Fresh entry skips the network; stale
   entries are used for network errors, 5xx, and 429; a 404 never falls back, or
   deleted packages would look alive. See `HttpError::is_transient`.
+- **Transient network errors are retried once.** A timeout or dropped
+  connection gets one immediate retry before the stale fallback, because one
+  slow response used to turn a green CI run red. Never retry 404 (deleted
+  package) or 429 (rate limit; stale cache handles it). Do not add a third
+  attempt without a backoff and a reason: retries multiply latency.
 - **Cache lifecycle:** entries older than `RETENTION_SECONDS` (30 days) are
   deleted on open, and `PRAGMA user_version` drops the table when the schema
   changes. Never add a column without bumping `SCHEMA_VERSION`.

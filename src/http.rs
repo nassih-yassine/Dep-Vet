@@ -2,6 +2,7 @@
 //!
 //! Cache policy in three lines: a fresh entry skips the network; a network or
 //! server failure falls back to a stale entry; everything else is an error.
+//! A dropped connection or timeout is retried once before that fallback.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -70,7 +71,7 @@ impl HttpClient {
     fn cached(
         &self,
         key: &str,
-        fetch: impl FnOnce() -> Result<String, HttpError>,
+        mut fetch: impl FnMut() -> Result<String, HttpError>,
     ) -> Result<String, HttpError> {
         let now = now_seconds();
         if let Some(cache) = &self.cache
@@ -80,7 +81,14 @@ impl HttpClient {
             return Ok(body);
         }
 
-        match fetch() {
+        let mut result = fetch();
+        // One retry for a timeout or dropped connection. 404 and 429 are
+        // deliberate answers, not blips: 429 has its own stale-cache path.
+        if matches!(result, Err(HttpError::Network { .. })) {
+            result = fetch();
+        }
+
+        match result {
             Ok(body) => {
                 if let Some(cache) = &self.cache
                     && let Ok(cache) = cache.lock()
@@ -234,6 +242,82 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(error, HttpError::Status { status: 404, .. }));
+    }
+
+    #[test]
+    fn a_network_error_is_retried_once() {
+        let http = HttpClient::with_cache(None);
+        let mut attempts = 0;
+
+        let body = http
+            .cached("k", || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(network_error())
+                } else {
+                    Ok("recovered".to_string())
+                }
+            })
+            .unwrap();
+
+        assert_eq!(body, "recovered");
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn a_second_network_error_is_not_retried_again() {
+        let http = HttpClient::with_cache(None);
+        let mut attempts = 0;
+
+        let error = http
+            .cached("k", || {
+                attempts += 1;
+                Err(network_error())
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, HttpError::Network { .. }));
+        assert_eq!(attempts, 2);
+    }
+
+    #[test]
+    fn not_found_is_not_retried() {
+        let http = HttpClient::with_cache(None);
+        let mut attempts = 0;
+
+        let _ = http.cached("k", || {
+            attempts += 1;
+            Err(HttpError::Status {
+                status: 404,
+                url: "https://example.test/x".to_string(),
+            })
+        });
+
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn a_successful_retry_is_cached() {
+        let (_directory, cache) = cache(60);
+        let http = HttpClient::with_cache(Some(cache));
+        let mut attempts = 0;
+
+        let body = http
+            .cached("k", || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err(network_error())
+                } else {
+                    Ok("recovered".to_string())
+                }
+            })
+            .unwrap();
+        assert_eq!(body, "recovered");
+
+        let again = http
+            .cached("k", || panic!("the retried body should be cached"))
+            .unwrap();
+        assert_eq!(again, "recovered");
     }
 
     #[test]
