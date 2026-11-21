@@ -66,6 +66,7 @@ fn usage_exit(error: clap::Error) -> ExitCode {
 fn execute(cli: &Cli) -> anyhow::Result<u8> {
     let http = Arc::new(HttpClient::from_env(cli.no_cache));
     let auditor = Auditor::new(&http);
+    let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
 
     match &cli.command {
         Command::Npm { package, json } => {
@@ -73,26 +74,30 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // A lockfile in the current project is the same trusted-name list
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
-            let report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            let mut report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Go { package, json } => {
             let spec = PackageSpec::parse_go(package)?;
-            let report = auditor.audit_go(&spec, now_seconds())?;
+            let mut report = auditor.audit_go(&spec, now_seconds())?;
+            allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Crates { package, json } => {
             let spec = PackageSpec::parse_crates(package)?;
-            let report = auditor.audit_crates(&spec, now_seconds())?;
+            let mut report = auditor.audit_crates(&spec, now_seconds())?;
+            allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Pypi { package, json } => {
             let spec = PackageSpec::parse_pypi(package)?;
             // PyPI has no lockfile parser yet, so only the seed list applies.
-            let report = auditor.audit_pypi(&spec, now_seconds())?;
+            let mut report = auditor.audit_pypi(&spec, now_seconds())?;
+            allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
@@ -104,7 +109,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             let contents = lockfile::read(path)?;
             // No tree context: every package would otherwise look suspicious
             // to every other one. The seed list is the comparison set.
-            let (reports, mut errors) = audit_packages(
+            let (mut reports, mut errors) = audit_packages(
                 &auditor,
                 format.ecosystem(),
                 &contents.packages,
@@ -112,6 +117,9 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 now_seconds(),
             );
             errors.extend(skipped_errors(&contents));
+            for report in &mut reports {
+                allowlist.apply(report);
+            }
             let report = AuditReport {
                 lockfile: path.display().to_string(),
                 packages: reports,
@@ -148,9 +156,12 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 Vec::new()
             };
 
-            let (new_packages, mut errors) =
+            let (mut new_packages, mut errors) =
                 audit_packages(&auditor, ecosystem, &added, &local, now_seconds());
             errors.extend(skipped_errors(&current));
+            for report in &mut new_packages {
+                allowlist.apply(report);
+            }
 
             let report = LockReport {
                 lockfile: path.display().to_string(),

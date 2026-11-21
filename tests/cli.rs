@@ -1892,3 +1892,139 @@ fn lock_diffs_a_bun_lock_against_a_ref() {
         .stdout(predicate::str::contains("1 new package"))
         .stdout(predicate::str::contains("is-number@7.0.0"));
 }
+
+#[test]
+fn allowlist_downgrades_a_finding_and_keeps_the_reason() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join(".depvet.toml"),
+        "[[allow]]\npackage = \"crossenv\"\nfinding = \"typosquat\"\nreason = \"internal fork, reviewed 2026-11\"\n",
+    )
+    .unwrap();
+
+    let suspicious = PackageFixture {
+        version: "0.0.2-security",
+        ..PackageFixture::clean("crossenv")
+    };
+    let registry = registry_with(&[suspicious], None);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["npm", "crossenv", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["exit_code"], 0);
+    assert_eq!(value["findings"][0]["allowed"], true);
+    assert_eq!(value["findings"][0]["severity"], "info");
+    assert!(
+        value["findings"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("internal fork, reviewed 2026-11")
+    );
+}
+
+#[test]
+fn allowlist_marks_the_finding_in_the_human_report() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join(".depvet.toml"),
+        "[[allow]]\npackage = \"crossenv\"\nreason = \"accepted\"\n",
+    )
+    .unwrap();
+
+    let suspicious = PackageFixture {
+        version: "0.0.2-security",
+        ..PackageFixture::clean("crossenv")
+    };
+    let registry = registry_with(&[suspicious], None);
+    registry
+        .command()
+        .current_dir(directory.path())
+        .args(["npm", "crossenv"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("[ALLOWED]"))
+        .stdout(predicate::str::contains(
+            "allowed by .depvet.toml: accepted",
+        ));
+}
+
+#[test]
+fn allowlist_applies_to_lockfile_audits() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("evil-pkg", "1.0.0")]),
+    );
+    repo.write(
+        ".depvet.toml",
+        "[[allow]]\npackage = \"evil-pkg\"\nfinding = \"install-scripts\"\nreason = \"native build, reviewed\"\n",
+    );
+
+    let evil = PackageFixture {
+        scripts: r#"{"postinstall":"node-gyp rebuild"}"#,
+        ..PackageFixture::clean("evil-pkg")
+    };
+    let registry = registry_with(&[evil], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("[ALLOWED]"))
+        .stdout(predicate::str::contains("native build, reviewed"));
+}
+
+#[test]
+fn unknown_allowlist_finding_is_a_tool_error() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join(".depvet.toml"),
+        "[[allow]]\npackage = \"x\"\nfinding = \"vibes\"\nreason = \"why\"\n",
+    )
+    .unwrap();
+
+    binary()
+        .current_dir(directory.path())
+        .args(["npm", "express"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("is not a finding dep-vet emits"));
+}
+
+#[test]
+fn explicit_config_path_wins_over_discovery() {
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(
+        work.path().join(".depvet.toml"),
+        "[[allow]]\npackage = \"nothing\"\nreason = \"unused\"\n",
+    )
+    .unwrap();
+    let config = work.path().join("explicit.toml");
+    std::fs::write(
+        &config,
+        "[[allow]]\npackage = \"crossenv\"\nreason = \"explicit review\"\n",
+    )
+    .unwrap();
+
+    let suspicious = PackageFixture {
+        version: "0.0.2-security",
+        ..PackageFixture::clean("crossenv")
+    };
+    let registry = registry_with(&[suspicious], None);
+    registry
+        .command()
+        .current_dir(work.path())
+        .args(["npm", "crossenv", "--config"])
+        .arg(&config)
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("explicit review"));
+}

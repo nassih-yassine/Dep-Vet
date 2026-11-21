@@ -222,6 +222,10 @@ impl Severity {
     }
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Which package ecosystem a report describes. One variant today: add the next
 /// one when its source exists, not before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -441,6 +445,9 @@ pub struct Finding {
     pub severity: Severity,
     pub title: String,
     pub detail: String,
+    /// Set when `.depvet.toml` allows this finding for this package.
+    #[serde(skip_serializing_if = "is_false")]
+    pub allowed: bool,
     pub evidence: Vec<Evidence>,
 }
 
@@ -781,6 +788,7 @@ mod tests {
             severity,
             title: String::new(),
             detail: String::new(),
+            allowed: false,
             evidence: vec![],
         }
     }

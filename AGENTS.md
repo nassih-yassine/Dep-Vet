@@ -32,7 +32,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 225 unit + 71 end-to-end tests
+cargo test --locked                      # 235 unit + 76 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -55,6 +55,7 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 | File | Owns |
 |------|------|
 | `src/model.rs` | `PackageSpec` parsing/validation, `Severity`, `Finding`, `PackageReport` |
+| `src/allowlist.rs` | `.depvet.toml` parsing, validation, finding downgrades |
 | `src/lockfile.rs` | npm/PyPI/Cargo/Go lockfile parsing, flat diff against a git ref |
 | `src/registry.rs` | npm packument fetch + parsing, download counts, repo URL normalization |
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
@@ -149,6 +150,11 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`); npm v1 is rejected instead of
   approximated. Unpinned pip lines, git crates, and
   unreadable go.mod lines become `errors`, so an incomplete tree exits 3.
+- **Allowlists downgrade, never delete.** `Allowlist::apply` runs after a
+  report exists, sets `allowed`, forces `Severity::Info`, prefixes the reason,
+  and re-sorts (severity changed). Tree views must show allowed entries or the
+  reason disappears. Missing reasons and unknown finding ids are config errors
+  (exit 3). `KNOWN_FINDINGS` must stay in step with `signals.rs`.
 - **JS lockfile quirks that bite.** `bun.lock` is JSONC (comments and trailing
   commas) and `strip_jsonc` must keep `//` inside strings (URLs). pnpm keys are
   `name@ver` (v9), `/name@ver` (v6), or `/name/ver` (v5), with `(peer@x)` suffixes
@@ -209,5 +215,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-`.depvet.toml` allowlists. Roadmap only: do not describe these as existing in
-code, README, or help text.
+`deno.lock` and other remaining formats. Roadmap only: do not describe these
+as existing in code, README, or help text.
