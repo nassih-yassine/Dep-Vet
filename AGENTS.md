@@ -8,7 +8,10 @@ doc; `docs/brief.md` is the product rationale and evidence.
 
 These override convenience. Do not shortcut them.
 
-1. Feature work happens on its own branch, and merges only after approval.
+1. Feature work happens on its own branch. When the feature is complete and
+   tested, report what changed and stop; merge to `main` only after explicit
+   approval in the conversation. Do not open pull requests — this repo is
+   single-owner and the approval happens here, not on GitHub.
 2. Every change ships with tests. Actively try to break the app: malformed
    registry JSON, future timestamps, path traversal in specs, huge packuments,
    closed pipes, missing fields.
