@@ -43,17 +43,32 @@ impl MavenClient {
         }
     }
 
-    fn search_url(&self, name: &str) -> Option<String> {
+    /// Search URL. An exact version is part of the query, because Solr returns
+    /// at most 200 rows and older versions of a long-lived artifact fall off
+    /// the page (spring-core has 300+).
+    fn search_url(&self, name: &str, version: Option<&str>) -> Option<String> {
+        let (group, artifact) = name.split_once(':')?;
+        let version_filter = version
+            .map(|version| format!("+AND+v:%22{version}%22"))
+            .unwrap_or_default();
+        Some(format!(
+            "{}/solrsearch/select?q=g:%22{group}%22+AND+a:%22{artifact}%22{version_filter}&core=gav&rows=200&wt=json",
+            self.base.trim_end_matches('/')
+        ))
+    }
+
+    /// Oldest row of the artifact, used only when the newest page is truncated.
+    fn oldest_url(&self, name: &str, start: u64) -> Option<String> {
         let (group, artifact) = name.split_once(':')?;
         Some(format!(
-            "{}/solrsearch/select?q=g:%22{group}%22+AND+a:%22{artifact}%22&core=gav&rows=200&wt=json",
+            "{}/solrsearch/select?q=g:%22{group}%22+AND+a:%22{artifact}%22&core=gav&start={start}&rows=1&wt=json",
             self.base.trim_end_matches('/')
         ))
     }
 
     pub fn fetch(&self, spec: &PackageSpec) -> Result<PackageMeta, MavenError> {
         let url = self
-            .search_url(&spec.name)
+            .search_url(&spec.name, spec.version.as_deref())
             .ok_or_else(|| MavenError::PackageNotFound(spec.name.clone()))?;
         let body = match self.http.get(&url) {
             Ok(body) => body,
@@ -62,16 +77,47 @@ impl MavenClient {
             }
             Err(error) => return Err(MavenError::Http(error.to_string())),
         };
-        parse_search(spec, &body, &url)
+        let response: SearchResponse =
+            serde_json::from_str(&body).map_err(|error| MavenError::Decode(error.to_string()))?;
+
+        // A truncated page means "first seen" would be the oldest row we saw,
+        // not the oldest release. Ask for the last row instead of guessing.
+        let truncated = response.response.doc_count() > response.response.docs.len();
+        let oldest = if spec.version.is_none() && truncated {
+            self.oldest_url(&spec.name, response.response.num_found.saturating_sub(1))
+                .and_then(|url| self.http.get(&url).ok())
+                .and_then(|body| serde_json::from_str::<SearchResponse>(&body).ok())
+                .and_then(|response| {
+                    response
+                        .response
+                        .docs
+                        .iter()
+                        .filter_map(|doc| doc.timestamp)
+                        .min()
+                })
+        } else {
+            None
+        };
+
+        parse_search(spec, &response.response, oldest, &url)
     }
 }
 
-fn parse_search(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta, MavenError> {
-    let response: SearchResponse =
-        serde_json::from_str(body).map_err(|error| MavenError::Decode(error.to_string()))?;
-    let docs = response.response.docs;
+fn parse_search(
+    spec: &PackageSpec,
+    response: &SearchBody,
+    oldest: Option<i64>,
+    url: &str,
+) -> Result<PackageMeta, MavenError> {
+    let docs = &response.docs;
     if docs.is_empty() {
-        return Err(MavenError::PackageNotFound(spec.name.clone()));
+        return Err(match &spec.version {
+            Some(version) => MavenError::VersionNotFound {
+                package: spec.name.clone(),
+                version: version.clone(),
+            },
+            None => MavenError::PackageNotFound(spec.name.clone()),
+        });
     }
 
     let release = match &spec.version {
@@ -83,16 +129,19 @@ fn parse_search(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         })?,
         None => docs
             .iter()
+            .filter(|doc| !is_prerelease(&doc.v))
             .max_by_key(|doc| doc.timestamp.unwrap_or(0))
+            .or_else(|| docs.iter().max_by_key(|doc| doc.timestamp.unwrap_or(0)))
             .unwrap_or(&docs[0]),
     };
 
     let seconds = |millis: i64| millis / 1000;
-    let first_published_at = docs
-        .iter()
-        .filter_map(|doc| doc.timestamp)
-        .map(seconds)
-        .min();
+    let first_published_at = oldest.map(seconds).or_else(|| {
+        docs.iter()
+            .filter_map(|doc| doc.timestamp)
+            .map(seconds)
+            .min()
+    });
     let published_at = release.timestamp.map(seconds);
 
     Ok(PackageMeta {
@@ -111,6 +160,33 @@ fn parse_search(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
     })
 }
 
+/// Maven has no stable flag; milestones, release candidates, and snapshots
+/// are recognisable suffixes. Asking for "the latest" should not return one.
+fn is_prerelease(version: &str) -> bool {
+    let Some((_, suffix)) = version.rsplit_once('-') else {
+        return false;
+    };
+    let suffix = suffix.to_ascii_lowercase();
+    [
+        "alpha",
+        "beta",
+        "rc",
+        "cr",
+        "m",
+        "milestone",
+        "preview",
+        "snapshot",
+        "eap",
+    ]
+    .iter()
+    .any(|marker| {
+        suffix
+            .strip_prefix(marker)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_digit()))
+            || suffix.starts_with(&format!("{marker}-"))
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct SearchResponse {
     response: SearchBody,
@@ -121,7 +197,14 @@ struct SearchBody {
     #[serde(default)]
     docs: Vec<Doc>,
     #[serde(rename = "numFound", default)]
-    _num_found: u64,
+    num_found: u64,
+}
+
+impl SearchBody {
+    /// Solr reports the real number of rows; `docs` may be a truncated page.
+    fn doc_count(&self) -> usize {
+        self.num_found.max(self.docs.len() as u64) as usize
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,9 +227,19 @@ mod tests {
     }
 
     fn fetch(body: &str, version: Option<&str>) -> Result<PackageMeta, MavenError> {
+        fetch_with_oldest(body, version, None)
+    }
+
+    fn fetch_with_oldest(
+        body: &str,
+        version: Option<&str>,
+        oldest: Option<i64>,
+    ) -> Result<PackageMeta, MavenError> {
+        let response: SearchResponse = serde_json::from_str(body).unwrap();
         parse_search(
             &spec("org.slf4j:slf4j-api", version),
-            body,
+            &response.response,
+            oldest,
             "https://maven.test/search",
         )
     }
@@ -170,6 +263,37 @@ mod tests {
             meta.published_at,
             date::parse_timestamp("2025-02-25T16:43:14Z")
         );
+    }
+
+    #[test]
+    fn latest_skips_milestones_and_release_candidates() {
+        let body = r#"{ "response": { "numFound": 4, "docs": [
+            { "v": "7.0.0-M6", "timestamp": 1749723257000 },
+            { "v": "7.0.0-RC1", "timestamp": 1749723256000 },
+            { "v": "6.2.11", "timestamp": 1740000000000 },
+            { "v": "6.2.10", "timestamp": 1730000000000 }
+        ] } }"#;
+        let meta = fetch(body, None).unwrap();
+        assert_eq!(meta.version, "6.2.11");
+    }
+
+    #[test]
+    fn only_prereleases_still_resolve_to_the_newest() {
+        let body = r#"{ "response": { "numFound": 1, "docs": [
+            { "v": "1.0.0-SNAPSHOT", "timestamp": 1730000000000 }
+        ] } }"#;
+        let meta = fetch(body, None).unwrap();
+        assert_eq!(meta.version, "1.0.0-SNAPSHOT");
+    }
+
+    #[test]
+    fn stable_suffixes_are_not_prereleases() {
+        for version in ["1.0.0", "1.0.0.RELEASE", "2.0-jre", "3.0.0.Final"] {
+            assert!(!is_prerelease(version), "{version}");
+        }
+        for version in ["1.0.0-M1", "1.0.0-rc1", "1.0.0-SNAPSHOT", "2.0-beta"] {
+            assert!(is_prerelease(version), "{version}");
+        }
     }
 
     #[test]
@@ -208,7 +332,7 @@ mod tests {
 
     #[test]
     fn malformed_json_is_a_decode_error() {
-        assert!(matches!(fetch("{ nope", None), Err(MavenError::Decode(_))));
+        assert!(serde_json::from_str::<SearchResponse>("{ nope").is_err());
     }
 
     #[test]
@@ -216,9 +340,51 @@ mod tests {
         let client =
             MavenClient::with_base(Arc::new(HttpClient::with_cache(None)), "https://maven.test");
         assert_eq!(
-            client.search_url("org.slf4j:slf4j-api").unwrap(),
+            client.search_url("org.slf4j:slf4j-api", None).unwrap(),
             "https://maven.test/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22&core=gav&rows=200&wt=json"
         );
-        assert!(client.search_url("no-colon").is_none());
+        assert_eq!(
+            client
+                .search_url("org.slf4j:slf4j-api", Some("1.7.36"))
+                .unwrap(),
+            "https://maven.test/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22+AND+v:%221.7.36%22&core=gav&rows=200&wt=json"
+        );
+        assert!(client.search_url("no-colon", None).is_none());
+    }
+
+    #[test]
+    fn an_exact_version_query_that_matches_nothing_is_version_not_found() {
+        let body = r#"{ "response": { "numFound": 0, "docs": [] } }"#;
+        assert!(matches!(
+            fetch(body, Some("9.9.9")),
+            Err(MavenError::VersionNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn a_truncated_page_uses_the_oldest_row_for_first_seen() {
+        let page = r#"{
+            "response": {
+                "numFound": 311,
+                "docs": [
+                    { "v": "7.0.0-M6", "timestamp": 1749723257000 },
+                    { "v": "6.1.16", "timestamp": 1720000000000 }
+                ]
+            }
+        }"#;
+        let meta = fetch_with_oldest(page, None, Some(1135357565000)).unwrap();
+        assert_eq!(
+            meta.first_published_at,
+            date::parse_timestamp("2005-12-23T17:06:05Z")
+        );
+    }
+
+    #[test]
+    fn an_untruncated_page_reports_its_own_oldest_row() {
+        let meta = fetch(SEARCH, None).unwrap();
+        assert_eq!(
+            meta.first_published_at,
+            date::parse_timestamp("2021-11-03T00:40:00Z")
+        );
     }
 }

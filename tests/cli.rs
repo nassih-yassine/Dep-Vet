@@ -2631,18 +2631,13 @@ fn maven_reports_metadata_and_missing_signals() {
 fn maven_exact_version_is_audited() {
     let mut routes = HashMap::new();
     routes.insert(
-        "/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22&core=gav&rows=200&wt=json"
+        "/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22+AND+v:%221.7.36%22&core=gav&rows=200&wt=json"
             .to_string(),
         (
             200,
-            r#"{
-                "response": {
-                    "docs": [
-                        { "v": "2.0.17", "timestamp": 1740501794416 },
-                        { "v": "1.7.36", "timestamp": 1635900000000 }
-                    ]
-                }
-            }"#
+            r#"{ "response": { "numFound": 1, "docs": [
+                { "v": "1.7.36", "timestamp": 1635900000000 }
+            ] } }"#
             .to_string(),
         ),
     );
@@ -2829,18 +2824,13 @@ fn audit_reads_gradle_lockfile() {
 
     let mut routes = HashMap::new();
     routes.insert(
-        "/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22&core=gav&rows=200&wt=json"
+        "/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22+AND+v:%221.7.36%22&core=gav&rows=200&wt=json"
             .to_string(),
         (
             200,
-            r#"{
-                "response": {
-                    "docs": [
-                        { "v": "2.0.17", "timestamp": 1740501794416 },
-                        { "v": "1.7.36", "timestamp": 1635900000000 }
-                    ]
-                }
-            }"#
+            r#"{ "response": { "numFound": 1, "docs": [
+                { "v": "1.7.36", "timestamp": 1635900000000 }
+            ] } }"#
             .to_string(),
         ),
     );
