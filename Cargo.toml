@@ -1,0 +1,23 @@
+[package]
+name = "dep-vet"
+version = "0.1.0"
+edition = "2024"
+description = "Check a package's risk before it enters your lockfile"
+repository = "https://github.com/nassih-yassine/Dep-Vet"
+readme = "README.md"
+license = "MIT"
+keywords = ["npm", "security", "supply-chain", "typosquat", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.9", features = ["derive"] }
+owo-colors = { version = "4.4.0", features = ["supports-colors"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+ureq = "3.5.2"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
