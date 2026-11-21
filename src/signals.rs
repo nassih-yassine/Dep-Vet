@@ -4,7 +4,7 @@
 use crate::date;
 use crate::model::{Ecosystem, Evidence, Finding, PackageReport, Profile, Severity};
 use crate::osv::{Advisory, AdvisoryList, MAX_ADVISORIES};
-use crate::registry::{PackageMeta, package_page_url};
+use crate::registry::PackageMeta;
 use crate::typosquat;
 
 /// A package younger than this has no track record.
@@ -75,24 +75,6 @@ const AUTOMATION_PUBLISHERS: &[&str] = &[
 pub fn is_automation_publisher(publisher: &str) -> bool {
     let normalized = publisher.trim().to_ascii_lowercase();
     normalized.ends_with("[bot]") || AUTOMATION_PUBLISHERS.contains(&normalized.as_str())
-}
-
-fn package_page(ecosystem: Ecosystem, name: &str, version: &str) -> String {
-    match ecosystem {
-        Ecosystem::Npm => package_page_url(name, version),
-        Ecosystem::Pypi => format!("https://pypi.org/project/{name}/{version}/"),
-        Ecosystem::CratesIo => format!("https://crates.io/crates/{name}/{version}"),
-        Ecosystem::Go => format!("https://pkg.go.dev/{name}@{version}"),
-    }
-}
-
-fn project_page(ecosystem: Ecosystem, name: &str) -> String {
-    match ecosystem {
-        Ecosystem::Npm => format!("https://www.npmjs.com/package/{name}"),
-        Ecosystem::Pypi => format!("https://pypi.org/project/{name}/"),
-        Ecosystem::CratesIo => format!("https://crates.io/crates/{name}"),
-        Ecosystem::Go => format!("https://pkg.go.dev/{name}"),
-    }
 }
 
 /// One finding per advisory, each linking to its OSV record.
@@ -211,7 +193,7 @@ pub fn assess(
                     Evidence {
                         label: "this package".to_string(),
                         value: meta.name.clone(),
-                        url: Some(package_page(ecosystem, &meta.name, &meta.version)),
+                        url: Some(ecosystem.package_url(&meta.name, &meta.version)),
                     },
                     Evidence {
                         label: if suspect.local {
@@ -220,7 +202,7 @@ pub fn assess(
                             "popular package".to_string()
                         },
                         value: suspect.candidate.to_string(),
-                        url: Some(project_page(ecosystem, suspect.candidate)),
+                        url: Some(ecosystem.project_url(suspect.candidate)),
                     },
                 ],
             });
