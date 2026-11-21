@@ -13,6 +13,10 @@ permissions:
 
 jobs:
   test:
+    # PRs opened by GITHUB_TOKEN need a human approval to run their
+    # pull_request workflow, which blocks auto-merge. Skip that duplicate; the
+    # refresh workflow dispatches this job explicitly on the bot branch.
+    if: github.event_name != 'pull_request' || github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
