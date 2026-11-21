@@ -24,9 +24,9 @@ on:
         type: string
         default: ""
       ref:
-        description: Dep-Vet tag or branch to build (a tag is what makes `uses:` pinning meaningful)
+        description: Dep-Vet release tag or branch (a tag is what makes `uses:` pinning meaningful)
         type: string
-        default: main
+        default: v0.1.0
 
 permissions:
   contents: read
@@ -45,13 +45,17 @@ jobs:
       - name: Install dep-vet
         env:
           REF: ${{ inputs.ref }}
+          DEP_VET_NO_MODIFY_PATH: "1"
         run: |
-          url=https://github.com/nassih-yassine/Dep-Vet.git
-          if git ls-remote --exit-code --tags "$url" "refs/tags/$REF" >/dev/null 2>&1; then
-            cargo install --git "$url" --tag "$REF" --locked
-          else
-            cargo install --git "$url" --branch "$REF" --locked
+          installer=$(mktemp)
+          if curl --proto '=https' --tlsv1.2 -fsSL -o "$installer" \
+            "https://github.com/nassih-yassine/Dep-Vet/releases/download/$REF/dep-vet-installer.sh" \
+            && sh "$installer"; then
+            dep-vet --version
+            exit 0
           fi
+          echo "no release for $REF; building from source"
+          cargo install --git https://github.com/nassih-yassine/Dep-Vet.git --branch "$REF" --locked
 
       - name: Vet new dependencies
         env:
