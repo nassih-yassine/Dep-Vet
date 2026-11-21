@@ -3,6 +3,7 @@
 
 use crate::date;
 use crate::model::{Evidence, Finding, PackageReport, Severity};
+use crate::osv::Advisory;
 use crate::registry::{PackageMeta, package_page_url};
 use crate::typosquat;
 
@@ -11,8 +12,19 @@ pub const FRESH_DAYS: i64 = 7;
 /// A version newer than this on a package with no history is worth a look.
 pub const RECENT_VERSION_DAYS: i64 = 7;
 
-pub fn report(meta: PackageMeta, weekly_downloads: Option<u64>, now: i64) -> PackageReport {
-    let findings = assess(&meta, now);
+pub fn report(
+    meta: PackageMeta,
+    weekly_downloads: Option<u64>,
+    advisories: Option<&[Advisory]>,
+    now: i64,
+) -> PackageReport {
+    let mut findings = assess(&meta, now);
+    match advisories {
+        Some(advisories) => findings.extend(advisory_findings(advisories)),
+        None => findings.push(advisory_check_unavailable()),
+    }
+    findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
+
     PackageReport {
         ecosystem: "npm",
         name: meta.name,
@@ -25,6 +37,7 @@ pub fn report(meta: PackageMeta, weekly_downloads: Option<u64>, now: i64) -> Pac
         install_scripts: meta.install_scripts,
         repository: meta.repository,
         deprecated: meta.deprecated,
+        advisories: advisories.unwrap_or_default().to_vec(),
         registry_url: meta.registry_url,
         findings,
     }
@@ -50,6 +63,50 @@ const AUTOMATION_PUBLISHERS: &[&str] = &[
 pub fn is_automation_publisher(publisher: &str) -> bool {
     let normalized = publisher.trim().to_ascii_lowercase();
     normalized.ends_with("[bot]") || AUTOMATION_PUBLISHERS.contains(&normalized.as_str())
+}
+
+/// One finding per advisory, each linking to its OSV record.
+pub fn advisory_findings(advisories: &[Advisory]) -> Vec<Finding> {
+    advisories
+        .iter()
+        .map(|advisory| {
+            let mut evidence = vec![Evidence {
+                label: "advisory".to_string(),
+                value: advisory.id.clone(),
+                url: Some(advisory.url.clone()),
+            }];
+            if !advisory.aliases.is_empty() {
+                evidence.push(Evidence {
+                    label: "also known as".to_string(),
+                    value: advisory.aliases.join(", "),
+                    url: None,
+                });
+            }
+            Finding {
+                id: "advisory",
+                severity: advisory.severity,
+                title: advisory.display_title(),
+                detail: advisory.summary.clone(),
+                evidence,
+            }
+        })
+        .collect()
+}
+
+/// OSV unreachable: say so instead of implying the package is advisory-free.
+pub fn advisory_check_unavailable() -> Finding {
+    Finding {
+        id: "advisory-check-unavailable",
+        severity: Severity::Info,
+        title: "advisory check unavailable".to_string(),
+        detail: "OSV could not be reached, so this report says nothing about known vulnerabilities"
+            .to_string(),
+        evidence: vec![Evidence {
+            label: "OSV".to_string(),
+            value: "https://osv.dev".to_string(),
+            url: Some("https://osv.dev".to_string()),
+        }],
+    }
 }
 
 pub fn assess(meta: &PackageMeta, now: i64) -> Vec<Finding> {
@@ -243,6 +300,7 @@ pub fn assess(meta: &PackageMeta, now: i64) -> Vec<Finding> {
 mod tests {
     use super::*;
     use crate::model::InstallScript;
+    use crate::osv::Advisory;
 
     const NOW: i64 = 1_800_000_000; // 2027-01-15
 
@@ -308,7 +366,7 @@ mod tests {
             Severity::High
         );
         assert_eq!(
-            report(meta, None, NOW).exit_code(),
+            report(meta, None, None, NOW).exit_code(),
             2,
             "install script + freshness should exit 2"
         );
@@ -438,7 +496,7 @@ mod tests {
         meta.name = "expres".to_string();
         let findings = assess(&meta, NOW);
         assert_eq!(finding(&findings, "typosquat").severity, Severity::High);
-        assert_eq!(report(meta, None, NOW).exit_code(), 2);
+        assert_eq!(report(meta, None, None, NOW).exit_code(), 2);
     }
 
     #[test]
@@ -447,7 +505,7 @@ mod tests {
         meta.name = "expreszz".to_string();
         let findings = assess(&meta, NOW);
         assert_eq!(finding(&findings, "typosquat").severity, Severity::Warn);
-        assert_eq!(report(meta, None, NOW).exit_code(), 1);
+        assert_eq!(report(meta, None, None, NOW).exit_code(), 1);
     }
 
     #[test]
@@ -474,7 +532,7 @@ mod tests {
         meta.repository = None;
         let findings = assess(&meta, NOW);
         assert_eq!(ids(&findings), vec!["no-repository"]);
-        assert_eq!(report(meta, None, NOW).exit_code(), 0);
+        assert_eq!(report(meta, None, None, NOW).exit_code(), 0);
     }
 
     #[test]
@@ -523,10 +581,68 @@ mod tests {
     fn report_carries_registry_facts_through() {
         let mut meta = meta();
         meta.deprecated = Some("old".to_string());
-        let report = report(meta, Some(1234), NOW);
+        let report = report(meta, Some(1234), None, NOW);
         assert_eq!(report.ecosystem, "npm");
         assert_eq!(report.weekly_downloads, Some(1234));
         assert_eq!(report.maintainers, vec!["alice"]);
         assert_eq!(report.publisher.as_deref(), Some("alice"));
+    }
+
+    fn advisory(id: &str, severity: Severity) -> Advisory {
+        Advisory {
+            id: id.to_string(),
+            summary: "a real vulnerability".to_string(),
+            severity,
+            aliases: vec!["CVE-2000-0001".to_string()],
+            url: format!("https://osv.dev/vulnerability/{id}"),
+        }
+    }
+
+    #[test]
+    fn advisories_become_findings_with_links() {
+        let advisories = [advisory("GHSA-aaaa", Severity::High)];
+        let findings = advisory_findings(&advisories);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+        assert_eq!(findings[0].id, "advisory");
+        assert!(findings[0].title.contains("GHSA-aaaa"));
+        assert_eq!(
+            findings[0].evidence[0].url.as_deref(),
+            Some("https://osv.dev/vulnerability/GHSA-aaaa")
+        );
+    }
+
+    #[test]
+    fn a_high_advisory_exits_two() {
+        let advisories = [advisory("GHSA-bbbb", Severity::High)];
+        let report = report(meta(), None, Some(&advisories), NOW);
+        assert_eq!(report.exit_code(), 2);
+        assert_eq!(report.advisories.len(), 1);
+    }
+
+    #[test]
+    fn a_low_advisory_is_informational() {
+        let advisories = [advisory("GHSA-cccc", Severity::Info)];
+        let report = report(meta(), None, Some(&advisories), NOW);
+        assert_eq!(report.exit_code(), 0);
+    }
+
+    #[test]
+    fn an_unreachable_osv_is_flagged_but_does_not_fail_the_run() {
+        let report = report(meta(), None, None, NOW);
+        assert_eq!(report.exit_code(), 0);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].id, "advisory-check-unavailable");
+        assert_eq!(report.findings[0].severity, Severity::Info);
+    }
+
+    #[test]
+    fn advisory_findings_sort_above_registry_findings_of_lower_severity() {
+        let mut meta = meta();
+        meta.repository = None; // INFO
+        let advisories = [advisory("GHSA-dddd", Severity::High)];
+        let report = report(meta, None, Some(&advisories), NOW);
+        assert_eq!(report.findings[0].severity, Severity::High);
+        assert_eq!(report.findings[0].id, "advisory");
     }
 }

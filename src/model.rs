@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::date;
+use crate::osv::Advisory;
 
 /// A package reference: `express`, `express@5.1.0`, `@scope/name@beta`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +162,7 @@ pub struct PackageReport {
     pub install_scripts: Vec<InstallScript>,
     pub repository: Option<String>,
     pub deprecated: Option<String>,
+    pub advisories: Vec<Advisory>,
     pub registry_url: String,
     pub findings: Vec<Finding>,
 }
@@ -315,6 +317,7 @@ mod tests {
             install_scripts: vec![],
             repository: None,
             deprecated: None,
+            advisories: Vec::new(),
             registry_url: String::new(),
             findings,
         }

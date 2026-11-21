@@ -1,10 +1,13 @@
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use dep_vet::cli::{Cli, Command};
+use dep_vet::http::HttpClient;
 use dep_vet::model::PackageSpec;
+use dep_vet::osv::OsvClient;
 use dep_vet::registry::RegistryClient;
 use dep_vet::report::{render_human, render_json};
 use dep_vet::signals;
@@ -53,10 +56,16 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     match &cli.command {
         Command::Npm { package, json } => {
             let spec = PackageSpec::parse(package)?;
-            let client = RegistryClient::from_env();
-            let meta = client.fetch(&spec)?;
-            let downloads = client.weekly_downloads(&meta.name);
-            let report = signals::report(meta, downloads, now_seconds());
+            let http = Arc::new(HttpClient::from_env(cli.no_cache));
+            let registry = RegistryClient::from_env(Arc::clone(&http));
+            let meta = registry.fetch(&spec)?;
+            let downloads = registry.weekly_downloads(&meta.name);
+            // Advisories are best effort: a failure is reported as an INFO
+            // finding, never as "no known vulnerabilities".
+            let advisories = OsvClient::from_env(Arc::clone(&http))
+                .query(&meta.name, &meta.version)
+                .ok();
+            let report = signals::report(meta, downloads, advisories.as_deref(), now_seconds());
 
             let output = if *json {
                 render_json(&report)?

@@ -27,7 +27,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test                              # 84 unit + 13 end-to-end tests
+cargo test                              # 118 unit + 26 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --all-targets -- -D warnings
@@ -51,6 +51,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 |------|------|
 | `src/model.rs` | `PackageSpec` parsing/validation, `Severity`, `Finding`, `PackageReport` |
 | `src/registry.rs` | packument fetch + parsing, download counts, repo URL normalization |
+| `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
+| `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
+| `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
 | `src/signals.rs` | the rules: `PackageMeta` + `now` in, `Vec<Finding>` out (no I/O) |
 | `src/typosquat.rs` | Levenshtein, homoglyph folding, curated popular-name seed |
 | `src/report.rs` | human rendering and JSON envelope |
@@ -65,9 +68,18 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - **Never call `Cli::parse()`.** clap exits `2` on usage errors, which means
   "high risk" here. `main.rs` uses `try_parse()` and remaps to 3, keeping
   `--help`/`--version` at 0.
-- **Tests must not touch the network.** `tests/cli.rs` starts a `TcpListener`
-  and overrides `DEPVET_REGISTRY_BASE` / `DEPVET_DOWNLOADS_BASE`. A test that
-  reaches npmjs.org is a bug.
+- **Tests must not touch the network or the real cache.** `tests/cli.rs` starts
+  a `TcpListener` and overrides `DEPVET_REGISTRY_BASE`, `DEPVET_DOWNLOADS_BASE`,
+  and `DEPVET_OSV_BASE`, with `DEPVET_NO_CACHE=1` except in cache tests. A test
+  that reaches npmjs.org, osv.dev, or `~/.cache/dep-vet` is a bug.
+- **The cache policy is deliberate.** Fresh entry skips the network; stale
+  entries are used only for network errors and 5xx; a 404 never falls back, or
+  deleted packages would look alive. See `HttpError::is_transient`.
+- **`querybatch` returns advisory IDs only.** Summary, aliases, and severity
+  come from `GET /v1/vulns/{id}`. Treating the batch as full records shows
+  "advisory without a summary" for every real advisory.
+- **Advisory failure is an INFO finding**, not silence and not exit 3. "We
+  could not check" must never read as "nothing found".
 - **ureq caps bodies at 10 MB.** `registry.rs` raises the limit to 64 MB; the
   `aws-sdk` packument proves why. Removing it silently truncates large packages.
 - **Automation publishers** (`GitHub Actions`, `[bot]` accounts) are not
@@ -85,5 +97,6 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 
 ## Not built yet
 
-`dep-vet lock`, OSV advisories, caching, the GitHub Action, PyPI/crates.io.
-Roadmap only: do not describe these as existing in code, README, or help text.
+`dep-vet lock`, the GitHub Action, PyPI/crates.io, and tree-wide advisory
+lookups. Roadmap only: do not describe these as existing in code, README, or
+help text.

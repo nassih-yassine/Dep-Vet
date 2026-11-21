@@ -1,9 +1,12 @@
 #![forbid(unsafe_code)]
 
 pub mod branding;
+pub mod cache;
 pub mod cli;
 pub mod date;
+pub mod http;
 pub mod model;
+pub mod osv;
 pub mod registry;
 pub mod report;
 pub mod signals;

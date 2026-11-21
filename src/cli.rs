@@ -18,6 +18,10 @@ pub struct Cli {
     /// Never emit ANSI colors
     #[arg(long, global = true)]
     pub no_color: bool,
+
+    /// Bypass the on-disk HTTP cache
+    #[arg(long, global = true)]
+    pub no_cache: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -61,6 +65,13 @@ mod tests {
     fn no_color_is_global() {
         let cli = Cli::try_parse_from(["dep-vet", "--no-color", "npm", "express"]).unwrap();
         assert!(cli.no_color);
+    }
+
+    #[test]
+    fn no_cache_is_global() {
+        let cli = Cli::try_parse_from(["dep-vet", "npm", "express", "--no-cache"]).unwrap();
+        assert!(cli.no_cache);
+        assert!(!cli.no_color);
     }
 
     #[test]

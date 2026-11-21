@@ -57,6 +57,8 @@ impl MockRegistry {
         command
             .env("DEPVET_REGISTRY_BASE", &self.base)
             .env("DEPVET_DOWNLOADS_BASE", format!("{}/downloads", self.base))
+            .env("DEPVET_OSV_BASE", &self.base)
+            .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
         command
     }
@@ -84,10 +86,8 @@ fn read_path(stream: &mut TcpStream) -> Option<String> {
     }
     let text = String::from_utf8_lossy(&buffer);
     let first_line = text.lines().next()?;
-    let mut parts = first_line.split_whitespace();
-    let method = parts.next()?;
-    let path = parts.next()?.to_string();
-    (method == "GET").then_some(path)
+    let path = first_line.split_whitespace().nth(1)?.to_string();
+    Some(path)
 }
 
 fn days_ago(days: i64) -> String {
@@ -163,7 +163,19 @@ impl<'a> PackageFixture<'a> {
     }
 }
 
+const NO_ADVISORIES: &str = r#"{"results":[{"vulns":[]}]}"#;
+
 fn registry_with(packages: &[PackageFixture<'_>], downloads: Option<u64>) -> MockRegistry {
+    registry_and_osv(packages, downloads, 200, NO_ADVISORIES, None)
+}
+
+fn registry_and_osv(
+    packages: &[PackageFixture<'_>],
+    downloads: Option<u64>,
+    osv_status: u16,
+    osv_body: &str,
+    detail: Option<(&str, &str)>,
+) -> MockRegistry {
     let mut routes = HashMap::new();
     for package in packages {
         routes.insert(package.route(), (200, package.to_json()));
@@ -176,6 +188,13 @@ fn registry_with(packages: &[PackageFixture<'_>], downloads: Option<u64>) -> Moc
                 (200, format!("{{\"downloads\":{count}}}")),
             );
         }
+    }
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (osv_status, osv_body.to_string()),
+    );
+    if let Some((id, body)) = detail {
+        routes.insert(format!("/v1/vulns/{id}"), (200, body.to_string()));
     }
     MockRegistry::start(routes)
 }
@@ -487,4 +506,154 @@ fn piped_output_has_no_wordmark() {
         .success()
         .stdout(predicate::str::contains("dependency risk").not())
         .stdout(predicate::str::contains("INFO"));
+}
+
+const HIGH_ADVISORY: &str = r#"{"results":[{"vulns":[{"id":"GHSA-test-0001"}]}]}"#;
+
+const HIGH_ADVISORY_DETAIL: &str = r#"{
+    "id": "GHSA-test-0001",
+    "summary": "test advisory for dep-vet",
+    "aliases": ["CVE-2026-0001"],
+    "database_specific": { "severity": "HIGH" }
+}"#;
+
+#[test]
+fn a_high_advisory_sets_the_verdict() {
+    let package = PackageFixture::clean("advised-pkg");
+    let registry = registry_and_osv(
+        &[package],
+        None,
+        200,
+        HIGH_ADVISORY,
+        Some(("GHSA-test-0001", HIGH_ADVISORY_DETAIL)),
+    );
+
+    registry
+        .command()
+        .args(["npm", "advised-pkg"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("HIGH (exit 2)"))
+        .stdout(predicate::str::contains(
+            "GHSA-test-0001 affects this version",
+        ))
+        .stdout(predicate::str::contains("CVE-2026-0001"))
+        .stdout(predicate::str::contains(
+            "https://osv.dev/vulnerability/GHSA-test-0001",
+        ));
+}
+
+#[test]
+fn advisory_failure_is_reported_without_failing_the_run() {
+    let package = PackageFixture::clean("offline-osv-pkg");
+    let registry = registry_and_osv(&[package], None, 500, "{}", None);
+
+    registry
+        .command()
+        .args(["npm", "offline-osv-pkg"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("advisory check unavailable"))
+        .stdout(predicate::str::contains(
+            "says nothing about known vulnerabilities",
+        ));
+}
+
+#[test]
+fn json_includes_advisories() {
+    let package = PackageFixture::clean("advised-pkg");
+    let registry = registry_and_osv(
+        &[package],
+        None,
+        200,
+        HIGH_ADVISORY,
+        Some(("GHSA-test-0001", HIGH_ADVISORY_DETAIL)),
+    );
+
+    let output = registry
+        .command()
+        .args(["npm", "advised-pkg", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["advisories"][0]["id"], "GHSA-test-0001");
+    assert_eq!(value["advisories"][0]["severity"], "high");
+    assert_eq!(value["findings"][0]["id"], "advisory");
+}
+
+#[test]
+fn repeated_runs_are_served_from_the_cache() {
+    let package = PackageFixture::clean("cached-pkg");
+    let registry = registry_with(&[package], Some(10));
+    let cache_dir = tempfile::tempdir().unwrap();
+
+    let run = || {
+        registry
+            .command()
+            .env_remove("DEPVET_NO_CACHE")
+            .env("DEPVET_CACHE_DIR", cache_dir.path())
+            .args(["npm", "cached-pkg"])
+            .assert()
+            .success();
+    };
+
+    run();
+    let after_first = registry.requests().len();
+    assert!(
+        after_first >= 3,
+        "expected registry, downloads, and OSV calls"
+    );
+
+    run();
+    assert_eq!(
+        registry.requests().len(),
+        after_first,
+        "second run should hit the cache"
+    );
+}
+
+#[test]
+fn no_cache_flag_refetches_everything() {
+    let package = PackageFixture::clean("uncached-pkg");
+    let registry = registry_with(&[package], Some(10));
+    let cache_dir = tempfile::tempdir().unwrap();
+
+    let run = || {
+        registry
+            .command()
+            .env("DEPVET_CACHE_DIR", cache_dir.path())
+            .args(["npm", "uncached-pkg", "--no-cache"])
+            .assert()
+            .success();
+    };
+
+    run();
+    let after_first = registry.requests().len();
+    run();
+    assert_eq!(
+        registry.requests().len(),
+        after_first * 2,
+        "--no-cache should refetch"
+    );
+}
+
+#[test]
+fn unreadable_advisory_details_still_surface_the_advisory() {
+    let package = PackageFixture::clean("mystery-pkg");
+    let registry = registry_and_osv(&[package], None, 200, HIGH_ADVISORY, None);
+
+    registry
+        .command()
+        .args(["npm", "mystery-pkg"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "GHSA-test-0001 affects this version",
+        ))
+        .stdout(predicate::str::contains(
+            "OSV did not return details for this advisory",
+        ));
 }
