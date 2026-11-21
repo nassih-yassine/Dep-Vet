@@ -22,6 +22,10 @@ pub struct Cli {
     /// Bypass the on-disk HTTP cache
     #[arg(long, global = true)]
     pub no_cache: bool,
+
+    /// Ignore the nearest package-lock.json when checking one package
+    #[arg(long, global = true)]
+    pub no_local: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -125,6 +129,13 @@ mod tests {
             }
             _ => panic!("expected lock command"),
         }
+    }
+
+    #[test]
+    fn no_local_is_global() {
+        let cli = Cli::try_parse_from(["dep-vet", "npm", "express", "--no-local"]).unwrap();
+        assert!(cli.no_local);
+        assert!(!cli.no_cache);
     }
 
     #[test]

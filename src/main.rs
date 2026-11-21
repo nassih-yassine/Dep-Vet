@@ -62,7 +62,10 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     match &cli.command {
         Command::Npm { package, json } => {
             let spec = PackageSpec::parse(package)?;
-            let report = auditor.audit(&spec, &[], now_seconds())?;
+            // A lockfile in the current project is the same trusted-name list
+            // the lock command uses; without one, the seed list stands alone.
+            let local = local_candidates(cli);
+            let report = auditor.audit(&spec, &local, now_seconds())?;
 
             let output = if *json {
                 render_json(&report)?
@@ -172,6 +175,21 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             emit(&output, report.exit_code())
         }
     }
+}
+
+fn local_candidates(cli: &Cli) -> Vec<String> {
+    if cli.no_local {
+        return Vec::new();
+    }
+    lockfile::nearest(std::path::Path::new("."))
+        .and_then(|path| lockfile::read(&path).ok())
+        .map(|packages| {
+            packages
+                .iter()
+                .map(|package| package.name.to_ascii_lowercase())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 struct Auditor {
