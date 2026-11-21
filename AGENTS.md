@@ -78,6 +78,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   from npm's search endpoint. Names under 4 chars are intentionally skipped.
 - **`signals.rs` stays pure.** Time enters as `now: i64` (Unix seconds) so
   freshness rules are deterministic in tests.
+- **Branding lives in `src/branding.rs`.** `HELP_HEADER` is a literal copy of
+  the logo because `concat!` only takes literals; a test keeps it in sync with
+  `LOGO_ASCII`. The banner prints only on a terminal, never in JSON or pipes.
 
 ## Not built yet
 

@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
     name = "dep-vet",
     version,
     about = "Check a package's risk before it enters your lockfile",
+    before_help = crate::branding::HELP_HEADER,
     long_about = None
 )]
 pub struct Cli {

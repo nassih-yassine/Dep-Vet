@@ -61,7 +61,19 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             let output = if *json {
                 render_json(&report)?
             } else {
-                render_human(&report, use_color(cli))
+                let report_text = render_human(&report, use_color(cli));
+                // The wordmark is for humans at a terminal; pipes and CI get
+                // the report alone.
+                if io::stdout().is_terminal() {
+                    format!(
+                        "{}\n{}\n\n{}",
+                        dep_vet::branding::banner(use_color(cli)),
+                        dep_vet::branding::TAGLINE,
+                        report_text
+                    )
+                } else {
+                    report_text
+                }
             };
 
             match write_stdout(&output) {
