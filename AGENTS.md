@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 252 unit + 81 end-to-end tests
+cargo test --locked                      # 254 unit + 82 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -217,7 +217,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **JS lockfile quirks that bite.** `bun.lock` is JSONC (comments and trailing
   commas) and `strip_jsonc` must keep `//` inside strings (URLs). pnpm keys are
   `name@ver` (v9), `/name@ver` (v6), or `/name/ver` (v5), with `(peer@x)` suffixes
-  to strip. Yarn Berry workspace entries use `0.0.0-use.local` and are skipped.
+  to strip. Yarn Berry workspace entries use `0.0.0-use.local` and are skipped;
+  its `__metadata` block is not a package and must stay out of `skipped`, or
+  every Berry audit exits 3.
+- **`.depvet.toml` denies unknown keys.** A typo like `[[allows]]` must fail the
+  run, not silently allow nothing.
 - **Aliases resolve to the real package.** For `"x": "npm:real-pkg@1"`, npm
   keys the path `node_modules/x` but stores `"name": "real-pkg"` in the entry.
   Use `Entry::name` first and fall back to the path segment; auditing the alias

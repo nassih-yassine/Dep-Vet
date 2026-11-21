@@ -17,11 +17,13 @@ if [ -z "$lockfiles" ]; then
     exit 0
 fi
 
-if command -v dep-vet >/dev/null 2>&1; then
-    runner="dep-vet"
-else
-    runner="cargo run --quiet --"
-fi
+run_dep_vet() {
+    if command -v dep-vet >/dev/null 2>&1; then
+        dep-vet "$@"
+    else
+        cargo run --quiet -- "$@"
+    fi
+}
 
 status=0
 while IFS= read -r file; do
@@ -32,14 +34,14 @@ while IFS= read -r file; do
     if git cat-file -e "HEAD:$file" 2>/dev/null; then
         echo "dep-vet pre-commit: $file against HEAD"
         set +e
-        $runner lock "$file" --base HEAD
+        run_dep_vet lock "$file" --base HEAD
         code=$?
         set -e
     else
         # A newly added lockfile has no base revision; audit the whole file.
         echo "dep-vet pre-commit: $file (new file, full audit)"
         set +e
-        $runner audit "$file"
+        run_dep_vet audit "$file"
         code=$?
         set -e
     fi

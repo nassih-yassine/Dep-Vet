@@ -2254,3 +2254,34 @@ fn pre_commit_blocks_on_high_risk_and_passes_warnings() {
     let output = run_pre_commit(&repo, warning.path(), &log);
     assert!(output.status.success(), "warnings must not block a commit");
 }
+
+#[test]
+fn audit_reads_berry_lock_without_calling_metadata_a_package() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("yarn.lock"),
+        r#"__metadata:
+  version: 8
+
+"is-number@npm:7.0.0":
+  version: 7.0.0
+  resolution: "is-number@npm:7.0.0"
+"#,
+    )
+    .unwrap();
+
+    let registry = registry_with(&[js_fixture()], None);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "yarn.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(value["errors"].as_array().unwrap().len(), 0);
+}
