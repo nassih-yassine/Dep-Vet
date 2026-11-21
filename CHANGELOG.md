@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 — 2026-11-21
 
 - **Decompression is time- and size-bounded.** A gzip stream that expands past
   `max_decompressed` (200 MB by default, `[inspect] max_decompressed_mb`) is
@@ -14,6 +14,11 @@
   lockfiles are read with forward-slash git paths and `--end-of-options`, refs
   that look like flags are refused, and CI now runs the test suite on ubuntu,
   macOS, and Windows. Shell- and inotify-dependent tests are gated.
+- **Release hygiene.** Linux musl targets and SLSA attestations in releases, a
+  `rust-version`, SHA-pinned actions in hand-written workflows, a pinned
+  cargo-audit, Dependabot for cargo and actions, `SECURITY.md`, and a refresh
+  guard that fails when the typosquat seed loses an anchor or changes more than
+  200 lines.
 - **The Action survives read-only tokens.** Inputs flow through quoted `env:`
   values, the report is written to the step summary before commenting, a
   read-only token (Dependabot/fork PRs) emits a warning instead of failing, and

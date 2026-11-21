@@ -1,8 +1,9 @@
 # dep-vet
 
-Rust CLI that checks an npm package's risk **before** it enters the lockfile.
-v0.1 ships `dep-vet npm <name>[@version]` only. `README.md` is the user-facing
-doc. `docs/` holds the product brief and design specs but is **gitignored and
+Rust CLI that checks a dependency's risk **before** it enters the lockfile.
+It audits npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven/AndroidX, and
+Composer, and ships `audit`, `lock`, `watch`, `inspect`, and `diff`.
+`README.md` is the user-facing doc. `docs/` holds the product brief and design specs but is **gitignored and
 not published**: never link to it from README or the wiki, and never `git add -f`
 it without asking.
 
@@ -87,10 +88,17 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
+| `src/archive/` | bounded in-memory tar.gz/zip/gem extraction, caps and skipped-path reasons |
+| `src/rules.rs` | static rules over extracted source, comment stripping, partial-scan disclosure |
+| `src/inspect.rs` | archive URL resolution, checksum verification, inspection and release diff |
+| `src/provenance.rs` | offline Sigstore verification of npm attestations |
 | `src/signals.rs` | the rules: `PackageMeta` + `now` in, `Vec<Finding>` out (no I/O) |
 | `src/typosquat.rs` | Levenshtein, homoglyph folding, per-ecosystem candidate lists |
 | `src/watch.rs` | `watch` command: notify watcher, target filtering, debounce |
 | `src/report.rs` | human rendering and JSON envelope |
+| `src/cli.rs` | clap command surface |
+| `src/progress.rs` | stderr-only progress bar for `audit`/`lock` |
+| `src/version.rs` | major-line helper for upgrade advice |
 | `src/date.rs` | hand-rolled RFC 3339 → epoch (deliberately no date crate) |
 | `src/main.rs` | wiring, color decision, exit codes |
 | `tests/cli.rs` | real binary against a local fake registry |
@@ -505,5 +513,6 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Remaining ecosystems and lockfile formats (e.g. Gradle). Roadmap only: do not
-describe these as existing in code, README, or help text.
+Maven dependency trees (no lockfile format), Gradle projects without dependency
+locking, SARIF/SBOM output, and publisher history beyond the previous release.
+Roadmap only: do not describe these as existing in code, README, or help text.
