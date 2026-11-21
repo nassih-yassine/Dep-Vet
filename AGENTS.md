@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 387 unit + 108 end-to-end tests
+cargo test --locked                      # 389 unit + 109 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -224,7 +224,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   An unreadable lockfile degrades to the seed silently; do not fail the check
   because of an unrelated file. A name that is itself in the seed is never
   flagged for resembling a local one (`preact` vs `react`) — keep that guard
-  and its test.
+  and its test. Depth: a package with at least `ESTABLISHED_WEEKLY_DOWNLOADS`
+  (1,000,000) weekly downloads is never reported as a typosquat, and gets no
+  replacement advice. The generated seed always has holes (`next` was missing
+  and matched `jest` at distance 2, advising a test runner in place of a
+  framework), so this is the safety net; `ANCHORS` in the refresh script is the
+  source fix.
 - **Human review links come from `Ecosystem::package_url`.** Never hardcode
   npmjs.com in a renderer; a PyPI report shipped with an npm link once. Clean
   reports include the link too.
