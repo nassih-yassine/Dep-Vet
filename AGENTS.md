@@ -141,6 +141,11 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   `include_str!` + `OnceLock`. Tests require `cross-env`, `preact`, and `moment`
   to stay present, so refresh with the script, never by deleting lines. PyPI,
   crates.io, and Go lists are still curated constants.
+- **Refresh is automated.** `.github/workflows/refresh-popular.yml` runs weekly
+  (Monday 04:00 UTC) or by dispatch, pushes `bot/refresh-popular-npm`, opens or
+  updates a PR, and enables auto-merge. Repository auto-merge is enabled; if it
+  is turned off, the PR simply waits for a human. Do not commit generated data by
+  hand outside the script.
 - **Advisories are deduplicated by alias.** OSV lists one issue as PYSEC, GHSA,
   and CVE records. `dedupe` unions records whose id/alias sets overlap, keeps the
   highest severity, prefers a real summary over the placeholder, and preserves
