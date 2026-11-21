@@ -1,6 +1,6 @@
 [package]
 name = "dep-vet"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "Check a package's risk before it enters your lockfile"
 repository = "https://github.com/nassih-yassine/Dep-Vet"

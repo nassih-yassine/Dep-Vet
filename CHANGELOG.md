@@ -1,12 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 — 2026-11-21
 
 - **Provenance presence.** Reports say whether a release publishes provenance:
   npm attestations and PyPI via the Integrity API. `present` is explicitly not
   a verification, `missing` is not suspicious, and other ecosystems report
   `unavailable`.
-
 - **Archive inspection.** `dep-vet inspect <ecosystem> <pkg>[@version]`
   downloads the release, verifies its checksum when published, extracts it in
   memory under hard caps, and scans source text for suspicious behavior (JS,
@@ -27,7 +26,6 @@
   access. Every finding now carries a description and reference links.
 - **Rule findings** carry rule id, severity, confidence, file, and line, and are
   deterministic across runs.
-
 - **Retries with backoff.** Network errors, 429, and 5xx now retry up to three
   times with exponential backoff, and `Retry-After` is honoured up to five
   seconds. Statuses are read as data, so a rate-limit hint is not lost.
@@ -36,7 +34,6 @@
 - **Confidence in JSON.** Every finding carries `confidence` next to
   `severity`, so a weak signal is not read as a certainty. Existing fields are
   unchanged.
-
 - **Release-transition signals.** dep-vet now flags the shape of a compromised
   release: a version published after a year of dormancy (INFO, all ecosystems),
   changed install scripts in npm (HIGH when they fetch or decode code),
