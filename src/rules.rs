@@ -16,12 +16,14 @@ use crate::model::{Confidence, Severity};
 pub struct RuleFinding {
     pub rule: &'static str,
     pub title: &'static str,
+    pub description: &'static str,
     pub severity: Severity,
     pub confidence: Confidence,
     pub file: String,
     pub line: usize,
     pub evidence: String,
     pub recommendation: &'static str,
+    pub references: Vec<&'static str>,
 }
 
 fn regex(pattern: &'static str) -> &'static Regex {
@@ -64,9 +66,11 @@ fn any_hit(text: &str, pattern: &'static str) -> bool {
 struct Rule {
     id: &'static str,
     title: &'static str,
+    description: &'static str,
     pattern: &'static str,
     severity: Severity,
     recommendation: &'static str,
+    references: &'static [&'static str],
     extensions: &'static [&'static str],
 }
 
@@ -74,73 +78,133 @@ const RULES: &[Rule] = &[
     Rule {
         id: "JS-EXEC-001",
         title: "dynamic code execution",
+        description: "The file evaluates a string as code, which hides what runs until runtime.",
         pattern: r"\beval\s*\(|new\s+Function\s*\(",
         severity: Severity::Warn,
         recommendation: "Review why this package evaluates code at runtime.",
+        references: &[
+            "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval",
+        ],
         extensions: &["js", "mjs", "cjs", "ts", "tsx", "jsx"],
     },
     Rule {
         id: "JS-CHILD-001",
         title: "spawns a child process",
+        description: "The file can run an external command, a common path for install-time payloads.",
         pattern: r#"require\(['"]child_process['"]\)|from ['"]child_process['"]"#,
         severity: Severity::Warn,
         recommendation: "Check which command runs and whether install-time use is expected.",
+        references: &["https://nodejs.org/api/child_process.html"],
         extensions: &["js", "mjs", "cjs", "ts", "tsx", "jsx"],
     },
     Rule {
         id: "JS-OBF-001",
         title: "decodes and executes an encoded payload",
+        description: "Base64 data is decoded straight into eval, hiding the executed code.",
         pattern: r"eval\s*\(\s*(atob|Buffer\.from\s*\([^)]*base64)",
         severity: Severity::High,
         recommendation: "Do not install until the encoded payload is decoded and reviewed.",
+        references: &["https://developer.mozilla.org/en-US/docs/Web/API/atob"],
+        extensions: &["js", "mjs", "cjs", "ts", "tsx", "jsx"],
+    },
+    Rule {
+        id: "JS-FS-001",
+        title: "reads well-known credential paths",
+        description: "The file references SSH, npm, AWS, or GPG credential locations.",
+        pattern: r"\.ssh/|\.npmrc|\.aws/credentials|id_rsa|\.gnupg|\.docker/config",
+        severity: Severity::Warn,
+        recommendation: "Check whether the package has any reason to read these files.",
+        references: &["https://owasp.org/www-community/attacks/Credential_stuffing"],
         extensions: &["js", "mjs", "cjs", "ts", "tsx", "jsx"],
     },
     Rule {
         id: "PY-EXEC-001",
         title: "dynamic code execution",
+        description: "The file runs a string as code, hiding the behavior from a plain read.",
         pattern: r"\b(exec|eval)\s*\(",
         severity: Severity::Warn,
         recommendation: "Review the string being executed and where it comes from.",
+        references: &["https://docs.python.org/3/library/functions.html#eval"],
+        extensions: &["py"],
+    },
+    Rule {
+        id: "PY-IMPORT-001",
+        title: "imports a module by name at runtime",
+        description: "Dynamic imports can load code that static review never sees.",
+        pattern: r"__import__\s*\(|importlib\.import_module\s*\(",
+        severity: Severity::Warn,
+        recommendation: "Check where the imported name comes from before installing.",
+        references: &["https://docs.python.org/3/library/importlib.html"],
+        extensions: &["py"],
+    },
+    Rule {
+        id: "PY-OBF-001",
+        title: "executes base64-decoded code",
+        description: "An encoded payload is decoded into exec, hiding what runs.",
+        pattern: r"exec\s*\([^)]*(b64decode|base64|codecs\.decode)",
+        severity: Severity::High,
+        recommendation: "Decode the payload and review it before installing.",
+        references: &["https://docs.python.org/3/library/base64.html"],
         extensions: &["py"],
     },
     Rule {
         id: "PY-SHELL-001",
         title: "runs a shell command",
+        description: "shell=True lets a string be interpreted by the shell, including pipes.",
         pattern: r"subprocess\.[A-Za-z_]+\([^)]*shell\s*=\s*True",
         severity: Severity::Warn,
         recommendation: "Check whether shell=True is required and what input reaches it.",
+        references: &["https://docs.python.org/3/library/subprocess.html#security-considerations"],
         extensions: &["py"],
     },
     Rule {
         id: "SH-PIPE-001",
         title: "downloads and executes a remote script",
+        description: "A downloaded script is piped into a shell, so it runs unreviewed.",
         pattern: r"(curl|wget)[^\n|]*\|\s*(ba)?sh\b",
         severity: Severity::High,
         recommendation: "Do not install; fetch and review the script instead.",
+        references: &["https://owasp.org/www-community/attacks/Command_Injection"],
         extensions: &["sh", "bash", "zsh"],
     },
     Rule {
         id: "RS-BUILD-001",
         title: "build script runs commands or opens a socket",
+        description: "build.rs executes at compile time, before any test or review of the crate.",
         pattern: r"Command::new\(|std::net|TcpStream",
         severity: Severity::Warn,
         recommendation: "Review build.rs: compile steps are expected, network or shell calls are not.",
+        references: &["https://doc.rust-lang.org/cargo/reference/build-scripts.html"],
         extensions: &["rs"],
     },
     Rule {
         id: "GO-EXEC-001",
         title: "runs an external command",
+        description: "The file imports os/exec, which can run any binary on the machine.",
         pattern: r#""os/exec""#,
         severity: Severity::Warn,
         recommendation: "Check which binary is executed and why.",
+        references: &["https://pkg.go.dev/os/exec"],
         extensions: &["go"],
     },
     Rule {
         id: "PHP-EXEC-001",
         title: "dynamic execution or shell call",
+        description: "The file can run code or a shell command; both are install-time vectors.",
         pattern: r"\b(eval|system|shell_exec|passthru|assert)\s*\(",
         severity: Severity::Warn,
         recommendation: "Review the executed string and its source.",
+        references: &["https://www.php.net/manual/en/function.eval.php"],
+        extensions: &["php"],
+    },
+    Rule {
+        id: "PHP-OBF-001",
+        title: "executes base64-decoded code",
+        description: "An encoded payload is decoded into eval, hiding what runs.",
+        pattern: r"eval\s*\(\s*(base64_decode|gzinflate|str_rot13)",
+        severity: Severity::High,
+        recommendation: "Decode the payload and review it before installing.",
+        references: &["https://www.php.net/manual/en/function.base64-decode.php"],
         extensions: &["php"],
     },
 ];
@@ -166,12 +230,14 @@ pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
             findings.push(RuleFinding {
                 rule: rule.id,
                 title: rule.title,
+                description: rule.description,
                 severity: rule.severity,
                 confidence: Confidence::Medium,
                 file: file.path.clone(),
                 line,
                 evidence,
                 recommendation: rule.recommendation,
+                references: rule.references.to_vec(),
             });
         }
 
@@ -191,12 +257,14 @@ pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
             findings.push(RuleFinding {
                 rule: "JS-NET-001",
                 title: "reads credentials and talks to the network",
+                description: "The same file reads environment variables and opens a connection.",
                 severity: Severity::High,
                 confidence: Confidence::Medium,
                 file: file.path.clone(),
                 line,
                 evidence,
                 recommendation: "Review where the environment data is sent before installing.",
+                references: vec!["https://owasp.org/www-community/attacks/Command_Injection"],
             });
         }
         if extension == "py"
@@ -210,12 +278,33 @@ pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
             findings.push(RuleFinding {
                 rule: "PY-NET-001",
                 title: "reads credentials and talks to the network",
+                description: "The same file reads environment variables and opens a connection.",
                 severity: Severity::High,
                 confidence: Confidence::Medium,
                 file: file.path.clone(),
                 line,
                 evidence,
                 recommendation: "Review where the environment data is sent before installing.",
+                references: vec!["https://owasp.org/www-community/attacks/Command_Injection"],
+            });
+        }
+
+        if extension == "go"
+            && any_hit(&file.text, r#""net/http"|"net"\b"#)
+            && any_hit(&file.text, r"os\.Getenv")
+            && let Some((line, evidence)) = first_hit(&file.text, r"os\.Getenv")
+        {
+            findings.push(RuleFinding {
+                rule: "GO-NET-001",
+                title: "reads credentials and talks to the network",
+                description: "The same file reads environment variables and opens a connection.",
+                severity: Severity::High,
+                confidence: Confidence::Medium,
+                file: file.path.clone(),
+                line,
+                evidence,
+                recommendation: "Review where the environment data is sent before installing.",
+                references: vec!["https://owasp.org/www-community/attacks/Command_Injection"],
             });
         }
     }
@@ -328,6 +417,54 @@ mod tests {
     fn a_redis_method_named_exec_is_not_a_shell_call() {
         let findings = scan(&[file("src/Handler.php", "$this->redis->exec();\n")]);
         assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn credential_paths_and_dynamic_imports_are_flagged() {
+        let js = scan(&[file("lib/x.js", "fs.readFileSync(home + '/.ssh/id_rsa')\n")]);
+        assert!(js.iter().any(|finding| finding.rule == "JS-FS-001"));
+
+        let py = scan(&[file("a.py", "module = importlib.import_module(name)\n")]);
+        assert!(py.iter().any(|finding| finding.rule == "PY-IMPORT-001"));
+
+        let encoded = scan(&[file("a.py", "exec(base64.b64decode(payload))\n")]);
+        let finding = encoded
+            .iter()
+            .find(|finding| finding.rule == "PY-OBF-001")
+            .expect("missing encoded python payload");
+        assert_eq!(finding.severity, Severity::High);
+    }
+
+    #[test]
+    fn go_network_plus_env_is_high() {
+        let findings = scan(&[file(
+            "cmd/main.go",
+            "import \"net/http\"\ntoken := os.Getenv(\"TOKEN\")\nhttp.Get(url)\n",
+        )]);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.rule == "GO-NET-001")
+            .expect("missing go network finding");
+        assert_eq!(finding.severity, Severity::High);
+    }
+
+    #[test]
+    fn php_encoded_payload_is_high() {
+        let findings = scan(&[file("a.php", "eval(base64_decode($payload));\n")]);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.rule == "PHP-OBF-001")
+            .expect("missing php encoded payload");
+        assert_eq!(finding.severity, Severity::High);
+    }
+
+    #[test]
+    fn every_finding_has_description_and_references() {
+        let findings = scan(&[file("lib/x.js", "eval(atob(payload))\n")]);
+        for finding in findings {
+            assert!(!finding.description.is_empty(), "{finding:?}");
+            assert!(!finding.references.is_empty(), "{finding:?}");
+        }
     }
 
     #[test]

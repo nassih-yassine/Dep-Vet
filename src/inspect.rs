@@ -417,12 +417,14 @@ pub fn build_report(
             findings.push(crate::rules::RuleFinding {
                 rule: "ARCHIVE-CHECKSUM-001",
                 title: "archive checksum does not match the registry",
+                description: "The downloaded bytes differ from the release the registry published.",
                 severity: crate::model::Severity::High,
                 confidence: crate::model::Confidence::High,
                 file: String::new(),
                 line: 0,
                 evidence: format!("expected {expected}, got {actual}"),
                 recommendation: "Do not install; the download does not match the published release.",
+                references: vec!["https://docs.npmjs.com/about-registry-signatures"],
             });
             format!("MISMATCH (expected {expected}, got {actual})")
         }
@@ -562,6 +564,7 @@ fn new_script_findings(
             Some(crate::rules::RuleFinding {
                 rule: "DIFF-NEW-SCRIPT-001",
                 title: "this release adds an executable script",
+                description: "A new shell or shebang file appeared since the previous release.",
                 severity: crate::model::Severity::Warn,
                 confidence: crate::model::Confidence::Medium,
                 file: path.clone(),
@@ -574,6 +577,7 @@ fn new_script_findings(
                     .take(160)
                     .collect(),
                 recommendation: "Review the new script before installing the update.",
+                references: vec!["https://owasp.org/www-community/attacks/Command_Injection"],
             })
         })
         .collect()

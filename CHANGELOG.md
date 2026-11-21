@@ -11,6 +11,9 @@
 - **Release diff.** `dep-vet diff <ecosystem> <pkg@old> <pkg@new>` compares two
   archives by content: added, removed, and modified files, new and resolved rule
   findings, and a warning for newly added executable scripts.
+- **Rules cover more ground.** JavaScript credential paths, Python and PHP
+  encoded payloads, Python dynamic imports, and Go network plus environment
+  access. Every finding now carries a description and reference links.
 - **Rule findings** carry rule id, severity, confidence, file, and line, and are
   deterministic across runs.
 

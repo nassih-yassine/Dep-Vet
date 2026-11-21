@@ -216,8 +216,12 @@ mismatch is a HIGH finding, not a warning.
 
 Rules are deliberately conservative: one suspicious API call is a WARN, and
 only a combination (network plus credential access in one file, or an encoded
-payload passed to `eval`) reaches HIGH. The first set covers JavaScript,
-Python, shell, Rust `build.rs`, Go, and PHP. Maven jars and NuGet packages
+payload passed to `eval`) reaches HIGH. The 16 starter rules cover JavaScript
+(dynamic execution, child processes, credential paths, encoded payloads),
+Python (exec/eval, dynamic imports, shell calls, encoded payloads), shell
+pipe-to-shell, Rust `build.rs`, Go (exec, network plus environment access), and
+PHP (exec family, encoded payloads). Every finding carries a description, a
+recommendation, and at least one reference link. Maven jars and NuGet packages
 contain compiled artifacts, so their source analysis is reported as not
 checked; JSR archives are not available yet.
 

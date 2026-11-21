@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 457 unit + 116 end-to-end tests
+cargo test --locked                      # 461 unit + 116 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -278,7 +278,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   (`ARCHIVE-CHECKSUM-001`). JSR has no documented tarball URL; Maven without a
   sources jar and NuGet compiled packages report source analysis as not checked.
   Rules in `src/rules.rs`: a lone API match is WARN with medium confidence;
-  network plus credential access, or `eval(atob(...))`, is HIGH. Comments are
+  network plus credential access, or an encoded payload passed to `eval`, is
+  HIGH. Every rule carries a description and at least one reference URL, and a
+  test fails when either is missing. Dynamic imports are intentionally WARN:
+  frameworks use them legitimately. Comments are
   skipped, and findings sort by (file, line, rule) for reproducible output.
   `diff` compares two extracted releases by content: added/removed/modified
   paths, findings matched by (rule, file) because line numbers shift, and a

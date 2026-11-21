@@ -280,6 +280,9 @@ pub fn render_inspection_human(report: &crate::inspect::InspectionReport, color:
                 out.push_str(&format!("        {line}\n"));
             }
             out.push_str(&format!("        {}\n", finding.recommendation));
+            if let Some(reference) = finding.references.first() {
+                out.push_str(&format!("        -> {reference}\n"));
+            }
             out.push('\n');
         }
     }
@@ -381,6 +384,9 @@ pub fn render_diff_human(report: &crate::inspect::DiffReport, color: bool) -> St
             }
             for line in wrap(&finding.evidence, 88) {
                 out.push_str(&format!("        {line}\n"));
+            }
+            if let Some(reference) = finding.references.first() {
+                out.push_str(&format!("        -> {reference}\n"));
             }
             out.push('\n');
         }
