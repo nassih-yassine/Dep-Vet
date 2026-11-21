@@ -236,6 +236,11 @@ pub fn nearest(start: &Path) -> Option<std::path::PathBuf> {
 /// Reads the same lockfile at a git revision, so the diff needs no second
 /// working tree.
 pub fn at_ref(lockfile: &Path, git_ref: &str) -> Result<LockContents, LockError> {
+    if git_ref.is_empty() || git_ref.starts_with('-') {
+        return Err(LockError::Git(format!(
+            "refusing ref '{git_ref}': a ref must not be empty or start with '-'"
+        )));
+    }
     let format = detect(lockfile)?;
     // `Path::new("package-lock.json").parent()` is `Some("")`, which git
     // rejects as a working directory.
@@ -253,17 +258,26 @@ pub fn at_ref(lockfile: &Path, git_ref: &str) -> Result<LockContents, LockError>
         .strip_prefix(root)
         .map_err(|_| LockError::NotInRepository(lockfile.display().to_string()))?;
 
-    let blob = git(
-        directory,
-        &["show", &format!("{git_ref}:{}", relative.display())],
-    )?;
+    let object = format!("{git_ref}:{}", git_path(relative));
+    let blob = git(directory, &["show", "--end-of-options", &object])?;
     parse(format, &blob).map_err(|error| match error {
         LockError::Io { source, .. } => LockError::Io {
-            path: format!("{git_ref}:{}", relative.display()),
+            path: object,
             source,
         },
         other => other,
     })
+}
+
+/// Git object paths always use `/`, on every platform.
+fn git_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn git(directory: &Path, args: &[&str]) -> Result<String, LockError> {
@@ -285,6 +299,89 @@ fn git(directory: &Path, args: &[&str]) -> Result<String, LockError> {
     }
     String::from_utf8(output.stdout)
         .map_err(|error| LockError::Git(format!("git printed non-UTF-8 output: {error}")))
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::{at_ref, git_path};
+    use std::path::Path;
+    use std::process::Command;
+
+    fn git(directory: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(directory)
+            .status()
+            .expect("git must be installed");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn at_ref_reads_a_nested_lockfile_on_every_platform() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        git(root, &["init", "-q"]);
+        std::fs::create_dir_all(root.join("apps/web")).unwrap();
+        std::fs::write(
+            root.join("apps/web/package-lock.json"),
+            r#"{"lockfileVersion":3,"packages":{"":{"name":"app"},"node_modules/a":{"version":"1.0.0"}}}"#,
+        )
+        .unwrap();
+        git(root, &["add", "."]);
+        git(
+            root,
+            &[
+                "-c",
+                "user.email=test@example.test",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+        );
+
+        let contents =
+            at_ref(&root.join("apps/web/package-lock.json"), "HEAD").expect("nested lockfile");
+        assert!(
+            contents
+                .packages
+                .iter()
+                .any(|package| package.name == "a" && package.version == "1.0.0"),
+            "{:?}",
+            contents.packages
+        );
+    }
+
+    #[test]
+    fn a_ref_that_looks_like_a_flag_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let status = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let error = at_ref(
+            &directory.path().join("package-lock.json"),
+            "--upload-pack=x",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("refusing ref"), "{error}");
+    }
+
+    #[test]
+    fn git_object_paths_use_forward_slashes() {
+        assert_eq!(
+            git_path(Path::new("package-lock.json")),
+            "package-lock.json"
+        );
+        assert_eq!(
+            git_path(Path::new("apps/web/package-lock.json")),
+            "apps/web/package-lock.json"
+        );
+        assert!(!git_path(Path::new("apps/web/package-lock.json")).contains('\\'));
+    }
 }
 
 #[derive(Debug, Deserialize)]

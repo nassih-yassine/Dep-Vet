@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 496 unit + 124 end-to-end tests
+cargo test --locked                      # 501 unit + 124 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -450,7 +450,17 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   not add supply-chain surface to a supply-chain tool.
 - **`lockfile::at_ref` must run git in the lockfile's directory.** A bare
   filename has `parent() == Some("")`, which git rejects; the empty-parent case
-  falls back to `.` and has a regression test.
+  falls back to `.` and has a regression test. Object paths are rebuilt with
+  `/` separators (`git_path`) so a nested lockfile works on Windows, the ref is
+  rejected when empty or starting with `-`, and `git show` gets
+  `--end-of-options`. A nested-lockfile test runs on every OS.
+- **Platform differences are part of CI.** The `test` job matrixes ubuntu,
+  macos, and windows; fmt, clippy, and cargo-audit run only on Linux. Tests that
+  spawn `sh`, set Unix permissions, or rely on inotify are `#[cfg(unix)]` or
+  `#[cfg(target_os = "linux")]`. `cache_directory` is a pure function of an env
+  lookup plus a `windows` flag: `DEPVET_CACHE_DIR`, `XDG_CACHE_HOME`,
+  `LOCALAPPDATA` (Windows), then `HOME`/`USERPROFILE` + `.cache/dep-vet`, and the
+  Windows branch is unit-tested on every OS.
 - **ureq caps bodies at 10 MB.** `registry.rs` raises the limit to 64 MB; the
   `aws-sdk` packument proves why. Removing it silently truncates large packages.
 - **Automation publishers** (`GitHub Actions`, `[bot]` accounts) are not
