@@ -111,7 +111,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   entries are used for network errors, 5xx, and 429; a 404 never falls back, or
   deleted packages would look alive. See `HttpError::is_transient`.
 - **Progress is stderr and TTY only.** `src/progress.rs` draws one
-  `auditing N/M packages…` line for `audit`/`lock`; it must never touch stdout,
+  `auditing [████░░░░] N/M` bar for `audit`/`lock`; it must never touch stdout,
   never appear in pipes or CI (including CI runners with a pseudo-TTY, hence the
   `CI`/`TERM=dumb` gate), and must be cleared by `Drop` before the report, even
   on a panic. An empty list draws nothing. A mixed Deno tree restarts the count

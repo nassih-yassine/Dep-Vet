@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Progress bar.** The stderr progress line for `audit`/`lock` now fills a
+  20-cell bar as packages finish, next to the count.
+
 ## 0.9.0 — 2026-11-21
 
 - **Progress while auditing.** `audit` and `lock` print `auditing N/M packages…`
