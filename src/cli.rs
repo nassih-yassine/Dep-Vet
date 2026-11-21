@@ -50,6 +50,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Vet a crates.io crate before adding it
+    Crates {
+        /// Crate name with optional exact version: serde@1.0.229
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -117,6 +127,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_crates_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "crates", "serde@1.0.229"]).unwrap();
+        match cli.command {
+            Command::Crates { package, json } => {
+                assert_eq!(package, "serde@1.0.229");
+                assert!(!json);
+            }
+            _ => panic!("expected crates command"),
+        }
+    }
+
+    #[test]
     fn parses_lock_command() {
         let cli = Cli::try_parse_from(["dep-vet", "lock", "package-lock.json"]).unwrap();
         match cli.command {
@@ -167,7 +189,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_subcommands() {
-        assert!(Cli::try_parse_from(["dep-vet", "crates", "serde"]).is_err());
+        assert!(Cli::try_parse_from(["dep-vet", "go", "example.com/x"]).is_err());
     }
 
     #[test]

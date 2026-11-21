@@ -37,6 +37,24 @@ impl PackageSpec {
         Ok(Self { name, version })
     }
 
+    /// crates.io reference: `name` or `name@1.2.3`. Crate names are ASCII
+    /// letters, digits, `-` and `_`.
+    pub fn parse_crates(input: &str) -> Result<Self, SpecError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(SpecError::Empty);
+        }
+        let (name, version) = match trimmed.split_once('@') {
+            Some((name, version)) => (name, Some(version)),
+            None => (trimmed, None),
+        };
+        let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_');
+        if name.is_empty() || name.len() > 64 || !name.chars().all(allowed) {
+            return Err(SpecError::InvalidName(name.to_string()));
+        }
+        Self::new(name, version.map(str::to_string))
+    }
+
     /// PyPI reference: `name`, `name==1.2.3`, `name[extra]==1.2.3`.
     /// Extras are dropped in v1; they do not change which files exist for a
     /// version, only which of its dependencies get installed.
@@ -168,6 +186,8 @@ impl Severity {
 pub enum Ecosystem {
     Npm,
     Pypi,
+    #[serde(rename = "crates")]
+    CratesIo,
 }
 
 impl Ecosystem {
@@ -175,6 +195,7 @@ impl Ecosystem {
         match self {
             Self::Npm => "npm",
             Self::Pypi => "pypi",
+            Self::CratesIo => "crates",
         }
     }
 
@@ -183,6 +204,7 @@ impl Ecosystem {
         match self {
             Self::Npm => "npm",
             Self::Pypi => "PyPI",
+            Self::CratesIo => "crates.io",
         }
     }
 }
@@ -220,6 +242,17 @@ impl Profile {
     pub const PYPI: Self = Self {
         execution: true,
         maintainers: false,
+        downloads: false,
+        deprecation: true,
+        typosquat: true,
+        freshness: true,
+    };
+
+    /// crates.io does not expose `build.rs` in its metadata and reports
+    /// 90-day downloads, not weekly ones. Neither is guessed.
+    pub const CRATES: Self = Self {
+        execution: false,
+        maintainers: true,
         downloads: false,
         deprecation: true,
         typosquat: true,
@@ -529,6 +562,29 @@ mod tests {
     fn ecosystems_map_to_osv_names() {
         assert_eq!(Ecosystem::Npm.osv_name(), "npm");
         assert_eq!(Ecosystem::Pypi.osv_name(), "PyPI");
+        assert_eq!(Ecosystem::CratesIo.osv_name(), "crates.io");
+    }
+
+    #[test]
+    fn parses_crate_names_and_versions() {
+        assert_eq!(
+            PackageSpec::parse_crates("serde").unwrap(),
+            spec("serde", None)
+        );
+        assert_eq!(
+            PackageSpec::parse_crates("serde@1.0.229").unwrap(),
+            spec("serde", Some("1.0.229"))
+        );
+        assert_eq!(
+            PackageSpec::parse_crates("tokio-util").unwrap(),
+            spec("tokio-util", None)
+        );
+        for input in ["serde@", "serde@../x", "ser de", "serde/x", "sérde"] {
+            assert!(
+                PackageSpec::parse_crates(input).is_err(),
+                "accepted {input:?}"
+            );
+        }
     }
 
     #[test]

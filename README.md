@@ -28,7 +28,7 @@
 ---
 
 `npm install` runs code, and so does a Python sdist build. `dep-vet` reads
-public registry metadata and OSV advisories for **npm and PyPI**, then tells you
+public registry metadata and OSV advisories for **npm, PyPI, and crates.io**, then tells you
 what a package will do at that moment: whether it runs install-time code, how
 old it is, who published this version, whether its name is one typo away from a
 package you trust, what vulnerabilities apply to this exact version, and whether
@@ -123,6 +123,18 @@ PyPI exposes no maintainer set or download figure, so those appear under
 `not checked` rather than being guessed. When a version has only an sdist, pip
 builds it and runs the project's build backend: that is reported as a warning,
 never as a high-risk install script.
+
+### Check a crate
+
+```sh
+dep-vet crates serde             # latest stable
+dep-vet crates serde@1.0.229     # exact version
+```
+
+crates.io exposes a publisher per version and an owner list, so publisher
+agreement is checked. It does **not** expose the file list, so whether a crate
+has a `build.rs` cannot be seen from metadata: execution is reported as
+`not checked` rather than guessed. Yanked versions are warnings.
 
 ### Audit a lockfile change
 
@@ -293,7 +305,7 @@ DEPVET_OSV_BASE=https://api.osv.dev dep-vet npm express
 | Fresh package | WARN | First publish less than 7 days ago: no track record. |
 | Fresh version | INFO | Old package, version published in the last week. |
 | Publisher not a maintainer | WARN | This version's publisher is absent from the current maintainer list, a proxy for ownership handoff. CI identities such as `GitHub Actions` are ignored. |
-| Deprecated | WARN | The registry carries a deprecation notice; the message is shown verbatim. |
+| Deprecated / yanked | WARN | The registry marks this version deprecated, or crates.io/PyPI mark it yanked; the message is shown verbatim. |
 | No repository | INFO | No source repository declared, so the tarball cannot be traced to source. |
 
 Every finding carries evidence, and a finding whose claim cannot be linked to a
@@ -303,11 +315,14 @@ clean.
 
 ## Scope and limits
 
-- **npm and PyPI.** Bun, pnpm, and yarn install from the same registry, so npm
-  vetting is accurate for them. `dep-vet lock` parses `package-lock.json` only;
-  there is no `requirements.txt` or `poetry.lock` audit yet.
-- **PyPI misses two signals on purpose:** maintainers and downloads are not in
-  its JSON API, so they are reported as not checked. Extras are stripped.
+- **npm, PyPI, and crates.io.** Bun, pnpm, and yarn install from the same npm
+  registry, so npm vetting is accurate for them. `dep-vet lock` parses
+  `package-lock.json` only; there is no `requirements.txt`, `Cargo.lock`, or
+  `go.mod` audit yet.
+- **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
+  download count; crates.io has no file list, so `build.rs` cannot be detected.
+  Those appear as `not checked`. If crates.io's owner endpoint fails, the report
+  says "maintainer list unavailable" instead of implying agreement.
 - **Typosquat context depends on what is on disk.** `dep-vet lock` compares
   against the base lockfile; `dep-vet npm` uses the nearest `package-lock.json`
   when one exists, and `--no-local` turns that off. Either way the seed list is
@@ -357,6 +372,7 @@ src/model.rs      PackageSpec, Severity, Finding, PackageReport
 src/lockfile.rs   package-lock v2/v3 parsing, git-ref diff
 src/registry.rs   npm packument fetch + parsing, download counts
 src/pypi.rs       PyPI JSON API, sdist-only detection, yanked releases
+src/crates.rs     crates.io API, owner list, yanked releases
 src/osv.rs        advisory IDs from querybatch, details per advisory
 src/http.rs       one agent, body limit, cache read/write policy
 src/cache.rs      SQLite cache with TTL and stale fallback
@@ -376,7 +392,7 @@ did.
 
 1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
    against your own dependencies.
-2. crates.io and Go. The design is kept locally (`docs/`), not published.
+2. Go. The design is kept locally (`docs/`), not published.
 3. Advisory lookups for the whole installed tree, not one package.
 
 ## License

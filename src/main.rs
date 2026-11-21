@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use dep_vet::cli::{Cli, Command};
+use dep_vet::crates::{CratesClient, CratesError};
 use dep_vet::http::HttpClient;
 use dep_vet::lockfile;
 use dep_vet::model::Ecosystem;
@@ -69,6 +70,12 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
             let report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            emit_package(cli, *json, &report)
+        }
+
+        Command::Crates { package, json } => {
+            let spec = PackageSpec::parse_crates(package)?;
+            let report = auditor.audit_crates(&spec, now_seconds())?;
             emit_package(cli, *json, &report)
         }
 
@@ -187,6 +194,7 @@ fn local_candidates(cli: &Cli) -> Vec<String> {
 struct Auditor {
     registry: RegistryClient,
     pypi: PypiClient,
+    crates: CratesClient,
     osv: OsvClient,
 }
 
@@ -195,6 +203,7 @@ impl Auditor {
         Self {
             registry: RegistryClient::from_env(Arc::clone(http)),
             pypi: PypiClient::from_env(Arc::clone(http)),
+            crates: CratesClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
         }
     }
@@ -220,6 +229,23 @@ impl Auditor {
             advisories.as_ref(),
             local,
             Profile::NPM,
+            now,
+        ))
+    }
+
+    fn audit_crates(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, CratesError> {
+        let meta = self.crates.fetch(spec)?;
+        let advisories = self
+            .osv
+            .query(Ecosystem::CratesIo, &meta.name, &meta.version)
+            .ok();
+        Ok(signals::report(
+            meta,
+            Ecosystem::CratesIo,
+            None,
+            advisories.as_ref(),
+            &[],
+            Profile::CRATES,
             now,
         ))
     }

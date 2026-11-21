@@ -29,7 +29,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 174 unit + 45 end-to-end tests
+cargo test --locked                      # 188 unit + 49 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -55,6 +55,7 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 | `src/lockfile.rs` | `package-lock.json` v2/v3 parsing, flat diff against a git ref |
 | `src/registry.rs` | npm packument fetch + parsing, download counts, repo URL normalization |
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
+| `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -94,6 +95,12 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **crates.io execution is not checkable.** The API has no file list, so
+  `build.rs` cannot be detected; `Profile::CRATES` disables execution and the
+  report says `not checked`. Do not infer build scripts from metadata.
+- **crates.io owners can fail.** A missing or unreadable owner list sets
+  `maintainers_known = false`, which becomes an INFO "maintainer list
+  unavailable" finding. Never treat it as agreement.
 - **PyPI "build from source" is WARN, not an install hook.** An sdist-only
   version runs a PEP 517 backend at build time; it must never inherit npm's
   HIGH escalation (install script + another signal).
@@ -178,6 +185,6 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-crates.io and Go, tree-wide advisory lookups, and non-npm lockfiles (PyPI,
-yarn, pnpm, bun). Roadmap only: do not describe these as existing in
+Go, tree-wide advisory lookups, and non-npm lockfiles (PyPI, Cargo, yarn,
+pnpm, bun). Roadmap only: do not describe these as existing in
 code, README, or help text.

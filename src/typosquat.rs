@@ -259,6 +259,90 @@ pub const POPULAR_PYPI: &[&str] = &[
     "xgboost",
 ];
 
+/// Provisional crates.io seed. Crate names are case-sensitive but effectively
+/// lowercase in practice; the comparison lowercases anyway.
+pub const POPULAR_CRATES: &[&str] = &[
+    "anyhow",
+    "async-trait",
+    "axum",
+    "base64",
+    "bevy",
+    "bindgen",
+    "bitflags",
+    "bytes",
+    "cc",
+    "chrono",
+    "clap",
+    "config",
+    "crossbeam",
+    "crossterm",
+    "csv",
+    "darling",
+    "diesel",
+    "dotenv",
+    "dialoguer",
+    "egui",
+    "env_logger",
+    "futures",
+    "glob",
+    "hashbrown",
+    "hex",
+    "hmac",
+    "http",
+    "hyper",
+    "image",
+    "indexmap",
+    "indicatif",
+    "itertools",
+    "lazy_static",
+    "libc",
+    "log",
+    "memchr",
+    "mime",
+    "mio",
+    "ndarray",
+    "nix",
+    "nom",
+    "notify",
+    "num",
+    "once_cell",
+    "openssl",
+    "owo-colors",
+    "parking_lot",
+    "pest",
+    "polars",
+    "proc-macro2",
+    "prost",
+    "quote",
+    "rand",
+    "rayon",
+    "regex",
+    "reqwest",
+    "ring",
+    "rustls",
+    "serde",
+    "serde_json",
+    "sha2",
+    "smallvec",
+    "sqlx",
+    "syn",
+    "tempfile",
+    "thiserror",
+    "time",
+    "tokio",
+    "toml",
+    "tonic",
+    "tracing",
+    "tracing-subscriber",
+    "url",
+    "uuid",
+    "walkdir",
+    "wgpu",
+    "windows-sys",
+    "winnow",
+    "zeroize",
+];
+
 /// A popular name that `name` is suspiciously close to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suspect<'a> {
@@ -387,6 +471,17 @@ mod tests {
         );
         for name in ["requests", "numpy", "django", "pydantic"] {
             assert!(POPULAR_PYPI.contains(&name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn crates_seed_is_clean() {
+        let mut sorted = POPULAR_CRATES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), POPULAR_CRATES.len(), "duplicate crate names");
+        for name in ["serde", "tokio", "clap", "rand"] {
+            assert!(POPULAR_CRATES.contains(&name), "missing {name}");
         }
     }
 

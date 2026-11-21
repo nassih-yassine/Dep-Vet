@@ -136,6 +136,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         published_at,
         maintainers: Vec::new(),
         publisher: None,
+        maintainers_known: false,
         install_scripts: Vec::new(),
         build_from_source: has_sdist && !has_wheel,
         repository,

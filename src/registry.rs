@@ -27,6 +27,8 @@ pub struct PackageMeta {
     pub published_at: Option<i64>,
     pub maintainers: Vec<String>,
     pub publisher: Option<String>,
+    /// False when the ecosystem has no maintainer list we could read.
+    pub maintainers_known: bool,
     pub install_scripts: Vec<InstallScript>,
     /// PyPI: only an sdist is published, so installing builds it (PEP 517).
     pub build_from_source: bool,
@@ -239,6 +241,7 @@ fn parse_packument(
             .filter_map(|user| user.name.clone())
             .collect(),
         publisher: doc.npm_user.as_ref().and_then(|user| user.name.clone()),
+        maintainers_known: true,
         install_scripts,
         build_from_source: false,
         repository,
