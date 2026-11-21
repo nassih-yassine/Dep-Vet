@@ -151,23 +151,53 @@ pub fn atomic_write(path: &Path, contents: &str) -> Result<(), SettingsError> {
         path: temporary.display().to_string(),
         error: error.to_string(),
     })?;
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
-    }
-    std::fs::rename(&temporary, path).map_err(|error| SettingsError::Write {
-        path: path.display().to_string(),
-        error: error.to_string(),
+    // Unix rename replaces atomically. Windows rename refuses an existing
+    // target, so it removes first; keep that branch explicit.
+    #[cfg(not(windows))]
+    let renamed = std::fs::rename(&temporary, path);
+    #[cfg(windows)]
+    let renamed = {
+        if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+        std::fs::rename(&temporary, path)
+    };
+    renamed.map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        SettingsError::Write {
+            path: path.display().to_string(),
+            error: error.to_string(),
+        }
     })
 }
 
-/// The settings `command` is a shell string, so quote a path that has spaces.
+#[cfg(not(windows))]
+fn quote_path(path: &str) -> String {
+    if path
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "/._-".contains(character))
+    {
+        return path.to_string();
+    }
+    // POSIX single quotes are literal; a quote inside is closed, escaped, and
+    // reopened.
+    format!("'{}'", path.replace('\'', "'\\''"))
+}
+
+#[cfg(windows)]
+fn quote_path(path: &str) -> String {
+    if path
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "\\./:_-".contains(character))
+    {
+        return path.to_string();
+    }
+    format!("\"{}\"", path.replace('"', "\\\""))
+}
+
+/// The settings `command` is a shell string; quote the binary path.
 pub fn command_line(executable: &Path, strict: bool) -> String {
-    let path = executable.display().to_string();
-    let quoted = if path.contains(char::is_whitespace) {
-        format!("\"{path}\"")
-    } else {
-        path
-    };
+    let quoted = quote_path(&executable.display().to_string());
     if strict {
         format!("{quoted} {MACRO} --strict")
     } else {
@@ -244,8 +274,28 @@ mod tests {
     #[test]
     fn a_path_with_spaces_is_quoted() {
         let line = command_line(Path::new("/Users/me/My Tools/dep-vet"), false);
+        #[cfg(not(windows))]
+        assert!(line.starts_with('\''), "{line}");
+        #[cfg(windows)]
         assert!(line.starts_with('"'), "{line}");
         assert!(line.ends_with("hook claude"), "{line}");
+    }
+
+    #[test]
+    fn shell_metacharacters_in_the_path_are_quoted() {
+        #[cfg(unix)]
+        {
+            let line = command_line(Path::new("/tmp/a;b $(x) 'q'/dep-vet"), false);
+            assert!(
+                line.contains("'/tmp/a;b $(x) '\\''q'\\''/dep-vet'"),
+                "{line}"
+            );
+        }
+        #[cfg(windows)]
+        {
+            let line = command_line(Path::new(r"C:\Tools\dep-vet.exe"), false);
+            assert!(line.ends_with("hook claude"), "{line}");
+        }
     }
 
     #[test]

@@ -56,10 +56,7 @@ pub fn decide(exit_code: u8, guard_json: Option<&str>, strict: bool) -> Decision
         2 => Decision::Deny(reason(guard_json, "HIGH risk")),
         1 if strict => Decision::Deny(reason(guard_json, "warnings")),
         1 => Decision::Ask(reason(guard_json, "warnings")),
-        _ if strict => Decision::Deny(format!(
-            "dep-vet could not check this install (exit {exit_code}). Do not retry. Ask the user.\n\
-             Direct packages only; transitive dependencies were not checked."
-        )),
+        _ if strict => Decision::Deny(unchecked_reason(guard_json, exit_code)),
         _ => Decision::Allow,
     }
 }
@@ -81,6 +78,47 @@ pub fn render(decision: &Decision) -> Option<String> {
             }
         })
         .to_string(),
+    )
+}
+
+/// Notes from a guard report: unparsed installs, URL/path specs, lockfiles.
+pub fn notes(guard_json: Option<&str>) -> Vec<String> {
+    guard_json
+        .and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+        .and_then(|document| document["notes"].as_array().cloned())
+        .map(|notes| {
+            notes
+                .iter()
+                .filter_map(|note| note.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unchecked_reason(guard_json: Option<&str>, exit_code: u8) -> String {
+    let document = guard_json.and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok());
+    let mut details = notes(guard_json);
+    if let Some(intents) = document
+        .as_ref()
+        .and_then(|document| document["intents"].as_array())
+    {
+        for intent in intents {
+            if intent["specs"].as_array().is_some_and(Vec::is_empty)
+                && let Some(lockfile) = intent["lockfile"].as_str()
+            {
+                details.push(format!("lockfile not audited: {lockfile}"));
+            }
+        }
+    }
+    let detail = if details.is_empty() {
+        "no named package could be vetted".to_string()
+    } else {
+        details.join("; ")
+    };
+    format!(
+        "dep-vet could not check this install fully (exit {exit_code}): {detail}. \
+         Do not retry. Ask the user.\n\
+         Direct packages only; transitive dependencies were not checked."
     )
 }
 

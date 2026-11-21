@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 526 unit + 138 end-to-end tests
+cargo test --locked                      # 531 unit + 147 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -485,9 +485,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   deadlines would be fiction. Generated settings use `timeout: 30` so the child
   loses first.
 - **The hook strips `DEPVET_*` overrides.** `DEPVET_REGISTRY_BASE`,
-  `DEPVET_OSV_BASE`, `DEPVET_DOWNLOADS_BASE`, `DEPVET_NO_CACHE`,
-  `DEPVET_HOOK_TIMEOUT`, and the rest are removed from the child; only
-  `DEPVET_CACHE_DIR` and `DEPVET_DEBUG` pass. `DEPVET_HOOK_TEST_BASE` is a
+  `DEPVET_OSV_BASE`, `DEPVET_DOWNLOADS_BASE`, `DEPVET_NO_CACHE`, and the rest
+  are removed from the child; only `DEPVET_CACHE_DIR` and `DEPVET_DEBUG` pass.
+  There is no `DEPVET_HOOK_TIMEOUT`: the hook budget is the constant
+  `HOOK_BUDGET_SECONDS`, and `guard` has no deadline of its own. `DEPVET_HOOK_TEST_BASE` is a
   `cfg!(debug_assertions)` seam for `tests/cli.rs` only and is absent from
   release builds; do not make it unconditional.
 - **`hook install` merges, never rewrites.** It preserves unknown keys and other
