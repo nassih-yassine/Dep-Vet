@@ -74,6 +74,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Serve an AI agent hook on stdin
+    Hook {
+        /// Hook event to serve (claude)
+        event: String,
+
+        /// Deny warnings and unchecked installs instead of asking/allowing
+        #[arg(long)]
+        strict: bool,
+    },
+
     /// Vet the packages an install command would fetch
     Guard {
         /// Audit the packages (otherwise only parse the command)

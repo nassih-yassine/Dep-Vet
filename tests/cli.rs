@@ -92,6 +92,7 @@ impl MockRegistry {
             .env("DEPVET_PACKAGIST_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
+            .env("DEPVET_HOOK_TEST_BASE", &self.base)
             .env("NO_COLOR", "1");
         command
     }
@@ -389,6 +390,167 @@ fn guard_is_incomplete_when_one_audit_fails() {
         .args(["guard", "--check", "--", "npm i guard-ok guard-missing"])
         .assert()
         .code(3);
+}
+
+fn hook_input(command: &str) -> String {
+    serde_json::json!({
+        "session_id": "s",
+        "transcript_path": "/tmp/transcript",
+        "cwd": "/repo",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command}
+    })
+    .to_string()
+}
+
+#[test]
+fn hook_denies_a_typosquat_with_an_actionable_reason() {
+    let package = PackageFixture::clean("expresss");
+    let registry = registry_with(&[package], None);
+
+    let output = registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i expresss"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(value["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    let reason = value["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("Do not retry. Ask the user."), "{reason}");
+    assert!(
+        reason.contains("transitive dependencies were not checked"),
+        "{reason}"
+    );
+    assert!(
+        !registry.requests().is_empty(),
+        "the hook must use the mock registry"
+    );
+}
+
+#[test]
+fn hook_allows_a_clean_package_silently() {
+    let package = PackageFixture::clean("hook-clean");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i hook-clean"))
+        .assert()
+        .code(0)
+        .stdout("");
+}
+
+#[test]
+fn hook_asks_for_warnings_and_strict_denies_them() {
+    let package = PackageFixture {
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        ..PackageFixture::clean("scripty")
+    };
+    let registry = registry_with(&[package], None);
+
+    let output = registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i scripty"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "ask");
+
+    let output = registry
+        .command()
+        .args(["hook", "claude", "--strict"])
+        .write_stdin(hook_input("npm i scripty"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn hook_fails_open_on_audit_failure_unless_strict() {
+    let registry = registry_with(&[], None);
+
+    registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i missing-package"))
+        .assert()
+        .code(0)
+        .stdout("");
+
+    let output = registry
+        .command()
+        .args(["hook", "claude", "--strict"])
+        .write_stdin(hook_input("npm i missing-package"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn hook_ignores_non_bash_and_malformed_input() {
+    let registry = registry_with(&[], None);
+    let edit = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "src/main.rs"}
+    })
+    .to_string();
+
+    for stdin in [edit, "not json".to_string(), String::new()] {
+        registry
+            .command()
+            .args(["hook", "claude"])
+            .write_stdin(stdin)
+            .assert()
+            .code(0)
+            .stdout("");
+    }
+    assert!(registry.requests().is_empty(), "{:?}", registry.requests());
+}
+
+#[test]
+fn hook_times_out_and_allows() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mut command = Command::cargo_bin("dep-vet").unwrap();
+    command
+        .env("DEPVET_REGISTRY_BASE", &base)
+        .env("DEPVET_DOWNLOADS_BASE", format!("{base}/downloads"))
+        .env("DEPVET_OSV_BASE", &base)
+        .env("DEPVET_NO_CACHE", "1")
+        .env("DEPVET_HOOK_TEST_BASE", &base)
+        .env("NO_COLOR", "1")
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i stalled-package"));
+    let started = std::time::Instant::now();
+    let output = command.assert().code(0).stdout("").get_output().clone();
+    let elapsed = started.elapsed();
+    let _ = output;
+    assert!(elapsed.as_secs() < 10, "{elapsed:?}");
+    drop(listener);
 }
 
 #[test]

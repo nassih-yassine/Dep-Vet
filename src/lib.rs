@@ -10,6 +10,7 @@ pub mod crates;
 pub mod date;
 pub mod go;
 pub mod guard;
+pub mod hook;
 pub mod http;
 pub mod inspect;
 pub mod intent;
