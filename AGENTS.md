@@ -134,6 +134,18 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   the logo because `concat!` only takes literals; a test keeps it in sync with
   `LOGO_ASCII`. The banner prints only on a terminal, never in JSON or pipes.
 
+## Releases
+
+- `cargo-dist` owns `.github/workflows/release.yml`, `dist-workspace.toml`, and
+  the `[profile.dist]` section of `Cargo.toml`. Change config in
+  `dist-workspace.toml`, then run `dist generate`; never hand-edit the generated
+  workflow. Validate with `dist plan`.
+- A release is a tag `vX.Y.Z` matching the version in `Cargo.toml`. The workflow
+  builds archives plus shell and PowerShell installers and publishes them.
+- Tagging publishes publicly and cannot be quietly undone: ask before tagging.
+- After a release, point the reusable workflow's documented `ref` at the new
+  tag; `main` moving is not a version.
+
 ## Not built yet
 
 Release binaries, PyPI/crates.io, tree-wide advisory lookups, and non-npm
