@@ -399,6 +399,36 @@ pub const POPULAR_NUGET: &[&str] = &[
     "xunit.core",
 ];
 
+/// Provisional Maven seed, as `group:artifact`.
+pub const POPULAR_MAVEN: &[&str] = &[
+    "com.fasterxml.jackson.core:jackson-databind",
+    "com.google.code.gson:gson",
+    "com.google.guava:guava",
+    "com.h2database:h2",
+    "com.squareup.okhttp3:okhttp",
+    "com.squareup.retrofit2:retrofit",
+    "commons-io:commons-io",
+    "io.netty:netty-all",
+    "io.projectreactor:reactor-core",
+    "junit:junit",
+    "log4j:log4j",
+    "mysql:mysql-connector-java",
+    "org.apache.commons:commons-lang3",
+    "org.apache.httpcomponents:httpclient",
+    "org.apache.logging.log4j:log4j-core",
+    "org.apache.maven:maven-core",
+    "org.apache.spark:spark-core_2.13",
+    "org.junit.jupiter:junit-jupiter",
+    "org.mockito:mockito-core",
+    "org.postgresql:postgresql",
+    "org.slf4j:slf4j-api",
+    "org.springframework:spring-core",
+    "org.springframework.boot:spring-boot-starter-web",
+    "org.springframework:spring-webmvc",
+    "org.testng:testng",
+    "org.yaml:snakeyaml",
+];
+
 /// A popular name that `name` is suspiciously close to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suspect<'a> {
@@ -527,6 +557,17 @@ mod tests {
         );
         for name in ["requests", "numpy", "django", "pydantic"] {
             assert!(POPULAR_PYPI.contains(&name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn maven_seed_is_clean() {
+        let mut sorted = POPULAR_MAVEN.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), POPULAR_MAVEN.len(), "duplicate Maven ids");
+        for name in ["junit:junit", "org.slf4j:slf4j-api"] {
+            assert!(POPULAR_MAVEN.contains(&name), "missing {name}");
         }
     }
 

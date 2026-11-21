@@ -63,6 +63,7 @@ impl MockRegistry {
             .env("DEPVET_JSR_BASE", &self.base)
             .env("DEPVET_RUBYGEMS_BASE", &self.base)
             .env("DEPVET_NUGET_BASE", &self.base)
+            .env("DEPVET_MAVEN_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
@@ -422,7 +423,9 @@ fn invalid_spec_never_reaches_the_network() {
         .args(["npm", "foo bar"])
         .assert()
         .code(3)
-        .stderr(predicate::str::contains("characters npm does not allow"));
+        .stderr(predicate::str::contains(
+            "characters the registry does not allow",
+        ));
 
     assert!(registry.requests().is_empty());
 }
@@ -473,7 +476,7 @@ fn binary() -> Command {
 #[test]
 fn unknown_subcommand_is_a_tool_error_not_a_verdict() {
     binary()
-        .args(["maven", "org.example:thing"])
+        .args(["sbt", "com.example:thing"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("usage error"))
@@ -858,7 +861,9 @@ fn lock_rejects_invalid_package_names_without_requesting_them() {
         .assert()
         .code(3)
         .stdout(predicate::str::contains("evil?x=1@1.0.0"))
-        .stdout(predicate::str::contains("characters npm does not allow"));
+        .stdout(predicate::str::contains(
+            "characters the registry does not allow",
+        ));
 
     assert!(
         !registry.requests().iter().any(|path| path.contains("evil")),
@@ -1443,7 +1448,9 @@ fn go_invalid_module_never_reaches_the_network() {
         .args(["go", "../etc/passwd"])
         .assert()
         .code(3)
-        .stderr(predicate::str::contains("characters npm does not allow"));
+        .stderr(predicate::str::contains(
+            "characters the registry does not allow",
+        ));
 
     assert!(registry.requests().is_empty());
 }
@@ -2533,4 +2540,126 @@ fn unknown_nuget_package_is_a_tool_error() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("was not found on NuGet"));
+}
+
+#[test]
+fn maven_reports_metadata_and_missing_signals() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22&core=gav&rows=200&wt=json"
+            .to_string(),
+        (
+            200,
+            r#"{
+                "response": {
+                    "docs": [
+                        { "v": "2.0.17", "timestamp": 1740501794416 },
+                        { "v": "1.7.36", "timestamp": 1635900000000 }
+                    ]
+                }
+            }"#
+            .to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["maven", "org.slf4j:slf4j-api", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["ecosystem"], "maven");
+    assert_eq!(value["version"], "2.0.17");
+    let not_checked = value["not_checked"].as_array().unwrap();
+    for signal in [
+        "execution",
+        "maintainers",
+        "repository",
+        "downloads",
+        "deprecation",
+    ] {
+        assert!(not_checked.iter().any(|entry| entry == signal), "{signal}");
+    }
+}
+
+#[test]
+fn maven_exact_version_is_audited() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22&core=gav&rows=200&wt=json"
+            .to_string(),
+        (
+            200,
+            r#"{
+                "response": {
+                    "docs": [
+                        { "v": "2.0.17", "timestamp": 1740501794416 },
+                        { "v": "1.7.36", "timestamp": 1635900000000 }
+                    ]
+                }
+            }"#
+            .to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["maven", "org.slf4j:slf4j-api@1.7.36", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["version"], "1.7.36");
+}
+
+#[test]
+fn unknown_maven_artifact_is_a_tool_error() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22&core=gav&rows=200&wt=json"
+            .to_string(),
+        (200, r#"{ "response": { "docs": [] } }"#.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    registry
+        .command()
+        .args(["maven", "org.slf4j:slf4j-api"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("was not found on Maven Central"));
+}
+
+#[test]
+fn maven_requires_group_and_artifact() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    registry
+        .command()
+        .args(["maven", "slf4j-api"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("group:artifact"));
 }

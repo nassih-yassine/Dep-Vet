@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Maven:** `dep-vet maven group:artifact[@version]` reads Maven Central for
+  versions and publish times, plus OSV advisories. Maven has no standard
+  lockfile and no owners, downloads, repository, or deprecation metadata, so
+  those are `not checked` and only the single coordinate is vetted.
+
 ## 0.3.0 — 2026-11-21
 
 Three more ecosystems and their lockfiles.

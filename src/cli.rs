@@ -120,6 +120,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Vet a Maven artifact before adding it
+    Maven {
+        /// group:artifact with optional exact version: org.slf4j:slf4j-api@2.0.17
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -183,6 +193,18 @@ mod tests {
                 assert!(!json);
             }
             _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
+    fn parses_maven_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "maven", "org.slf4j:slf4j-api@2.0.17"]).unwrap();
+        match cli.command {
+            Command::Maven { package, json } => {
+                assert_eq!(package, "org.slf4j:slf4j-api@2.0.17");
+                assert!(!json);
+            }
+            _ => panic!("expected maven command"),
         }
     }
 
@@ -329,7 +351,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_subcommands() {
-        assert!(Cli::try_parse_from(["dep-vet", "maven", "org.example:thing"]).is_err());
+        assert!(Cli::try_parse_from(["dep-vet", "sbt", "com.example:thing"]).is_err());
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod go;
 pub mod http;
 pub mod jsr;
 pub mod lockfile;
+pub mod maven;
 pub mod model;
 pub mod nuget;
 pub mod osv;
