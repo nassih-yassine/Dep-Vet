@@ -30,13 +30,8 @@ impl GuardReport {
             } else {
                 3
             }
-        } else if !self.errors.is_empty()
-            && self
-                .packages
-                .iter()
-                .all(|package| package.findings.is_empty() && package.advisories.is_empty())
-        {
-            // Every audit failed: not a clean result.
+        } else if !self.errors.is_empty() {
+            // Any failed audit makes the command incomplete, not clean.
             3
         } else {
             self.verdict().exit_code()
@@ -45,7 +40,7 @@ impl GuardReport {
 
     pub fn to_json(&self) -> String {
         let value = serde_json::json!({
-            "command": self.command,
+            "command": first_chars(&self.command, 2_000),
             "intents": self.parse.intents.iter().map(intent_json).collect::<Vec<_>>(),
             "packages": self
                 .packages
@@ -137,6 +132,14 @@ impl GuardReport {
         }
         out
     }
+}
+
+fn first_chars(text: &str, limit: usize) -> String {
+    let mut out: String = text.chars().take(limit).collect();
+    if out.len() < text.len() {
+        out.push('…');
+    }
+    out
 }
 
 fn ecosystem_label(intent: &Intent) -> &'static str {

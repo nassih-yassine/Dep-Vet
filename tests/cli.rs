@@ -370,6 +370,10 @@ fn guard_says_when_nothing_was_vetted() {
         "npm install",
         "npm i https://example.test/thing.tgz",
         "deno add npm:express",
+        "npm --prefix . i expresss",
+        "bash -lc 'npm i expresss'",
+        "timeout 30 npm i expresss",
+        "npm exec expresss",
     ] {
         registry
             .command()
@@ -388,6 +392,19 @@ fn guard_is_incomplete_when_one_audit_fails() {
     registry
         .command()
         .args(["guard", "--check", "--", "npm i guard-ok guard-missing"])
+        .assert()
+        .code(3);
+
+    // A finding on one package does not turn a failed second audit into a
+    // verdict; the command is still incomplete.
+    let warning = PackageFixture {
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        ..PackageFixture::clean("scripty")
+    };
+    let registry = registry_with(&[warning], None);
+    registry
+        .command()
+        .args(["guard", "--check", "--", "npm i scripty guard-missing"])
         .assert()
         .code(3);
 }
@@ -481,6 +498,26 @@ fn hook_asks_for_warnings_and_strict_denies_them() {
         .clone();
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn a_strict_deny_names_what_was_not_checked() {
+    let registry = registry_with(&[], None);
+    let output = registry
+        .command()
+        .args(["hook", "claude", "--strict"])
+        .write_stdin(hook_input("npm install"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let reason = value["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("lockfile"), "{reason}");
+    assert!(reason.contains("Do not retry. Ask the user."), "{reason}");
 }
 
 #[test]
@@ -629,6 +666,27 @@ fn hook_install_supports_the_user_location() {
 }
 
 #[test]
+fn hook_never_fails_on_a_broken_project_config() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join(".depvet.toml"), "not toml").unwrap();
+    let edit = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "src/main.rs"}
+    })
+    .to_string();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "claude"])
+        .write_stdin(edit)
+        .assert()
+        .code(0)
+        .stdout("");
+}
+
+#[test]
 fn hook_ignores_non_bash_and_malformed_input() {
     let registry = registry_with(&[], None);
     let edit = serde_json::json!({
@@ -651,6 +709,71 @@ fn hook_ignores_non_bash_and_malformed_input() {
 }
 
 #[test]
+fn hook_denies_when_the_command_is_padded_past_the_pipe_buffer() {
+    let package = PackageFixture::clean("expresss");
+    let registry = registry_with(&[package], None);
+    let command = format!("npm i expresss && echo {}", "x".repeat(70 * 1024));
+
+    let output = registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input(&command))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["hookSpecificOutput"]["permissionDecision"], "deny",
+        "a padded command must not lose its verdict"
+    );
+}
+
+#[test]
+fn hook_ignores_agent_registry_overrides() {
+    let package = PackageFixture::clean("expresss");
+    let registry = registry_with(&[package], None);
+    let output = registry
+        .command()
+        .env("DEPVET_REGISTRY_BASE", "http://127.0.0.1:9")
+        .env("DEPVET_OSV_BASE", "http://127.0.0.1:9")
+        .env("DEPVET_DOWNLOADS_BASE", "http://127.0.0.1:9")
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i expresss"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["hookSpecificOutput"]["permissionDecision"], "deny",
+        "agent-settable bases must not change the verdict"
+    );
+}
+
+#[test]
+fn hook_install_strict_writes_an_absolute_pathed_handler() {
+    let directory = tempfile::tempdir().unwrap();
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--strict", "--write"])
+        .assert()
+        .code(0);
+    let body =
+        std::fs::read_to_string(directory.path().join(".claude").join("settings.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let command = value["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    #[cfg(not(windows))]
+    assert!(command.starts_with('/'), "{command}");
+    assert!(command.ends_with("hook claude --strict"), "{command}");
+}
+
+#[test]
 fn hook_times_out_and_allows() {
     use std::net::TcpListener;
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -669,8 +792,25 @@ fn hook_times_out_and_allows() {
     let output = command.assert().code(0).stdout("").get_output().clone();
     let elapsed = started.elapsed();
     let _ = output;
-    assert!(elapsed.as_secs() < 10, "{elapsed:?}");
+    assert!(
+        elapsed.as_secs() >= 7 && elapsed.as_secs() < 10,
+        "the budget must actually elapse: {elapsed:?}"
+    );
     drop(listener);
+
+    let mut strict = Command::cargo_bin("dep-vet").unwrap();
+    strict
+        .env("DEPVET_REGISTRY_BASE", &base)
+        .env("DEPVET_DOWNLOADS_BASE", format!("{base}/downloads"))
+        .env("DEPVET_OSV_BASE", &base)
+        .env("DEPVET_NO_CACHE", "1")
+        .env("DEPVET_HOOK_TEST_BASE", &base)
+        .env("NO_COLOR", "1")
+        .args(["hook", "claude", "--strict"])
+        .write_stdin(hook_input("npm i stalled-package"));
+    let output = strict.assert().code(0).get_output().stdout.clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
 }
 
 #[test]

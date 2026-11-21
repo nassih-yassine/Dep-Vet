@@ -63,10 +63,21 @@ fn segments(command: &str) -> Vec<String> {
                 quote = Some(character);
                 current.push(character);
             }
+            '#' if current.is_empty()
+                || current.chars().last().is_some_and(char::is_whitespace) =>
+            {
+                out.push(std::mem::take(&mut current));
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        break;
+                    }
+                }
+            }
             '&' if chars.peek() == Some(&'&') => {
                 chars.next();
                 out.push(std::mem::take(&mut current));
             }
+            '&' => out.push(std::mem::take(&mut current)),
             '|' => {
                 if chars.peek() == Some(&'|') {
                     chars.next();
@@ -74,6 +85,21 @@ fn segments(command: &str) -> Vec<String> {
                 out.push(std::mem::take(&mut current));
             }
             ';' | '\n' => out.push(std::mem::take(&mut current)),
+            '>' | '<' => {
+                // Drop the fd prefix and the redirection target.
+                while current.chars().last().is_some_and(|c| c.is_ascii_digit()) {
+                    current.pop();
+                }
+                while chars.peek().is_some_and(|next| next.is_whitespace()) {
+                    chars.next();
+                }
+                while let Some(next) = chars.peek().copied() {
+                    if next.is_whitespace() || matches!(next, '&' | '|' | ';' | '<' | '>') {
+                        break;
+                    }
+                    chars.next();
+                }
+            }
             _ => current.push(character),
         }
     }
@@ -397,6 +423,10 @@ fn pip_install(outcome: &mut ParseOutcome, segment: &str, tokens: &[String]) {
     }
     if collected.specs.is_empty() && collected.lockfile.is_none() && !collected.blocked {
         collected.lockfile = Some("requirements.txt".to_string());
+    } else if let (Some(lockfile), false) = (&collected.lockfile, collected.specs.is_empty()) {
+        collected
+            .notes
+            .push(format!("lockfile not audited: {lockfile}"));
     }
     finish(
         outcome,
@@ -493,12 +523,18 @@ fn cargo_install(outcome: &mut ParseOutcome, segment: &str, tokens: &[String]) {
     );
 }
 
-fn unparsed_install_like(outcome: &mut ParseOutcome, segment: &str) {
-    let lowered = segment.to_ascii_lowercase();
-    if ["install", "add", "require", "get ", "dlx", "npx", "uvx"]
+fn unparsed_install_like(outcome: &mut ParseOutcome, segment: &str, tokens: &[String]) {
+    const MANAGERS: &[&str] = &[
+        "npm", "pnpm", "yarn", "bun", "npx", "bunx", "pip", "pip3", "uv", "uvx", "pipx", "poetry",
+        "pipenv", "cargo", "go", "gem", "bundle", "dotnet", "composer", "deno", "winget", "brew",
+        "choco", "scoop",
+    ];
+    const VERBS: &[&str] = &["install", "i", "add", "get", "require", "ci", "exec", "dlx"];
+    let manager = tokens
         .iter()
-        .any(|needle| lowered.contains(needle))
-    {
+        .any(|token| MANAGERS.contains(&token.as_str()));
+    let verb = tokens.iter().any(|token| VERBS.contains(&token.as_str()));
+    if manager && verb {
         outcome
             .notes
             .push(format!("install-like command was not parsed: {segment}"));
@@ -546,7 +582,9 @@ fn handle_segment(segment: &str, depth: u8, outcome: &mut ParseOutcome) {
 
     if depth < MAX_DEPTH
         && matches!(tokens[0].as_str(), "bash" | "sh" | "zsh")
-        && tokens.get(1).is_some_and(|flag| flag == "-c")
+        && tokens
+            .get(1)
+            .is_some_and(|flag| flag == "-c" || flag == "-lc")
     {
         if let Some(script) = tokens.get(2) {
             let nested = parse_depth(script, depth + 1);
@@ -556,6 +594,7 @@ fn handle_segment(segment: &str, depth: u8, outcome: &mut ParseOutcome) {
         return;
     }
 
+    let produced = outcome.intents.len();
     let rest = &tokens[1..];
     match tokens[0].as_str() {
         "npm" => match rest.first().map(String::as_str) {
@@ -778,12 +817,13 @@ fn handle_segment(segment: &str, depth: u8, outcome: &mut ParseOutcome) {
                 dotnet_add(outcome, segment, &rest[2..]);
             }
         }
-        "composer" => {
-            if rest.first().is_some_and(|verb| verb == "require") {
-                composer_require(outcome, segment, &rest[1..]);
-            }
+        "composer" if rest.first().is_some_and(|verb| verb == "require") => {
+            composer_require(outcome, segment, &rest[1..])
         }
-        _ => unparsed_install_like(outcome, segment),
+        _ => {}
+    }
+    if outcome.intents.len() == produced {
+        unparsed_install_like(outcome, segment, &tokens);
     }
 }
 
@@ -791,14 +831,26 @@ pub fn parse(command: &str) -> ParseOutcome {
     parse_depth(command, 0)
 }
 
+/// Cut a command to the parser's byte budget without splitting a UTF-8 char.
+pub fn cap_command(command: &str) -> (&str, bool) {
+    if command.len() <= MAX_COMMAND_BYTES {
+        return (command, false);
+    }
+    let mut end = MAX_COMMAND_BYTES;
+    while !command.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&command[..end], true)
+}
+
 fn parse_depth(command: &str, depth: u8) -> ParseOutcome {
     let mut outcome = ParseOutcome::default();
-    if command.len() > MAX_COMMAND_BYTES {
+    let (command, truncated) = cap_command(command);
+    if truncated {
         outcome.notes.push(format!(
             "command truncated at {MAX_COMMAND_BYTES} bytes; the rest was not parsed"
         ));
     }
-    let command = &command[..command.len().min(MAX_COMMAND_BYTES)];
     let command = command.replace("\\\n", " ").replace("\r\n", "\n");
     for segment in segments(&command) {
         handle_segment(&segment, depth, &mut outcome);
@@ -1166,6 +1218,25 @@ mod tests {
     }
 
     #[test]
+    fn comments_redirections_and_background_do_not_become_packages() {
+        for command in [
+            "npm i some-pkg # bump",
+            "npm i some-pkg 2>&1",
+            "npm i some-pkg &",
+            "npm i some-pkg > build.log",
+        ] {
+            let parsed = parse(command);
+            let names: Vec<&str> = parsed
+                .intents
+                .iter()
+                .flat_map(|intent| intent.specs.iter().map(|spec| spec.name.as_str()))
+                .collect();
+            assert_eq!(names, vec!["some-pkg"], "{command}: {parsed:?}");
+            assert!(parsed.notes.is_empty(), "{command}: {parsed:?}");
+        }
+    }
+
+    #[test]
     fn separate_installs_keep_their_order() {
         let parsed = parse("npm i first || npm i second");
         let names: Vec<&str> = parsed
@@ -1174,6 +1245,18 @@ mod tests {
             .flat_map(|intent| intent.specs.iter().map(|spec| spec.name.as_str()))
             .collect();
         assert_eq!(names, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn a_requirements_file_is_named_when_packages_are_also_audited() {
+        let parsed = parse("pip install -r base.txt extra");
+        assert!(
+            parsed
+                .notes
+                .iter()
+                .any(|note| note.contains("lockfile not audited")),
+            "{parsed:?}"
+        );
     }
 
     #[test]
@@ -1228,6 +1311,14 @@ mod tests {
     #[test]
     fn caps_giant_input_instead_of_hanging() {
         let parsed = parse(&"a;".repeat(MAX_COMMAND_BYTES));
+        assert!(parsed.notes.iter().any(|note| note.contains("truncated")));
+    }
+
+    #[test]
+    fn a_multibyte_char_at_the_cap_does_not_panic() {
+        let mut command = "a".repeat(MAX_COMMAND_BYTES - 1);
+        command.push('é');
+        let parsed = parse(&command);
         assert!(parsed.notes.iter().any(|note| note.contains("truncated")));
     }
 }

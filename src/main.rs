@@ -81,12 +81,10 @@ fn usage_exit(error: clap::Error) -> ExitCode {
 }
 
 fn execute(cli: &Cli) -> anyhow::Result<u8> {
-    let http = Arc::new(HttpClient::from_env(cli.no_cache));
-    let auditor = Auditor::new(&http);
-    let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
-
-    match &cli.command {
-        Command::Hook { action } => match action {
+    // Hooks run on every Bash tool call and must never fail before they read
+    // stdin; the guard child owns config and network errors.
+    if let Command::Hook { action } = &cli.command {
+        return match action {
             dep_vet::cli::HookAction::Claude { strict } => run_hook(*strict),
             dep_vet::cli::HookAction::Install {
                 target,
@@ -101,7 +99,14 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 user,
                 write,
             } => run_hook_uninstall(target, *project, *user, *write),
-        },
+        };
+    }
+    let http = Arc::new(HttpClient::from_env(cli.no_cache));
+    let auditor = Auditor::new(&http);
+    let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
+
+    match &cli.command {
+        Command::Hook { .. } => unreachable!("handled before config and network"),
 
         Command::Guard {
             check,
@@ -670,6 +675,9 @@ fn run_guard_child(command: &str) -> (u8, Option<String>) {
     let Ok(executable) = std::env::current_exe() else {
         return (3, None);
     };
+    // The guard caps at the same boundary; do it before argv so a huge hook
+    // input cannot hit E2BIG.
+    let (command, _) = dep_vet::intent::cap_command(command);
     let mut child = Process::new(executable);
     child
         .args(["guard", "--check", "--json", "--", command])
@@ -701,6 +709,19 @@ fn run_guard_child(command: &str) -> (u8, Option<String>) {
     let Ok(mut child) = child.spawn() else {
         return (3, None);
     };
+    // Drain stdout concurrently: a report larger than the pipe buffer would
+    // otherwise block the child while we wait for it to exit, and the deadline
+    // would turn a real verdict into "allow".
+    let mut pipe = match child.stdout.take() {
+        Some(pipe) => pipe,
+        None => return (3, None),
+    };
+    let reader = std::thread::spawn(move || {
+        let mut body = String::new();
+        let _ = pipe.read_to_string(&mut body);
+        body
+    });
+
     let deadline = std::time::Instant::now()
         + std::time::Duration::from_secs(dep_vet::hook::HOOK_BUDGET_SECONDS);
     let mut timed_out = false;
@@ -722,17 +743,15 @@ fn run_guard_child(command: &str) -> (u8, Option<String>) {
             }
         }
     }
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
-        Err(_) => return (3, None),
-    };
+    let status = child.wait().ok();
+    let body = reader.join().unwrap_or_default();
     if timed_out {
         return (3, None);
     }
-    let mut stdout = String::new();
-    let mut reader = output.stdout.as_slice();
-    let _ = reader.read_to_string(&mut stdout);
-    (output.status.code().unwrap_or(3) as u8, Some(stdout))
+    (
+        status.and_then(|status| status.code()).unwrap_or(3) as u8,
+        Some(body),
+    )
 }
 
 fn hook_settings_path(project: bool, user: bool) -> anyhow::Result<std::path::PathBuf> {
@@ -831,6 +850,11 @@ fn run_hook(strict: bool) -> anyhow::Result<u8> {
         return Ok(0);
     };
     let (exit_code, guard_json) = run_guard_child(&command);
+    if exit_code == 3 && !strict && std::env::var_os("DEPVET_DEBUG").is_some() {
+        for note in dep_vet::hook::notes(guard_json.as_deref()) {
+            eprintln!("dep-vet hook: not checked: {note}");
+        }
+    }
     let decision = dep_vet::hook::decide(exit_code, guard_json.as_deref(), strict);
     if let Some(output) = dep_vet::hook::render(&decision) {
         println!("{output}");

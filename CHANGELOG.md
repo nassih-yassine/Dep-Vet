@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.11.0 — 2026-11-22
+## Unreleased
+
+- **Agent install guard.** `dep-vet guard --check -- <command>` parses npm,
+  PyPI, crates.io, Go, RubyGems, NuGet, Composer, and ephemeral runner installs,
+  audits the named packages, and names anything it could not check. The parser
+  is pure, bounded at 64 KiB on a UTF-8 boundary, follows one level of
+  `sh -c`/`bash -lc`, and never executes anything.
+- **Claude Code hook.** `dep-vet hook claude` maps HIGH to deny, WARN to ask
+  (`--strict` denies), and unavailable audits to allow (`--strict` denies), always
+  exiting 0 with the documented `hookSpecificOutput`. It spawns the guard with a
+  fixed 8-second deadline, drains the report while the child runs, and strips
+  agent-settable registry/OSV overrides. `hook install claude` merges an
+  idempotent handler into project or user settings, prints a diff, and writes
+  only with `--write`.
+- **Trust-protocol banner.** One text source (`assets/banner.txt`) for `--help`
+  and interactive reports; the README uses `assets/banner.png`.
 
 - **Comment stripping recognises regex literals and shell `$#`.** `/[//]/` and
   `/\/*/` no longer blank the rest of the line, and shell `#` is a comment only

@@ -652,9 +652,10 @@ hostile, prompt-injected agent. It is advisory against a hostile agent and
 useful against an honest one.
 
 There are two bypasses: an allow entry in `.depvet.toml` with a reason, and
-removing the hook. The hook ignores agent-settable `DEPVET_*` overrides
-(registry/OSV bases, cache, timeout) so the command string cannot redirect the
-audit; only `DEPVET_CACHE_DIR` and `DEPVET_DEBUG` pass through.
+removing the hook. The hook ignores agent-settable registry, download, and OSV
+bases and the cache bypass, so the command string cannot redirect the audit.
+`DEPVET_CACHE_DIR` and `DEPVET_DEBUG` still pass, so a cache can be shared and a
+failed check can be inspected on purpose.
 
 ### Color
 
