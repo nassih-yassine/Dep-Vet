@@ -142,10 +142,16 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   to stay present, so refresh with the script, never by deleting lines. PyPI,
   crates.io, and Go lists are still curated constants.
 - **Refresh is automated.** `.github/workflows/refresh-popular.yml` runs weekly
-  (Monday 04:00 UTC) or by dispatch, pushes `bot/refresh-popular-npm`, opens or
-  updates a PR, and enables auto-merge. Repository auto-merge is enabled; if it
-  is turned off, the PR simply waits for a human. Do not commit generated data by
-  hand outside the script.
+  (Monday 04:00 UTC) or by dispatch: validates the data with `cargo test`,
+  pushes `bot/refresh-popular-npm`, opens or updates a PR, enables auto-merge,
+  then approves the bot PR's parked `pull_request` run. `ci.yml` skips that job
+  for bot-authored PRs, and GitHub counts a SKIPPED check as satisfied.
+  Do not replace approval with `gh workflow run`: a dispatched check does not
+  attach to the PR's rollup and auto-merge waits forever.
+  Repo settings required: Actions may create pull requests
+  (`can_approve_pull_request_reviews=true`), auto-merge enabled, and the job has
+  `actions: write`. If auto-merge is off, the PR waits for a human.
+  Do not commit generated data by hand outside the script.
 - **Advisories are deduplicated by alias.** OSV lists one issue as PYSEC, GHSA,
   and CVE records. `dedupe` unions records whose id/alias sets overlap, keeps the
   highest severity, prefers a real summary over the placeholder, and preserves
