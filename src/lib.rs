@@ -11,6 +11,7 @@ pub mod http;
 pub mod jsr;
 pub mod lockfile;
 pub mod model;
+pub mod nuget;
 pub mod osv;
 pub mod pypi;
 pub mod registry;

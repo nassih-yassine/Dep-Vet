@@ -350,6 +350,55 @@ pub const POPULAR_RUBYGEMS: &[&str] = &[
     "zeitwerk",
 ];
 
+/// Provisional NuGet seed (lowercase; NuGet IDs are case-insensitive).
+pub const POPULAR_NUGET: &[&str] = &[
+    "automapper",
+    "autofac",
+    "benchmarkdotnet",
+    "castle.core",
+    "coverlet.collector",
+    "csvhelper",
+    "dapper",
+    "entityframework",
+    "entityframeworkcore",
+    "flurl.http",
+    "fluentvalidation",
+    "google.protobuf",
+    "grpc.net.client",
+    "hangfire",
+    "humanizer",
+    "identitymodel",
+    "imagesharp",
+    "mailkit",
+    "mediatr",
+    "messagepack",
+    "microsoft.entityframeworkcore",
+    "microsoft.extensions.configuration",
+    "microsoft.extensions.dependencyinjection",
+    "microsoft.extensions.logging",
+    "moq",
+    "mongodb.driver",
+    "mysql.data",
+    "newtonsoft.json",
+    "nlog",
+    "npgsql",
+    "nunit",
+    "opentelemetry",
+    "polly",
+    "protobuf-net",
+    "quartz",
+    "rabbitmq.client",
+    "refit",
+    "restsharp",
+    "serilog",
+    "serilog.aspnetcore",
+    "stackexchange.redis",
+    "swashbuckle.aspnetcore",
+    "system.text.json",
+    "xunit",
+    "xunit.core",
+];
+
 /// A popular name that `name` is suspiciously close to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suspect<'a> {
@@ -478,6 +527,17 @@ mod tests {
         );
         for name in ["requests", "numpy", "django", "pydantic"] {
             assert!(POPULAR_PYPI.contains(&name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn nuget_seed_is_clean() {
+        let mut sorted = POPULAR_NUGET.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), POPULAR_NUGET.len(), "duplicate NuGet ids");
+        for name in ["newtonsoft.json", "serilog", "xunit"] {
+            assert!(POPULAR_NUGET.contains(&name), "missing {name}");
         }
     }
 

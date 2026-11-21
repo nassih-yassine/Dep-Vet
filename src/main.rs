@@ -15,6 +15,7 @@ use dep_vet::model::{
     AuditReport, LockFetchError, LockReport, PackageReport, PackageSpec, Profile,
     TOOL_ERROR_EXIT_CODE as TOOL_ERROR,
 };
+use dep_vet::nuget::{NugetClient, NugetError};
 use dep_vet::osv::OsvClient;
 use dep_vet::pypi::{PypiClient, PypiError};
 use dep_vet::registry::{RegistryClient, RegistryError};
@@ -77,6 +78,13 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
             let mut report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            allowlist.apply(&mut report);
+            emit_package(cli, *json, &report)
+        }
+
+        Command::Nuget { package, json } => {
+            let spec = PackageSpec::parse_nuget(package)?;
+            let mut report = auditor.audit_nuget(&spec, now_seconds())?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
@@ -223,6 +231,7 @@ struct Auditor {
     go: GoClient,
     jsr: JsrClient,
     gems: GemClient,
+    nuget: NugetClient,
     osv: OsvClient,
 }
 
@@ -235,6 +244,7 @@ impl Auditor {
             go: GoClient::from_env(Arc::clone(http)),
             jsr: JsrClient::from_env(Arc::clone(http)),
             gems: GemClient::from_env(Arc::clone(http)),
+            nuget: NugetClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
         }
     }
@@ -260,6 +270,23 @@ impl Auditor {
             advisories.as_ref(),
             local,
             Profile::NPM,
+            now,
+        ))
+    }
+
+    fn audit_nuget(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, NugetError> {
+        let meta = self.nuget.fetch(spec)?;
+        let advisories = self
+            .osv
+            .query(Ecosystem::NuGet, &meta.name, &meta.version)
+            .ok();
+        Ok(signals::report(
+            meta,
+            Ecosystem::NuGet,
+            None,
+            advisories.as_ref(),
+            &[],
+            Profile::NUGET,
             now,
         ))
     }
@@ -405,6 +432,7 @@ fn spec_for(
         Ecosystem::Go => PackageSpec::parse_go(&format!("{name}@{version}")),
         Ecosystem::Jsr => PackageSpec::parse_jsr(&format!("{name}@{version}")),
         Ecosystem::RubyGems => PackageSpec::parse_gem(&format!("{name}@{version}")),
+        Ecosystem::NuGet => PackageSpec::parse_nuget(&format!("{name}@{version}")),
     }
 }
 
@@ -451,6 +479,9 @@ fn audit_packages(
                                 }
                                 Ecosystem::RubyGems => {
                                     auditor.audit_gem(&spec, now).map_err(|e| e.to_string())
+                                }
+                                Ecosystem::NuGet => {
+                                    auditor.audit_nuget(&spec, now).map_err(|e| e.to_string())
                                 }
                             };
                             audited.map_err(|message| LockFetchError {

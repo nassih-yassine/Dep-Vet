@@ -52,6 +52,7 @@ pub enum Format {
     Cargo,
     Go,
     Gemfile,
+    NugetLock,
 }
 
 impl Format {
@@ -61,6 +62,7 @@ impl Format {
                 crate::model::Ecosystem::Npm
             }
             Self::Gemfile => crate::model::Ecosystem::RubyGems,
+            Self::NugetLock => crate::model::Ecosystem::NuGet,
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
@@ -82,6 +84,7 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         "yarn.lock" => Ok(Format::Yarn),
         "deno.lock" => Ok(Format::Deno),
         "Gemfile.lock" => Ok(Format::Gemfile),
+        "packages.lock.json" => Ok(Format::NugetLock),
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
         "poetry.lock" => Ok(Format::Poetry),
@@ -99,6 +102,7 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
         Format::Yarn => Ok(parse_yarn(body)),
         Format::Deno => parse_deno(body),
         Format::Gemfile => Ok(parse_gemfile(body)),
+        Format::NugetLock => parse_nuget_lock(body),
         Format::Pip => Ok(parse_pip(body)),
         Format::Poetry => parse_poetry(body),
         Format::Uv => parse_uv(body),
@@ -611,6 +615,30 @@ fn parse_gemfile(body: &str) -> LockContents {
     finish(packages, skipped)
 }
 
+fn parse_nuget_lock(body: &str) -> Result<LockContents, LockError> {
+    let lockfile: NugetLock =
+        serde_json::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for framework in lockfile.dependencies.values() {
+        for (name, entry) in framework {
+            if entry.kind.as_deref() == Some("Project") {
+                continue;
+            }
+            match &entry.resolved {
+                Some(version) if !version.is_empty() => packages.push(LockedPackage {
+                    name: name.clone(),
+                    version: version.clone(),
+                }),
+                _ => skipped.push((name.clone(), "unresolved NuGet dependency".to_string())),
+            }
+        }
+    }
+
+    Ok(finish(packages, skipped))
+}
+
 fn parse_pip(body: &str) -> LockContents {
     let mut packages = Vec::new();
     let mut skipped = Vec::new();
@@ -804,6 +832,21 @@ fn finish(mut packages: Vec<LockedPackage>, skipped: Vec<(String, String)>) -> L
         skipped,
         notes: Vec::new(),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct NugetLock {
+    #[serde(default)]
+    dependencies:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, NugetEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NugetEntry {
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    resolved: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1202,6 +1245,48 @@ DEPENDENCIES
             ]
         );
         assert!(contents.skipped.is_empty());
+    }
+
+    #[test]
+    fn nuget_lock_reads_all_frameworks_and_skips_projects() {
+        let body = r#"{
+            "version": 1,
+            "dependencies": {
+                "net8.0": {
+                    "Newtonsoft.Json": { "type": "Direct", "resolved": "13.0.3" },
+                    "My.Project": { "type": "Project" }
+                },
+                "netstandard2.0": {
+                    "Serilog": { "type": "Transitive", "resolved": "3.1.1" },
+                    "Newtonsoft.Json": { "type": "Transitive", "resolved": "13.0.3" }
+                }
+            }
+        }"#;
+        let contents = parse(Format::NugetLock, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("Newtonsoft.Json", "13.0.3"),
+                package("Serilog", "3.1.1")
+            ]
+        );
+    }
+
+    #[test]
+    fn nuget_lock_reports_unresolved_entries() {
+        let body =
+            r#"{ "version": 1, "dependencies": { "net8.0": { "X": { "type": "Direct" } } } }"#;
+        let contents = parse(Format::NugetLock, body).unwrap();
+        assert!(contents.packages.is_empty());
+        assert_eq!(contents.skipped.len(), 1);
+    }
+
+    #[test]
+    fn nuget_lock_rejects_malformed_json() {
+        assert!(matches!(
+            parse(Format::NugetLock, "{ nope"),
+            Err(LockError::Malformed(_))
+        ));
     }
 
     #[test]

@@ -37,6 +37,18 @@ impl PackageSpec {
         Ok(Self { name, version })
     }
 
+    /// NuGet reference: `Id` or `Id@1.2.3`. IDs are case-insensitive.
+    pub fn parse_nuget(input: &str) -> Result<Self, SpecError> {
+        let spec = Self::parse(input)?;
+        let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+        if spec.name.is_empty() || !spec.name.chars().all(allowed) {
+            return Err(SpecError::InvalidName(spec.name));
+        }
+        // NuGet IDs are case-insensitive for lookups, but OSV matches the
+        // published casing, so keep what the caller gave us.
+        Ok(spec)
+    }
+
     /// RubyGems reference: `name` or `name@1.2.3`.
     pub fn parse_gem(input: &str) -> Result<Self, SpecError> {
         let spec = Self::parse(input)?;
@@ -263,6 +275,8 @@ pub enum Ecosystem {
     Jsr,
     #[serde(rename = "rubygems")]
     RubyGems,
+    #[serde(rename = "nuget")]
+    NuGet,
 }
 
 impl Ecosystem {
@@ -274,6 +288,7 @@ impl Ecosystem {
             Self::Go => "go",
             Self::Jsr => "jsr",
             Self::RubyGems => "gem",
+            Self::NuGet => "nuget",
         }
     }
 
@@ -287,6 +302,7 @@ impl Ecosystem {
             // OSV does not publish advisories for JSR; nothing queries this.
             Self::Jsr => "JSR",
             Self::RubyGems => "RubyGems",
+            Self::NuGet => "NuGet",
         }
     }
 }
@@ -301,6 +317,7 @@ impl Ecosystem {
             Self::Go => format!("https://pkg.go.dev/{name}@{version}"),
             Self::Jsr => format!("https://jsr.io/{name}/{version}"),
             Self::RubyGems => format!("https://rubygems.org/gems/{name}/{version}"),
+            Self::NuGet => format!("https://www.nuget.org/packages/{name}/{version}"),
         }
     }
 
@@ -313,6 +330,7 @@ impl Ecosystem {
             Self::Go => format!("https://pkg.go.dev/{name}"),
             Self::Jsr => format!("https://jsr.io/{name}"),
             Self::RubyGems => format!("https://rubygems.org/gems/{name}"),
+            Self::NuGet => format!("https://www.nuget.org/packages/{name}"),
         }
     }
 }
@@ -408,6 +426,19 @@ impl Profile {
         maintainers: false,
         advisories: true,
         repository: true,
+        downloads: false,
+        deprecation: true,
+        typosquat: true,
+        freshness: true,
+    };
+
+    /// NuGet exposes no owner list, download figure, repository, or build-time
+    /// file data. Advisories, freshness, deprecation, and typosquats work.
+    pub const NUGET: Self = Self {
+        execution: false,
+        maintainers: false,
+        advisories: true,
+        repository: false,
         downloads: false,
         deprecation: true,
         typosquat: true,
@@ -760,6 +791,25 @@ mod tests {
         assert_eq!(Ecosystem::CratesIo.osv_name(), "crates.io");
         assert_eq!(Ecosystem::Go.osv_name(), "Go");
         assert_eq!(Ecosystem::RubyGems.osv_name(), "RubyGems");
+        assert_eq!(Ecosystem::NuGet.osv_name(), "NuGet");
+    }
+
+    #[test]
+    fn parses_nuget_ids() {
+        assert_eq!(
+            PackageSpec::parse_nuget("Newtonsoft.Json").unwrap(),
+            spec("Newtonsoft.Json", None)
+        );
+        assert_eq!(
+            PackageSpec::parse_nuget("Serilog@3.1.1").unwrap(),
+            spec("Serilog", Some("3.1.1"))
+        );
+        for input in ["@scope/x", "foo/bar", "foo bar", "pkg@"] {
+            assert!(
+                PackageSpec::parse_nuget(input).is_err(),
+                "accepted {input:?}"
+            );
+        }
     }
 
     #[test]
