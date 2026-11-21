@@ -29,7 +29,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 154 unit + 41 end-to-end tests
+cargo test --locked                      # 174 unit + 45 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -53,7 +53,8 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 |------|------|
 | `src/model.rs` | `PackageSpec` parsing/validation, `Severity`, `Finding`, `PackageReport` |
 | `src/lockfile.rs` | `package-lock.json` v2/v3 parsing, flat diff against a git ref |
-| `src/registry.rs` | packument fetch + parsing, download counts, repo URL normalization |
+| `src/registry.rs` | npm packument fetch + parsing, download counts, repo URL normalization |
+| `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -88,10 +89,14 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   "advisory without a summary" for every real advisory.
 - **Advisory failure is an INFO finding**, not silence and not exit 3. "We
   could not check" must never read as "nothing found".
-- **Ecosystem has one variant on purpose.** `Ecosystem::Npm` exists so the OSV
-  name and report field stop being string literals; add a variant only with the
-  source that uses it. The `PackageSource` trait is deferred until a second
-  source exists — a trait with one implementation is indirection, not design.
+- **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
+  uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
+  they show as `not checked`. The `PackageSource` trait is still deferred: two
+  sources share only `PackageMeta` and the auditor, which is not yet enough
+  duplication to justify it.
+- **PyPI "build from source" is WARN, not an install hook.** An sdist-only
+  version runs a PEP 517 backend at build time; it must never inherit npm's
+  HIGH escalation (install script + another signal).
 - **`Profile` drives honesty, not exit codes.** Disabled signals produce no
   finding and appear in `PackageReport.not_checked` (human line "not checked",
   JSON field, omitted when empty). Never turn a missing signal into a clean one.
@@ -173,6 +178,6 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Release binaries, PyPI/crates.io, tree-wide advisory lookups, and non-npm
-lockfiles (yarn, pnpm, bun). Roadmap only: do not describe these as existing in
+crates.io and Go, tree-wide advisory lookups, and non-npm lockfiles (PyPI,
+yarn, pnpm, bun). Roadmap only: do not describe these as existing in
 code, README, or help text.

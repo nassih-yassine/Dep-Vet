@@ -27,11 +27,12 @@
 
 ---
 
-`npm install` runs code. `dep-vet` reads public registry metadata and OSV
-advisories, then tells you what a package will do at that moment: whether it
-runs install scripts, how old it is, who published this version, whether its
-name is one typo away from a popular package, what vulnerabilities apply to this
-exact version, and whether it is deprecated. Every finding links to the raw
+`npm install` runs code, and so does a Python sdist build. `dep-vet` reads
+public registry metadata and OSV advisories for **npm and PyPI**, then tells you
+what a package will do at that moment: whether it runs install-time code, how
+old it is, who published this version, whether its name is one typo away from a
+package you trust, what vulnerabilities apply to this exact version, and whether
+it is deprecated. Every finding links to the raw
 evidence it came from.
 
 ```console
@@ -109,6 +110,19 @@ the weekly download count, and the OSV advisory list, then applies local rules.
 If the current directory or a parent contains `package-lock.json`, its dependency
 names join the typosquat list, so a package one edit from something you already
 use is flagged. `--no-local` ignores it.
+
+### Check a PyPI package
+
+```sh
+dep-vet pypi requests              # latest
+dep-vet pypi requests==2.31.0      # exact version
+dep-vet pypi "requests[security]"  # extras are dropped in v1
+```
+
+PyPI exposes no maintainer set or download figure, so those appear under
+`not checked` rather than being guessed. When a version has only an sdist, pip
+builds it and runs the project's build backend: that is reported as a warning,
+never as a high-risk install script.
 
 ### Audit a lockfile change
 
@@ -272,6 +286,7 @@ DEPVET_OSV_BASE=https://api.osv.dev dep-vet npm express
 
 | Signal | Severity | Meaning |
 |--------|----------|---------|
+| Build from source | WARN | PyPI only: no wheel exists for this version, so installing runs the project's PEP 517 build backend as your user. |
 | Advisories | High/Warn/Info from OSV | Known vulnerabilities for this exact version, one finding per advisory, linking to its OSV record and CVE aliases. An advisory whose details cannot be fetched still surfaces as a warning. If OSV is unreachable, the report says so as an INFO finding instead of implying the package is clean. |
 | Install scripts | WARN, HIGH when combined | `preinstall`/`install`/`postinstall` run during `npm install`. Combined with a fresh package, an unexpected publisher, or a typosquat name, this is the shape of a supply-chain attack. |
 | Typosquat | HIGH at ≤1 edit or homoglyph, WARN at 2 | Levenshtein distance to a curated list of popular names and, when a lockfile is available, to the dependency names you already have. Lookalikes are folded (`1`/`l`, `0`/`o`, `rn`/`m`); names under 4 characters are skipped to avoid noise. A package that is itself popular is never flagged for resembling something nearby (`preact` is not a `react` typo). |
@@ -288,9 +303,11 @@ clean.
 
 ## Scope and limits
 
-- **npm only.** Bun, pnpm, and yarn install from the same registry, so package
-  vetting is accurate for them; lockfile commands and manager-specific script
-  policy are not implemented.
+- **npm and PyPI.** Bun, pnpm, and yarn install from the same registry, so npm
+  vetting is accurate for them. `dep-vet lock` parses `package-lock.json` only;
+  there is no `requirements.txt` or `poetry.lock` audit yet.
+- **PyPI misses two signals on purpose:** maintainers and downloads are not in
+  its JSON API, so they are reported as not checked. Extras are stripped.
 - **Typosquat context depends on what is on disk.** `dep-vet lock` compares
   against the base lockfile; `dep-vet npm` uses the nearest `package-lock.json`
   when one exists, and `--no-local` turns that off. Either way the seed list is
@@ -338,7 +355,8 @@ handling, and output are exercised end to end.
 src/cli.rs        clap surface
 src/model.rs      PackageSpec, Severity, Finding, PackageReport
 src/lockfile.rs   package-lock v2/v3 parsing, git-ref diff
-src/registry.rs   packument fetch + parsing, download counts
+src/registry.rs   npm packument fetch + parsing, download counts
+src/pypi.rs       PyPI JSON API, sdist-only detection, yanked releases
 src/osv.rs        advisory IDs from querybatch, details per advisory
 src/http.rs       one agent, body limit, cache read/write policy
 src/cache.rs      SQLite cache with TTL and stale fallback
@@ -358,7 +376,7 @@ did.
 
 1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
    against your own dependencies.
-2. PyPI, crates.io, and Go. The design is kept locally (`docs/`), not published.
+2. crates.io and Go. The design is kept locally (`docs/`), not published.
 3. Advisory lookups for the whole installed tree, not one package.
 
 ## License

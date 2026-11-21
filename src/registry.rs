@@ -28,6 +28,8 @@ pub struct PackageMeta {
     pub maintainers: Vec<String>,
     pub publisher: Option<String>,
     pub install_scripts: Vec<InstallScript>,
+    /// PyPI: only an sdist is published, so installing builds it (PEP 517).
+    pub build_from_source: bool,
     pub repository: Option<String>,
     pub deprecated: Option<String>,
     pub registry_url: String,
@@ -238,6 +240,7 @@ fn parse_packument(
             .collect(),
         publisher: doc.npm_user.as_ref().and_then(|user| user.name.clone()),
         install_scripts,
+        build_from_source: false,
         repository,
         deprecated: normalize_deprecated(doc.deprecated.clone()),
         registry_url: url.to_string(),

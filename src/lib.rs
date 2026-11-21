@@ -8,6 +8,7 @@ pub mod http;
 pub mod lockfile;
 pub mod model;
 pub mod osv;
+pub mod pypi;
 pub mod registry;
 pub mod report;
 pub mod signals;

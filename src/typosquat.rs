@@ -155,6 +155,110 @@ pub const POPULAR: &[&str] = &[
     "zod",
 ];
 
+/// Provisional PyPI seed, same caveat as the npm list: curated, not ranked.
+pub const POPULAR_PYPI: &[&str] = &[
+    "accelerate",
+    "aiohttp",
+    "ansible",
+    "anthropic",
+    "apache-airflow",
+    "arrow",
+    "attrs",
+    "azure-core",
+    "bcrypt",
+    "beautifulsoup4",
+    "black",
+    "boto3",
+    "botocore",
+    "cattrs",
+    "celery",
+    "certifi",
+    "charset-normalizer",
+    "click",
+    "cryptography",
+    "dbt-core",
+    "django",
+    "docker",
+    "fastapi",
+    "flask",
+    "gensim",
+    "google-api-core",
+    "gunicorn",
+    "h5py",
+    "httpx",
+    "huggingface-hub",
+    "idna",
+    "jinja2",
+    "kubernetes",
+    "lightgbm",
+    "loguru",
+    "lxml",
+    "markupsafe",
+    "marshmallow",
+    "matplotlib",
+    "mypy",
+    "networkx",
+    "nltk",
+    "numpy",
+    "oauthlib",
+    "openai",
+    "orjson",
+    "packaging",
+    "pandas",
+    "paramiko",
+    "pillow",
+    "pip",
+    "playwright",
+    "polars",
+    "prometheus-client",
+    "protobuf",
+    "psycopg2",
+    "pydantic",
+    "pyjwt",
+    "pyopenssl",
+    "pyspark",
+    "pytest",
+    "python-dateutil",
+    "pytz",
+    "pyyaml",
+    "redis",
+    "requests",
+    "requests-oauthlib",
+    "rich",
+    "ruff",
+    "safetensors",
+    "scikit-learn",
+    "scipy",
+    "scrapy",
+    "selenium",
+    "sentry-sdk",
+    "setuptools",
+    "simplejson",
+    "six",
+    "spacy",
+    "sqlalchemy",
+    "starlette",
+    "statsmodels",
+    "structlog",
+    "sympy",
+    "tensorflow",
+    "tokenizers",
+    "torch",
+    "tornado",
+    "tox",
+    "tqdm",
+    "transformers",
+    "twisted",
+    "typing-extensions",
+    "ujson",
+    "urllib3",
+    "uvicorn",
+    "waitress",
+    "werkzeug",
+    "wheel",
+    "xgboost",
+];
+
 /// A popular name that `name` is suspiciously close to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suspect<'a> {
@@ -268,6 +372,23 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pypi_seed_is_clean() {
+        let mut sorted = POPULAR_PYPI.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), POPULAR_PYPI.len(), "duplicate PyPI names");
+        assert!(
+            POPULAR_PYPI
+                .iter()
+                .all(|name| *name == name.to_ascii_lowercase()),
+            "PyPI seed names must be lowercase"
+        );
+        for name in ["requests", "numpy", "django", "pydantic"] {
+            assert!(POPULAR_PYPI.contains(&name), "missing {name}");
+        }
+    }
 
     #[test]
     fn popular_list_is_clean() {

@@ -37,6 +37,27 @@ impl PackageSpec {
         Ok(Self { name, version })
     }
 
+    /// PyPI reference: `name`, `name==1.2.3`, `name[extra]==1.2.3`.
+    /// Extras are dropped in v1; they do not change which files exist for a
+    /// version, only which of its dependencies get installed.
+    pub fn parse_pypi(input: &str) -> Result<Self, SpecError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(SpecError::Empty);
+        }
+        let (name, version) = match trimmed.split_once("==") {
+            Some((name, version)) => (name, Some(version)),
+            None => (trimmed, None),
+        };
+        let name = match name.split_once('[') {
+            Some((name, extras)) if extras.ends_with(']') => name,
+            Some(_) => return Err(SpecError::InvalidName(name.to_string())),
+            None => name,
+        };
+        validate_pypi_name(name)?;
+        Self::new(name, version.map(str::to_string))
+    }
+
     pub fn parse(input: &str) -> Result<Self, SpecError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
@@ -89,10 +110,24 @@ fn validate_name(name: &str) -> Result<(), SpecError> {
     Ok(())
 }
 
+fn validate_pypi_name(name: &str) -> Result<(), SpecError> {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+    if name.is_empty() {
+        return Err(SpecError::Empty);
+    }
+    if name.len() > 200 {
+        return Err(SpecError::TooLong);
+    }
+    if !name.chars().all(allowed) || name.starts_with(['.', '-']) || name.ends_with(['.', '-']) {
+        return Err(SpecError::InvalidName(name.to_string()));
+    }
+    Ok(())
+}
+
 fn validate_version(version: &str) -> Result<String, SpecError> {
     let trimmed = version.trim();
     let allowed =
-        |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '~' | '-' | '+' | '^');
+        |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '~' | '-' | '+' | '^' | '!');
     if trimmed.is_empty() || !trimmed.chars().all(allowed) {
         return Err(SpecError::InvalidVersion(version.to_string()));
     }
@@ -132,12 +167,14 @@ impl Severity {
 #[serde(rename_all = "lowercase")]
 pub enum Ecosystem {
     Npm,
+    Pypi,
 }
 
 impl Ecosystem {
     pub fn cli_name(self) -> &'static str {
         match self {
             Self::Npm => "npm",
+            Self::Pypi => "pypi",
         }
     }
 
@@ -145,6 +182,7 @@ impl Ecosystem {
     pub fn osv_name(self) -> &'static str {
         match self {
             Self::Npm => "npm",
+            Self::Pypi => "PyPI",
         }
     }
 }
@@ -159,6 +197,7 @@ impl std::fmt::Display for Ecosystem {
 /// "not checked", never as clean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Profile {
+    pub execution: bool,
     pub maintainers: bool,
     pub downloads: bool,
     pub deprecation: bool,
@@ -168,6 +207,7 @@ pub struct Profile {
 
 impl Profile {
     pub const NPM: Self = Self {
+        execution: true,
         maintainers: true,
         downloads: true,
         deprecation: true,
@@ -175,8 +215,22 @@ impl Profile {
         freshness: true,
     };
 
+    /// PyPI exposes no maintainer set or download figure through its JSON API
+    /// for this version of dep-vet; both are reported as not checked.
+    pub const PYPI: Self = Self {
+        execution: true,
+        maintainers: false,
+        downloads: false,
+        deprecation: true,
+        typosquat: true,
+        freshness: true,
+    };
+
     pub fn not_checked(&self) -> Vec<&'static str> {
         let mut missing = Vec::new();
+        if !self.execution {
+            missing.push("execution");
+        }
         if !self.maintainers {
             missing.push("maintainers");
         }
@@ -435,6 +489,46 @@ mod tests {
             ..Profile::NPM
         };
         assert_eq!(partial.not_checked(), vec!["maintainers", "downloads"]);
+    }
+
+    #[test]
+    fn parses_pypi_names_and_exact_versions() {
+        assert_eq!(
+            PackageSpec::parse_pypi("requests").unwrap(),
+            spec("requests", None)
+        );
+        assert_eq!(
+            PackageSpec::parse_pypi("requests==2.31.0").unwrap(),
+            spec("requests", Some("2.31.0"))
+        );
+        assert_eq!(
+            PackageSpec::parse_pypi("requests[security]==2.31.0").unwrap(),
+            spec("requests", Some("2.31.0"))
+        );
+        assert_eq!(
+            PackageSpec::parse_pypi("zope.interface").unwrap(),
+            spec("zope.interface", None)
+        );
+    }
+
+    #[test]
+    fn rejects_pypi_names_that_could_escape_the_url() {
+        for input in [
+            "../etc", "foo/bar", "foo bar", "foo?", "@scope/x", "-leading",
+        ] {
+            assert!(
+                PackageSpec::parse_pypi(input).is_err(),
+                "accepted {input:?}"
+            );
+        }
+        assert!(PackageSpec::parse_pypi("requests==").is_err());
+        assert!(PackageSpec::parse_pypi("requests[security").is_err());
+    }
+
+    #[test]
+    fn ecosystems_map_to_osv_names() {
+        assert_eq!(Ecosystem::Npm.osv_name(), "npm");
+        assert_eq!(Ecosystem::Pypi.osv_name(), "PyPI");
     }
 
     #[test]
