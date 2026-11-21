@@ -59,6 +59,7 @@ impl MockRegistry {
             .env("DEPVET_DOWNLOADS_BASE", format!("{}/downloads", self.base))
             .env("DEPVET_OSV_BASE", &self.base)
             .env("DEPVET_PYPI_BASE", &self.base)
+            .env("DEPVET_CRATES_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
         command
@@ -165,6 +166,23 @@ impl<'a> PackageFixture<'a> {
 }
 
 const NO_ADVISORIES: &str = r#"{"results":[{"vulns":[]}]}"#;
+
+fn crates_registry(name: &str, body: &str, owners: Option<&str>) -> MockRegistry {
+    let mut routes = HashMap::new();
+    routes.insert(format!("/api/v1/crates/{name}"), (200, body.to_string()));
+    routes.insert(
+        format!("/api/v1/crates/{name}/owners"),
+        match owners {
+            Some(body) => (200, body.to_string()),
+            None => (404, "{}".to_string()),
+        },
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    MockRegistry::start(routes)
+}
 
 fn pypi_registry(name: &str, body: &str) -> MockRegistry {
     let mut routes = HashMap::new();
@@ -451,7 +469,7 @@ fn binary() -> Command {
 #[test]
 fn unknown_subcommand_is_a_tool_error_not_a_verdict() {
     binary()
-        .args(["crates", "serde"])
+        .args(["go", "example.com/x"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("usage error"))
@@ -1256,4 +1274,73 @@ fn pypi_yanked_release_is_a_warning() {
         .assert()
         .code(1)
         .stdout(predicate::str::contains("this release is yanked: malware"));
+}
+
+const SERDE_CRATE: &str = r#"{
+    "crate": {
+        "name": "serde",
+        "max_version": "1.0.229",
+        "max_stable_version": "1.0.229",
+        "created_at": "2014-12-20T00:00:00Z",
+        "repository": "https://github.com/serde-rs/serde"
+    },
+    "versions": [
+        {
+            "num": "1.0.229",
+            "created_at": "2026-10-01T00:00:00Z",
+            "yanked": false,
+            "published_by": { "login": "dtolnay" }
+        }
+    ]
+}"#;
+
+#[test]
+fn crates_clean_crate_reports_what_cannot_be_checked() {
+    let owners = r#"{"users":[{"login":"dtolnay"},{"login":"oli-obk"}]}"#;
+    let registry = crates_registry("serde", SERDE_CRATE, Some(owners));
+    registry
+        .command()
+        .args(["crates", "serde", "--json"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"ecosystem\": \"crates\""))
+        .stdout(predicate::str::contains("\"execution\""))
+        .stdout(predicate::str::contains("\"downloads\""));
+}
+
+#[test]
+fn crates_yanked_version_is_a_warning() {
+    let body = r#"{
+        "crate": { "name": "oldpkg", "max_version": "1.0.0" },
+        "versions": [{ "num": "1.0.0", "yanked": true, "yank_message": "security" }]
+    }"#;
+    let registry = crates_registry("oldpkg", body, Some(r#"{"users":[]}"#));
+    registry
+        .command()
+        .args(["crates", "oldpkg"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("this version is yanked: security"));
+}
+
+#[test]
+fn crates_without_owners_says_the_check_was_unavailable() {
+    let registry = crates_registry("serde", SERDE_CRATE, None);
+    registry
+        .command()
+        .args(["crates", "serde"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("maintainer list unavailable"));
+}
+
+#[test]
+fn crates_unknown_crate_is_a_tool_error() {
+    let registry = crates_registry("serde", SERDE_CRATE, None);
+    registry
+        .command()
+        .args(["crates", "ghost-crate"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("was not found on crates.io"));
 }

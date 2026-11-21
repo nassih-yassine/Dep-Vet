@@ -81,6 +81,7 @@ fn package_page(ecosystem: Ecosystem, name: &str, version: &str) -> String {
     match ecosystem {
         Ecosystem::Npm => package_page_url(name, version),
         Ecosystem::Pypi => format!("https://pypi.org/project/{name}/{version}/"),
+        Ecosystem::CratesIo => format!("https://crates.io/crates/{name}/{version}"),
     }
 }
 
@@ -88,6 +89,7 @@ fn project_page(ecosystem: Ecosystem, name: &str) -> String {
     match ecosystem {
         Ecosystem::Npm => format!("https://www.npmjs.com/package/{name}"),
         Ecosystem::Pypi => format!("https://pypi.org/project/{name}/"),
+        Ecosystem::CratesIo => format!("https://crates.io/crates/{name}"),
     }
 }
 
@@ -170,6 +172,7 @@ pub fn assess(
     let seed = match ecosystem {
         Ecosystem::Npm => typosquat::POPULAR,
         Ecosystem::Pypi => typosquat::POPULAR_PYPI,
+        Ecosystem::CratesIo => typosquat::POPULAR_CRATES,
     };
     let suspect = if profile.typosquat {
         typosquat::closest(&meta.name, seed, local)
@@ -268,6 +271,21 @@ pub fn assess(
             evidence: vec![Evidence {
                 label: "version publish".to_string(),
                 value: meta.published_at.map(date::format_date).unwrap_or_default(),
+                url: Some(meta.registry_url.clone()),
+            }],
+        });
+    }
+
+    if profile.maintainers && !meta.maintainers_known {
+        findings.push(Finding {
+            id: "maintainer-check-unavailable",
+            severity: Severity::Info,
+            title: "maintainer list unavailable".to_string(),
+            detail: "the registry did not return an owner list, so publisher and maintainer agreement could not be checked"
+                .to_string(),
+            evidence: vec![Evidence {
+                label: "registry metadata".to_string(),
+                value: meta.name.clone(),
                 url: Some(meta.registry_url.clone()),
             }],
         });
@@ -412,6 +430,7 @@ mod tests {
             publisher: Some("alice".to_string()),
             install_scripts: vec![],
             build_from_source: false,
+            maintainers_known: true,
             repository: Some("https://github.com/alice/some-package".to_string()),
             deprecated: None,
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
@@ -515,6 +534,17 @@ mod tests {
 
         let report = report(meta, Ecosystem::Npm, None, None, &[], partial, NOW);
         assert_eq!(report.not_checked, vec!["typosquat"]);
+    }
+
+    #[test]
+    fn an_unknown_maintainer_list_is_reported_not_ignored() {
+        let mut meta = meta();
+        meta.maintainers_known = false;
+        meta.maintainers.clear();
+        meta.publisher = None;
+        let findings = assess(&meta, Ecosystem::CratesIo, &[], &Profile::CRATES, NOW);
+        let finding = finding(&findings, "maintainer-check-unavailable");
+        assert_eq!(finding.severity, Severity::Info);
     }
 
     #[test]
