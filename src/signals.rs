@@ -466,7 +466,9 @@ pub fn assess(
     {
         findings.push(Finding {
             id: "release-after-dormancy",
-            severity: Severity::Warn,
+            // Alone this is a hint, not a verdict: normal maintenance produces
+            // year-long gaps. The actionable transition signals stay WARN.
+            severity: Severity::Info,
             title: "a dormant package published this version".to_string(),
             detail: format!(
                 "nothing was published between {} and {}, then this version appeared",
@@ -1013,7 +1015,8 @@ mod tests {
         let mut meta = meta();
         dormant(&mut meta, 10, 376);
         let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
-        assert!(ids(&findings).contains(&"release-after-dormancy"));
+        let finding = finding(&findings, "release-after-dormancy");
+        assert_eq!(finding.severity, Severity::Info);
     }
 
     #[test]

@@ -203,7 +203,7 @@ A compromised package rarely looks like a typosquat. The exploitable moment is
 a release that changes what the package runs or pulls in, and registry metadata
 describes it:
 
-- **Dormant then published** (WARN): this version arrived in the last 30 days
+- **Dormant then published** (INFO): this version arrived in the last 30 days
   after at least a year with no release. Every ecosystem.
 - **Install scripts changed** (WARN, HIGH when the new command uses `curl`,
   `base64`, `node -e`, and similar): npm only, compared with the previous

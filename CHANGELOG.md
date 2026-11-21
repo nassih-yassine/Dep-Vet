@@ -3,7 +3,7 @@
 ## Unreleased
 
 - **Release-transition signals.** dep-vet now flags the shape of a compromised
-  release: a version published after a year of dormancy (all ecosystems),
+  release: a version published after a year of dormancy (INFO, all ecosystems),
   changed install scripts in npm (HIGH when they fetch or decode code),
   dependencies added by the new version (npm, Composer, NuGet, PyPI, crates.io),
   and a different publisher from the previous release. History is only fetched

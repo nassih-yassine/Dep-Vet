@@ -262,6 +262,8 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **Release-transition signals are history-based and gated.** `HISTORY_WINDOW_DAYS`
   (30) bounds them: PyPI and crates.io fetch two extra documents only for a
   version inside it. `previous_release` picks by timestamp, never list order.
+  `release-after-dormancy` is INFO on its own (routine maintenance produces
+  year-long gaps; it failed dep-vet's own dogfood as WARN) and never escalates.
   `install-scripts-changed` compares hook commands with the previous release and
   escalates to HIGH only for known execution patterns; unchanged scripts stay
   under the ordinary install-script finding. `dependency-added` is INFO unless
