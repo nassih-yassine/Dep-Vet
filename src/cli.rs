@@ -130,6 +130,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Vet a Composer package before adding it
+    Composer {
+        /// vendor/package with optional exact version: monolog/monolog@3.13.0
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -193,6 +203,18 @@ mod tests {
                 assert!(!json);
             }
             _ => panic!("expected pypi command"),
+        }
+    }
+
+    #[test]
+    fn parses_composer_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "composer", "monolog/monolog@3.13.0"]).unwrap();
+        match cli.command {
+            Command::Composer { package, json } => {
+                assert_eq!(package, "monolog/monolog@3.13.0");
+                assert!(!json);
+            }
+            _ => panic!("expected composer command"),
         }
     }
 

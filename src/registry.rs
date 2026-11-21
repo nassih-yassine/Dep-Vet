@@ -282,7 +282,7 @@ fn normalize_deprecated(value: Option<serde_json::Value>) -> Option<String> {
 }
 
 /// Turns shorthand and `git+` URLs into something a human can click.
-fn normalize_repository(raw: &str) -> String {
+pub(crate) fn normalize_repository(raw: &str) -> String {
     let trimmed = raw.trim().trim_start_matches("git+");
     if let Some(rest) = trimmed.strip_prefix("github:") {
         return format!("https://github.com/{rest}");

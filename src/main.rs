@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use dep_vet::cli::{Cli, Command};
+use dep_vet::composer::{ComposerClient, ComposerError};
 use dep_vet::crates::{CratesClient, CratesError};
 use dep_vet::go::{GoClient, GoError};
 use dep_vet::http::HttpClient;
@@ -79,6 +80,13 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
             let mut report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            allowlist.apply(&mut report);
+            emit_package(cli, *json, &report)
+        }
+
+        Command::Composer { package, json } => {
+            let spec = PackageSpec::parse_composer(package)?;
+            let mut report = auditor.audit_composer(&spec, now_seconds())?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
@@ -241,6 +249,7 @@ struct Auditor {
     gems: GemClient,
     nuget: NugetClient,
     maven: MavenClient,
+    composer: ComposerClient,
     osv: OsvClient,
 }
 
@@ -255,6 +264,7 @@ impl Auditor {
             gems: GemClient::from_env(Arc::clone(http)),
             nuget: NugetClient::from_env(Arc::clone(http)),
             maven: MavenClient::from_env(Arc::clone(http)),
+            composer: ComposerClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
         }
     }
@@ -280,6 +290,23 @@ impl Auditor {
             advisories.as_ref(),
             local,
             Profile::NPM,
+            now,
+        ))
+    }
+
+    fn audit_composer(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, ComposerError> {
+        let meta = self.composer.fetch(spec)?;
+        let advisories = self
+            .osv
+            .query(Ecosystem::Composer, &meta.name, &meta.version)
+            .ok();
+        Ok(signals::report(
+            meta,
+            Ecosystem::Composer,
+            None,
+            advisories.as_ref(),
+            &[],
+            Profile::COMPOSER,
             now,
         ))
     }
@@ -461,6 +488,7 @@ fn spec_for(
         Ecosystem::RubyGems => PackageSpec::parse_gem(&format!("{name}@{version}")),
         Ecosystem::NuGet => PackageSpec::parse_nuget(&format!("{name}@{version}")),
         Ecosystem::Maven => PackageSpec::parse_maven(&format!("{name}@{version}")),
+        Ecosystem::Composer => PackageSpec::parse_composer(&format!("{name}@{version}")),
     }
 }
 
@@ -514,6 +542,9 @@ fn audit_packages(
                                 Ecosystem::Maven => {
                                     auditor.audit_maven(&spec, now).map_err(|e| e.to_string())
                                 }
+                                Ecosystem::Composer => auditor
+                                    .audit_composer(&spec, now)
+                                    .map_err(|e| e.to_string()),
                             };
                             audited.map_err(|message| LockFetchError {
                                 package: package.spec(),

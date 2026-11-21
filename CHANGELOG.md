@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Composer:** `dep-vet composer vendor/package[@version]` and `composer.lock`
+  auditing for both `packages` and `packages-dev`. Packagist supplies versions,
+  publish times, maintainers, a source repository, and the abandoned flag.
+  There is no install-time file list and its download figure is monthly, so
+  those stay `not checked`.
+
 ## 0.4.0 — 2026-11-21
 
 - **Maven:** `dep-vet maven group:artifact[@version]` reads Maven Central for
