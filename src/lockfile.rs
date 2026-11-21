@@ -665,7 +665,20 @@ fn parse_packages_config(body: &str) -> LockContents {
 /// deliberately not an XML parser: packages.config has one flat element type.
 fn attribute(line: &str, name: &str) -> Option<String> {
     let needle = format!("{name}=");
-    let start = line.find(&needle)? + needle.len();
+    // Require a tag boundary, or `developmentDependency="true"` would look
+    // like an `id` attribute.
+    let mut search = 0;
+    let start = loop {
+        let found = line.get(search..)?.find(&needle)? + search;
+        let boundary = line[..found]
+            .chars()
+            .next_back()
+            .is_none_or(|before| before.is_whitespace() || before == '<');
+        if boundary {
+            break found + needle.len();
+        }
+        search = found + needle.len();
+    };
     let rest = line.get(start..)?;
     let quote = rest.chars().next()?;
     if quote != '"' && quote != '\'' {
@@ -1500,6 +1513,13 @@ DEPENDENCIES
         let contents = parse(Format::PackagesConfig, body).unwrap();
         assert!(contents.packages.is_empty());
         assert_eq!(contents.skipped.len(), 2);
+    }
+
+    #[test]
+    fn packages_config_ignores_attribute_names_that_end_in_id() {
+        let body = r#"<package developmentDependency="true" id="C" version="3.0.0" />"#;
+        let contents = parse(Format::PackagesConfig, body).unwrap();
+        assert_eq!(contents.packages, vec![package("C", "3.0.0")]);
     }
 
     #[test]

@@ -162,12 +162,15 @@ fn parse_metadata(
 }
 
 /// Newest tagged release by publish time. Branch aliases (`dev-main`) are not
-/// releases and are skipped.
+/// releases and are skipped; without timestamps the first tagged entry wins,
+/// because Packagist lists versions newest first.
 fn latest(releases: &[Release]) -> &Release {
     releases
         .iter()
         .filter(|release| !is_dev(&release.version))
+        .filter(|release| release.time.is_some())
         .max_by_key(|release| release.time.as_deref().and_then(date::parse_timestamp))
+        .or_else(|| releases.iter().find(|release| !is_dev(&release.version)))
         .unwrap_or(&releases[0])
 }
 
@@ -308,6 +311,17 @@ mod tests {
             meta.first_published_at,
             date::parse_timestamp("2024-01-01T00:00:00Z")
         );
+    }
+
+    #[test]
+    fn without_timestamps_the_first_tagged_release_wins() {
+        let body = r#"{ "packages": { "x/y": [
+            { "version": "dev-main" },
+            { "version": "2.0.0" },
+            { "version": "1.0.0" }
+        ] } }"#;
+        let meta = parse_metadata(&spec("x/y", None), body, None, "url").unwrap();
+        assert_eq!(meta.version, "2.0.0");
     }
 
     #[test]
