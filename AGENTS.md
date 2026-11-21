@@ -143,8 +143,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - A release is a tag `vX.Y.Z` matching the version in `Cargo.toml`. The workflow
   builds archives plus shell and PowerShell installers and publishes them.
 - Tagging publishes publicly and cannot be quietly undone: ask before tagging.
-- After a release, point the reusable workflow's documented `ref` at the new
-  tag; `main` moving is not a version.
+- After a release, bump the reusable workflow's default `ref` to the new tag;
+  `main` moving is not a version. The action downloads the prebuilt installer
+  for that ref and only builds from source when no release exists.
 
 ## Not built yet
 

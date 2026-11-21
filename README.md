@@ -14,6 +14,7 @@
 
 <p>
 <img alt="ci" src="https://github.com/nassih-yassine/Dep-Vet/actions/workflows/ci.yml/badge.svg">
+<img alt="release" src="https://img.shields.io/github/v/release/nassih-yassine/Dep-Vet">
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
 <img alt="single static binary" src="https://img.shields.io/badge/binary-static%2C%20no%20runtime-success.svg">
 <img alt="no telemetry" src="https://img.shields.io/badge/telemetry-none-success.svg">
@@ -70,13 +71,27 @@ single dependency whose only job was a `postinstall` hook — invisible in
 
 ## Install
 
-From source:
+Linux and macOS:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/nassih-yassine/Dep-Vet/releases/latest/download/dep-vet-installer.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/nassih-yassine/Dep-Vet/releases/latest/download/dep-vet-installer.ps1 | iex
+```
+
+With a Rust toolchain, from source:
 
 ```sh
 cargo install --git https://github.com/nassih-yassine/Dep-Vet.git
 ```
 
-Prebuilt binaries are on the roadmap. The GitHub Action is documented below.
+Releases are checksummed (`sha256.sum`) and built for Linux and macOS on
+aarch64 and x86_64, plus Windows x86_64.
 
 ## Usage
 
@@ -230,10 +245,9 @@ the job on high risk (exit 2) or an incomplete audit (exit 3). Warnings (exit 1)
 pass with the findings visible in the comment. Very long reports are truncated
 in the comment; the full output always lands in the job log.
 
-Because there are no release binaries yet, the action builds dep-vet from
-source — expect roughly a minute and a half per run. It builds the `ref` input
-(default `main`), so pinning `uses:` alone does not pin the binary: pass
-`ref: v0.1.0` once tags exist.
+The action installs the prebuilt binary for the `ref` input (default `v0.1.0`)
+and falls back to building from source when that ref has no release. Pinning
+`uses:` alone does not pin the binary: set `ref` to the tag you reviewed.
 
 ### Color
 
@@ -332,9 +346,8 @@ did.
 
 ## Roadmap
 
-1. Prebuilt binaries via `cargo-dist`, so the GitHub Action stops compiling
-   from source and users stop needing a Rust toolchain.
-2. Popular-name list built from download counts instead of a seed.
+1. Popular-name list built from download counts instead of a seed.
+2. Parallel fetches across packages in a lockfile audit.
 3. PyPI, crates.io, and Go. The design is kept locally (`docs/`), not published.
 4. Advisory lookups for the whole installed tree, not one package.
 
