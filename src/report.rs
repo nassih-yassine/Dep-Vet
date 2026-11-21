@@ -3,7 +3,7 @@
 use owo_colors::OwoColorize;
 use serde::Serialize;
 
-use crate::model::{PackageReport, Severity};
+use crate::model::{LockReport, PackageReport, Severity};
 use crate::registry::package_page_url;
 
 pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> {
@@ -115,6 +115,79 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
     out.push_str(&format!(
         "  review: {}\n",
         package_page_url(&report.name, &report.version)
+    ));
+    out
+}
+
+pub fn render_lock_json(report: &LockReport) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Json<'a> {
+        #[serde(flatten)]
+        report: &'a LockReport,
+        verdict: Severity,
+        exit_code: u8,
+    }
+
+    serde_json::to_string_pretty(&Json {
+        report,
+        verdict: report.verdict(),
+        exit_code: report.exit_code(),
+    })
+}
+
+pub fn render_lock_human(report: &LockReport, color: bool) -> String {
+    let mut out = format!("{} vs {}\n\n", report.lockfile, report.base);
+
+    if report.new_packages.is_empty() {
+        out.push_str("  no new packages\n");
+    } else {
+        out.push_str(&format!(
+            "  {} new package{}\n\n",
+            report.new_packages.len(),
+            if report.new_packages.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ));
+        for package in &report.new_packages {
+            let severity = package.verdict();
+            out.push_str(&format!(
+                "  {:<44} {}\n",
+                format!("{}@{}", package.name, package.version),
+                paint(severity.label(), verdict_color(severity), color)
+            ));
+        }
+        for package in report
+            .new_packages
+            .iter()
+            .filter(|package| package.verdict() > Severity::Info)
+        {
+            out.push('\n');
+            out.push_str(&render_human(package, color));
+        }
+    }
+
+    if !report.errors.is_empty() {
+        out.push_str(&format!(
+            "\n  could not check {} package{}:\n",
+            report.errors.len(),
+            if report.errors.len() == 1 { "" } else { "s" }
+        ));
+        for error in &report.errors {
+            out.push_str(&format!("    {}: {}\n", error.package, error.message));
+        }
+        out.push_str("  this report is incomplete\n");
+    }
+
+    out.push_str(&format!(
+        "\n  verdict {} (exit {})\n",
+        paint(
+            report.verdict().label(),
+            verdict_color(report.verdict()),
+            color
+        ),
+        report.exit_code()
     ));
     out
 }
@@ -292,5 +365,67 @@ mod tests {
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1000), "1,000");
         assert_eq!(thousands(1234567), "1,234,567");
+    }
+
+    fn lock_report() -> LockReport {
+        LockReport {
+            lockfile: "package-lock.json".to_string(),
+            base: "main".to_string(),
+            new_packages: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn lock_report_with_no_changes_is_clean() {
+        let text = render_lock_human(&lock_report(), false);
+        assert!(text.contains("no new packages"));
+        assert!(text.contains("INFO (exit 0)"));
+    }
+
+    #[test]
+    fn lock_report_lists_new_packages_and_details_for_warnings() {
+        let mut lock = lock_report();
+        let mut risky = report(vec![finding(Severity::High)]);
+        risky.name = "evil-pkg".to_string();
+        let clean = report(vec![]);
+        lock.new_packages = vec![clean, risky];
+
+        let text = render_lock_human(&lock, false);
+        assert!(text.contains("2 new packages"));
+        assert!(text.contains("evil-pkg@1.0.0"));
+        assert!(text.contains("[HIGH]  runs code during npm install"));
+        assert!(text.contains("HIGH (exit 2)"));
+    }
+
+    #[test]
+    fn a_lock_report_with_unchecked_packages_is_incomplete() {
+        let mut lock = lock_report();
+        lock.errors = vec![crate::model::LockFetchError {
+            package: "ghost@1.0.0".to_string(),
+            message: "package 'ghost' was not found on npm".to_string(),
+        }];
+        let text = render_lock_human(&lock, false);
+        assert!(text.contains("could not check 1 package"));
+        assert!(text.contains("ghost@1.0.0"));
+        assert!(text.contains("incomplete"));
+        assert!(text.contains("exit 3"));
+    }
+
+    #[test]
+    fn lock_json_carries_verdict_and_errors() {
+        let mut lock = lock_report();
+        lock.new_packages = vec![self::report(vec![finding(Severity::Warn)])];
+        lock.errors = vec![crate::model::LockFetchError {
+            package: "ghost@1.0.0".to_string(),
+            message: "not found".to_string(),
+        }];
+        let value: serde_json::Value =
+            serde_json::from_str(&render_lock_json(&lock).unwrap()).unwrap();
+        assert_eq!(value["base"], "main");
+        assert_eq!(value["new_packages"][0]["name"], "evil-pkg");
+        assert_eq!(value["errors"][0]["package"], "ghost@1.0.0");
+        assert_eq!(value["verdict"], "warn");
+        assert_eq!(value["exit_code"], 3);
     }
 }

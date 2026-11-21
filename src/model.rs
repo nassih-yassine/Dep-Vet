@@ -124,6 +124,44 @@ impl Severity {
     }
 }
 
+/// Exit code for "the check could not run", shared by every command.
+pub const TOOL_ERROR_EXIT_CODE: u8 = 3;
+
+/// A lockfile diff: every package the change adds, plus anything that could
+/// not be checked.
+#[derive(Debug, Clone, Serialize)]
+pub struct LockReport {
+    pub lockfile: String,
+    pub base: String,
+    pub new_packages: Vec<PackageReport>,
+    pub errors: Vec<LockFetchError>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LockFetchError {
+    pub package: String,
+    pub message: String,
+}
+
+impl LockReport {
+    pub fn verdict(&self) -> Severity {
+        self.new_packages
+            .iter()
+            .map(PackageReport::verdict)
+            .max()
+            .unwrap_or(Severity::Info)
+    }
+
+    /// An incomplete audit is a tool error, even when nothing risky was found.
+    pub fn exit_code(&self) -> u8 {
+        if self.errors.is_empty() {
+            self.verdict().exit_code()
+        } else {
+            TOOL_ERROR_EXIT_CODE
+        }
+    }
+}
+
 /// One check, with the raw evidence a reviewer can open.
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {

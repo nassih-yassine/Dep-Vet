@@ -657,3 +657,208 @@ fn unreadable_advisory_details_still_surface_the_advisory() {
             "OSV did not return details for this advisory",
         ));
 }
+
+struct Repo {
+    directory: tempfile::TempDir,
+}
+
+impl Repo {
+    fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = Self { directory };
+        repo.git(&["init", "-q"]);
+        repo.git(&["config", "user.email", "dep-vet@example.test"]);
+        repo.git(&["config", "user.name", "dep-vet tests"]);
+        repo
+    }
+
+    fn path(&self) -> &std::path::Path {
+        self.directory.path()
+    }
+
+    fn git(&self, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(self.path())
+            .output()
+            .expect("git runs");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn write(&self, name: &str, body: &str) {
+        std::fs::write(self.path().join(name), body).unwrap();
+    }
+
+    fn commit(&self, message: &str) {
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-q", "-m", message]);
+    }
+}
+
+fn lockfile_json(packages: &[(&str, &str)]) -> String {
+    let mut entries = vec![r#""": { "name": "app", "version": "1.0.0" }"#.to_string()];
+    entries.extend(
+        packages.iter().map(|(name, version)| {
+            format!(r#""node_modules/{name}": {{ "version": "{version}" }}"#)
+        }),
+    );
+    format!(
+        r#"{{
+            "name": "app",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "packages": {{ {} }}
+        }}"#,
+        entries.join(",")
+    )
+}
+
+#[test]
+fn lock_audits_only_new_dependencies() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.commit("base");
+
+    let evil = PackageFixture {
+        created_days_ago: 1,
+        published_days_ago: 1,
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        ..PackageFixture::clean("evil-pkg")
+    };
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("express", "5.1.0"), ("evil-pkg", "1.0.0")]),
+    );
+
+    let registry = registry_with(&[evil], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("1 new package"))
+        .stdout(predicate::str::contains("evil-pkg@1.0.0"))
+        .stdout(predicate::str::contains("HIGH (exit 2)"));
+
+    let requests = registry.requests();
+    assert!(
+        requests.iter().any(|path| path.contains("evil-pkg")),
+        "the new package should be fetched"
+    );
+    assert!(
+        !requests.iter().any(|path| path.contains("express")),
+        "unchanged packages must not be fetched"
+    );
+}
+
+#[test]
+fn lock_with_no_new_dependencies_makes_no_requests() {
+    let repo = Repo::new();
+    let body = lockfile_json(&[("express", "5.1.0")]);
+    repo.write("package-lock.json", &body);
+    repo.commit("base");
+
+    let registry = registry_with(&[], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("no new packages"))
+        .stdout(predicate::str::contains("INFO (exit 0)"));
+
+    assert!(registry.requests().is_empty());
+}
+
+#[test]
+fn lock_json_lists_the_new_packages() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.commit("base");
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("express", "5.1.0"), ("added-pkg", "2.0.0")]),
+    );
+
+    let package = PackageFixture {
+        version: "2.0.0",
+        ..PackageFixture::clean("added-pkg")
+    };
+    let registry = registry_with(&[package], Some(5));
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["base"], "HEAD");
+    assert_eq!(value["new_packages"][0]["name"], "added-pkg");
+    assert_eq!(value["exit_code"], 0);
+}
+
+#[test]
+fn lock_rejects_version_one_lockfiles() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("package-lock.json"),
+        r#"{ "lockfileVersion": 1, "dependencies": {} }"#,
+    )
+    .unwrap();
+
+    binary()
+        .current_dir(directory.path())
+        .args(["lock", "package-lock.json"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "lockfileVersion 1 is not supported",
+        ));
+}
+
+#[test]
+fn lock_reports_a_missing_base_revision() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.commit("base");
+
+    let registry = registry_with(&[], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "no-such-ref"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("git failed"));
+}
+
+#[test]
+fn lock_flags_an_unfetchable_package_as_incomplete() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.commit("base");
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("express", "5.1.0"), ("ghost-pkg", "1.0.0")]),
+    );
+
+    let registry = registry_with(&[], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("ghost-pkg@1.0.0"))
+        .stdout(predicate::str::contains("incomplete"));
+}

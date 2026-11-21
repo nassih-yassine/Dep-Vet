@@ -5,6 +5,7 @@ pub mod cache;
 pub mod cli;
 pub mod date;
 pub mod http;
+pub mod lockfile;
 pub mod model;
 pub mod osv;
 pub mod registry;

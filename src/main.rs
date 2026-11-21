@@ -6,15 +6,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use dep_vet::cli::{Cli, Command};
 use dep_vet::http::HttpClient;
-use dep_vet::model::PackageSpec;
+use dep_vet::lockfile;
+use dep_vet::model::{
+    LockFetchError, LockReport, PackageReport, PackageSpec, TOOL_ERROR_EXIT_CODE as TOOL_ERROR,
+};
 use dep_vet::osv::OsvClient;
-use dep_vet::registry::RegistryClient;
-use dep_vet::report::{render_human, render_json};
+use dep_vet::registry::{RegistryClient, RegistryError};
+use dep_vet::report::{render_human, render_json, render_lock_human, render_lock_json};
 use dep_vet::signals;
-
-/// Operational failure (network, bad response, bad input). Distinct from
-/// 0/1/2 so CI can tell "this package is risky" from "the check never ran".
-const TOOL_ERROR: u8 = 3;
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -53,19 +52,13 @@ fn usage_exit(error: clap::Error) -> ExitCode {
 }
 
 fn execute(cli: &Cli) -> anyhow::Result<u8> {
+    let http = Arc::new(HttpClient::from_env(cli.no_cache));
+    let auditor = Auditor::new(&http);
+
     match &cli.command {
         Command::Npm { package, json } => {
             let spec = PackageSpec::parse(package)?;
-            let http = Arc::new(HttpClient::from_env(cli.no_cache));
-            let registry = RegistryClient::from_env(Arc::clone(&http));
-            let meta = registry.fetch(&spec)?;
-            let downloads = registry.weekly_downloads(&meta.name);
-            // Advisories are best effort: a failure is reported as an INFO
-            // finding, never as "no known vulnerabilities".
-            let advisories = OsvClient::from_env(Arc::clone(&http))
-                .query(&meta.name, &meta.version)
-                .ok();
-            let report = signals::report(meta, downloads, advisories.as_deref(), now_seconds());
+            let report = auditor.audit(&spec, now_seconds())?;
 
             let output = if *json {
                 render_json(&report)?
@@ -84,14 +77,81 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                     report_text
                 }
             };
-
-            match write_stdout(&output) {
-                Ok(()) => Ok(report.exit_code()),
-                // `dep-vet npm x | head` is not a failure.
-                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(report.exit_code()),
-                Err(error) => Err(error.into()),
-            }
+            emit(&output, report.exit_code())
         }
+
+        Command::Lock {
+            lockfile: path,
+            base,
+            json,
+        } => {
+            let current = lockfile::read(path)?;
+            let base_packages = lockfile::at_ref(path, base)?;
+            let added = lockfile::added(&current, &base_packages);
+
+            let now = now_seconds();
+            let mut new_packages = Vec::new();
+            let mut errors = Vec::new();
+            for package in added {
+                let spec = PackageSpec {
+                    name: package.name.clone(),
+                    version: Some(package.version.clone()),
+                };
+                match auditor.audit(&spec, now) {
+                    Ok(report) => new_packages.push(report),
+                    // One unpublished dependency must not hide the rest.
+                    Err(error) => errors.push(LockFetchError {
+                        package: package.spec(),
+                        message: error.to_string(),
+                    }),
+                }
+            }
+
+            let report = LockReport {
+                lockfile: path.display().to_string(),
+                base: base.clone(),
+                new_packages,
+                errors,
+            };
+            let output = if *json {
+                render_lock_json(&report)?
+            } else {
+                render_lock_human(&report, use_color(cli))
+            };
+            emit(&output, report.exit_code())
+        }
+    }
+}
+
+struct Auditor {
+    registry: RegistryClient,
+    osv: OsvClient,
+}
+
+impl Auditor {
+    fn new(http: &Arc<HttpClient>) -> Self {
+        Self {
+            registry: RegistryClient::from_env(Arc::clone(http)),
+            osv: OsvClient::from_env(Arc::clone(http)),
+        }
+    }
+
+    fn audit(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, RegistryError> {
+        let meta = self.registry.fetch(spec)?;
+        let downloads = self.registry.weekly_downloads(&meta.name);
+        // Advisories are best effort: a failure is reported as an INFO
+        // finding, never as "no known vulnerabilities".
+        let advisories = self.osv.query(&meta.name, &meta.version).ok();
+        Ok(signals::report(meta, downloads, advisories.as_deref(), now))
+    }
+}
+
+fn emit(output: &str, code: u8) -> anyhow::Result<u8> {
+    match write_stdout(output) {
+        Ok(()) => Ok(code),
+        // `dep-vet npm x | head` is not a failure.
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(code),
+        Err(error) => Err(error.into()),
     }
 }
 

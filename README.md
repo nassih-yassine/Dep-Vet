@@ -90,6 +90,32 @@ Vetting is read-only: `dep-vet` never installs the package, never writes a
 lockfile, and never executes package code. It fetches the registry packument,
 the weekly download count, and the OSV advisory list, then applies local rules.
 
+### Audit a lockfile change
+
+```sh
+dep-vet lock package-lock.json --base main
+```
+
+Reads the lockfile now and the same file at `main`, then vets every package the
+change adds. A version bump counts as new: the new tarball has not been reviewed.
+Unchanged packages are never fetched.
+
+```console
+$ dep-vet lock package-lock.json --base HEAD
+package-lock.json vs HEAD
+
+  1 new package
+
+  crossenv@0.0.2-security                      HIGH
+...
+  verdict HIGH (exit 2)
+```
+
+`package-lock.json` v2/v3 only. A v1 lockfile is rejected with the upgrade
+command rather than guessed at. If any added package cannot be checked — an
+unpublished version, a network failure — the report lists it and exits `3`,
+because an incomplete audit must not read as clean.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -97,7 +123,7 @@ the weekly download count, and the OSV advisory list, then applies local rules.
 | `0`  | clean, or informational findings only |
 | `1`  | warnings: review before adding |
 | `2`  | high risk: install scripts plus another signal, or a near-identical name |
-| `3`  | the check could not run (bad input, unknown subcommand or flag, network failure, unreadable response) |
+| `3`  | the check could not run or could not finish (bad input, unknown subcommand, network failure, unreadable response, a lockfile package that could not be fetched) |
 
 `3` exists so CI can tell "this package is risky" from "the scanner broke or was
 called wrong". clap's own exit code for usage errors is `2`, which would read as
@@ -140,6 +166,19 @@ dep-vet npm crossenv --json
 Timestamps are Unix seconds. `verdict` and `exit_code` are derived from the
 findings, so consumers do not re-implement the severity rules. JSON output never
 contains the wordmark or ANSI colors.
+
+`dep-vet lock ... --json` returns the same per-package objects plus the diff:
+
+```json
+{
+  "lockfile": "package-lock.json",
+  "base": "main",
+  "new_packages": [{ "name": "...", "findings": [] }],
+  "errors": [{ "package": "ghost@1.0.0", "message": "package 'ghost' was not found on npm" }],
+  "verdict": "high",
+  "exit_code": 2
+}
+```
 
 ### Cache
 
@@ -198,8 +237,11 @@ raw source does not ship.
 - **npm only.** Bun, pnpm, and yarn install from the same registry, so package
   vetting is accurate for them; lockfile commands and manager-specific script
   policy are not implemented.
-- **Advisories describe this version, not your tree.** dep-vet does not walk
-  transitive dependencies; it answers for the package you named.
+- **Advisories describe this version, not your tree.** `dep-vet npm` answers for
+  the package you named; `dep-vet lock` covers only the `name@version` pairs the
+  lockfile change adds, not the pre-existing tree.
+- **Lockfiles:** npm `package-lock.json` v2/v3 only. Yarn, pnpm, and bun
+  lockfiles are not parsed yet.
 - Not an SBOM generator or a Dependabot replacement.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
 - One batch query plus one request per advisory on a cold cache; bounded at 25
@@ -236,6 +278,7 @@ handling, and output are exercised end to end.
 ```
 src/cli.rs        clap surface
 src/model.rs      PackageSpec, Severity, Finding, PackageReport
+src/lockfile.rs   package-lock v2/v3 parsing, git-ref diff
 src/registry.rs   packument fetch + parsing, download counts
 src/osv.rs        advisory IDs from querybatch, details per advisory
 src/http.rs       one agent, body limit, cache read/write policy
@@ -254,12 +297,11 @@ did.
 
 ## Roadmap
 
-1. `dep-vet lock <lockfile>`: diff new dependencies against a base ref.
-2. GitHub Action wrapping `lock` with a sticky PR comment.
-3. Popular-name list built from download counts instead of a seed.
-4. PyPI, crates.io, and Go — see
+1. GitHub Action wrapping `lock` with a sticky PR comment.
+2. Popular-name list built from download counts instead of a seed.
+3. PyPI, crates.io, and Go — see
    [`docs/superpowers/specs/2026-11-21-multi-ecosystem-design.md`](docs/superpowers/specs/2026-11-21-multi-ecosystem-design.md).
-5. Advisory lookups for the whole installed tree, not one package.
+4. Advisory lookups for the whole installed tree, not one package.
 
 ## License
 
