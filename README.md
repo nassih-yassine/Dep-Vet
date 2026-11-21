@@ -807,8 +807,7 @@ did.
 
 ## Roadmap
 
-1. More ecosystems and lockfile formats (Maven dependency trees, Gradle
-   without dependency locking).
+1. More ecosystems and lockfile formats (Maven dependency trees).
 2. SARIF and SBOM output for CI consumers.
 3. Publisher history beyond the immediately previous release.
 
