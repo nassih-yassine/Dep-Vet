@@ -35,6 +35,7 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "repository-changed",
     "provenance-dropped",
     "attestation-subject-mismatch",
+    "attestation-source-mismatch",
 ];
 
 #[derive(Debug, Default, Deserialize)]
@@ -252,6 +253,7 @@ mod tests {
             deprecated: None,
             provenance: crate::model::Provenance::Unavailable,
             attestation_subject_matches: None,
+            attestation: None,
             advisories: Vec::new(),
             hidden_advisories: 0,
             not_checked: Vec::new(),

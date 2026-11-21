@@ -109,6 +109,18 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
         }
         crate::model::Provenance::Unavailable => {}
     }
+    if let Some(attestation) = &report.attestation {
+        if let Some(repository) = &attestation.source_repository {
+            push_field(&mut out, "attested src", &format!("{repository} (claimed)"));
+        }
+        if let Some(builder) = &attestation.builder {
+            push_field(&mut out, "builder", &format!("{builder} (claimed)"));
+        }
+        if let Some(commit) = &attestation.source_commit {
+            let short: String = commit.chars().take(12).collect();
+            push_field(&mut out, "commit", &format!("{short} (claimed)"));
+        }
+    }
     if let Some(publisher) = &report.publisher {
         let is_maintainer = report
             .maintainers
@@ -704,6 +716,7 @@ mod tests {
             deprecated: None,
             provenance: crate::model::Provenance::Unavailable,
             attestation_subject_matches: None,
+            attestation: None,
             advisories: Vec::new(),
             hidden_advisories: 0,
             not_checked: Vec::new(),

@@ -724,6 +724,9 @@ pub struct PackageReport {
     /// means unattested, unreadable, or not applicable; it is never "verified".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attestation_subject_matches: Option<bool>,
+    /// The SLSA predicate's claims, when published. Not verified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<AttestationClaims>,
     pub advisories: Vec<Advisory>,
     /// Advisories skipped after the per-run cap.
     pub hidden_advisories: usize,
@@ -740,6 +743,36 @@ pub struct PackageReport {
     pub upgrades: Vec<Upgrade>,
     #[serde(serialize_with = "crate::report::serialize_findings")]
     pub findings: Vec<Finding>,
+}
+
+/// What a release's attestation claims about how it was built. Every field is
+/// a claim: none of it is cryptographically verified.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AttestationClaims {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub builder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<String>,
+}
+
+impl AttestationClaims {
+    /// True when at least one claim was readable.
+    pub fn has_any(&self) -> bool {
+        self.build_type.is_some()
+            || self.builder.is_some()
+            || self.source_repository.is_some()
+            || self.source_commit.is_some()
+            || self.workflow.is_some()
+            || self.invocation.is_some()
+    }
 }
 
 /// Whether a release publishes provenance, and whether we could read it.
@@ -783,6 +816,7 @@ impl Finding {
             | "fresh-package"
             | "fresh-version"
             | "maintainer-check-unavailable"
+            | "attestation-source-mismatch"
             | "no-repository" => Confidence::Medium,
             _ => Confidence::Medium,
         }
@@ -1222,6 +1256,7 @@ mod tests {
             deprecated: None,
             provenance: crate::model::Provenance::Unavailable,
             attestation_subject_matches: None,
+            attestation: None,
             advisories: Vec::new(),
             hidden_advisories: 0,
             not_checked: Vec::new(),

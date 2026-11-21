@@ -1993,7 +1993,7 @@ fn attested_registry(subject_hex: &str) -> MockRegistry {
     let tarball = b"attested tarball";
     let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(tarball));
     let statement = format!(
-        r#"{{"subject":[{{"name":"pkg:npm/attested@1.0.0","digest":{{"sha512":"{subject_hex}"}}}}]}}"#
+        r#"{{"subject":[{{"name":"pkg:npm/attested@1.0.0","digest":{{"sha512":"{subject_hex}"}}}}],"predicate":{{"buildDefinition":{{"buildType":"https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1","externalParameters":{{"workflow":{{"repository":"https://github.com/alice/attested","path":".github/workflows/release.yml"}}}},"resolvedDependencies":[{{"uri":"git+https://github.com/alice/attested@refs/heads/main","digest":{{"gitCommit":"b39e6e63dcbfc3cf4be871acf3554efbd6d0e268"}}}}]}},"runDetails":{{"builder":{{"id":"https://github.com/actions/runner/github-hosted"}}}}}}}}"#
     );
     let envelope = base64::engine::general_purpose::STANDARD.encode(statement.as_bytes());
     let body = format!(
@@ -2002,7 +2002,7 @@ fn attested_registry(subject_hex: &str) -> MockRegistry {
 
     MockRegistry::start_with(move |base| {
         let doc = format!(
-            r#"{{"name":"attested","dist-tags":{{"latest":"1.0.0"}},"versions":{{"1.0.0":{{"dist":{{"tarball":"{base}/attested.tgz","integrity":"sha512-{digest}","attestations":{{"url":"{base}/attestation","provenance":{{"predicateType":"https://slsa.dev/provenance/v1"}}}}}}}}}}}}"#
+            r#"{{"name":"attested","repository":{{"url":"https://github.com/alice/attested"}},"dist-tags":{{"latest":"1.0.0"}},"versions":{{"1.0.0":{{"dist":{{"tarball":"{base}/attested.tgz","integrity":"sha512-{digest}","attestations":{{"url":"{base}/attestation","provenance":{{"predicateType":"https://slsa.dev/provenance/v1"}}}}}}}}}}}}"#
         );
         let mut routes = HashMap::new();
         routes.insert("/attested".to_string(), (200, doc.into_bytes()));
@@ -2033,6 +2033,14 @@ fn npm_attestations_are_checked_against_the_tarball_digest() {
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["provenance"], "present");
     assert_eq!(value["attestation_subject_matches"], true);
+    assert_eq!(
+        value["attestation"]["source_repository"],
+        "https://github.com/alice/attested"
+    );
+    assert_eq!(
+        value["attestation"]["builder"],
+        "https://github.com/actions/runner/github-hosted"
+    );
 
     // A digest for another artifact is a HIGH integrity problem.
     let registry = attested_registry(&"0".repeat(128));

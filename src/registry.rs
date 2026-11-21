@@ -39,6 +39,8 @@ pub struct PackageMeta {
     /// Whether the attestation's subject digest matches the published
     /// tarball integrity. `None` means not checked, never "unverified".
     pub attestation_subject_matches: Option<bool>,
+    /// Claims from the SLSA predicate, when one is published. Not verified.
+    pub attestation: Option<crate::model::AttestationClaims>,
     pub registry_url: String,
     /// Where a human should look this version up. `None` uses the
     /// ecosystem's default page.
@@ -296,22 +298,37 @@ fn has_attestation(doc: &VersionDoc) -> bool {
         })
 }
 
-/// Compare an attestation's in-toto subject digest with the tarball integrity
-/// the registry publishes. This is a consistency check, not signature
-/// verification: it answers "does the attestation name this exact artifact?".
-fn attestation_subject_matches(
+/// What we could read from a release's attestation endpoint.
+#[derive(Debug, Default)]
+struct AttestationInspection {
+    /// Whether the subject digest matches the tarball integrity.
+    subject_matches: Option<bool>,
+    /// SLSA predicate claims; every field is a claim, not a verification.
+    claims: Option<crate::model::AttestationClaims>,
+}
+
+/// Read the attestation once: the subject digest for the consistency check and
+/// the SLSA predicate for claimed builder and source. A failed fetch leaves
+/// both unknown, never "clean".
+fn inspect_attestations(
     http: Option<&crate::http::HttpClient>,
     attestations: Option<&Attestations>,
     dist: Option<&Dist>,
-) -> Option<bool> {
-    let http = http?;
-    let url = attestations?.url.as_deref()?;
-    let integrity = dist?.integrity.as_deref()?;
-    let expected = integrity
-        .strip_prefix("sha512-")
-        .and_then(sha512_base64_to_hex)?;
-    let body = http.get(url).ok()?;
-    subject_check(&body, &expected)
+) -> AttestationInspection {
+    let Some(http) = http else {
+        return AttestationInspection::default();
+    };
+    let Some(url) = attestations.and_then(|attestations| attestations.url.as_deref()) else {
+        return AttestationInspection::default();
+    };
+    let Ok(body) = http.get(url) else {
+        return AttestationInspection::default();
+    };
+    let expected = dist
+        .and_then(|dist| dist.integrity.as_deref())
+        .and_then(|integrity| integrity.strip_prefix("sha512-"))
+        .and_then(sha512_base64_to_hex);
+    parse_attestation_document(&body, expected.as_deref())
 }
 
 fn sha512_base64_to_hex(value: &str) -> Option<String> {
@@ -325,13 +342,18 @@ fn sha512_base64_to_hex(value: &str) -> Option<String> {
     Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-/// `Some(true)` when any subject digest matches, `Some(false)` when subjects
-/// were readable but none matched, `None` when the document could not be read.
-fn subject_check(body: &str, expected_hex: &str) -> Option<bool> {
+fn parse_attestation_document(body: &str, expected_hex: Option<&str>) -> AttestationInspection {
     use base64::Engine as _;
-    let doc: serde_json::Value = serde_json::from_str(body).ok()?;
+    let mut inspection = AttestationInspection::default();
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(body) else {
+        return inspection;
+    };
+    let Some(bundles) = doc.get("attestations").and_then(|value| value.as_array()) else {
+        return inspection;
+    };
     let mut saw_subject = false;
-    for attestation in doc.get("attestations")?.as_array()? {
+    let mut matched = false;
+    for attestation in bundles {
         let Some(payload) = attestation
             .get("bundle")
             .and_then(|bundle| bundle.get("dsseEnvelope"))
@@ -346,23 +368,65 @@ fn subject_check(body: &str, expected_hex: &str) -> Option<bool> {
         let Ok(statement) = serde_json::from_slice::<serde_json::Value>(&decoded) else {
             continue;
         };
-        let Some(subjects) = statement.get("subject").and_then(|value| value.as_array()) else {
-            continue;
-        };
-        for subject in subjects {
-            if let Some(digest) = subject
-                .get("digest")
-                .and_then(|digest| digest.get("sha512"))
-                .and_then(|digest| digest.as_str())
-            {
+        if let Some(subjects) = statement.get("subject").and_then(|value| value.as_array()) {
+            for subject in subjects {
+                let Some(digest) = subject
+                    .get("digest")
+                    .and_then(|digest| digest.get("sha512"))
+                    .and_then(|digest| digest.as_str())
+                else {
+                    continue;
+                };
                 saw_subject = true;
-                if digest.eq_ignore_ascii_case(expected_hex) {
-                    return Some(true);
+                if expected_hex.is_some_and(|expected| digest.eq_ignore_ascii_case(expected)) {
+                    matched = true;
                 }
             }
         }
+        if inspection.claims.is_none() {
+            inspection.claims = slsa_claims(&statement);
+        }
     }
-    saw_subject.then_some(false)
+    // Without a published digest there is nothing to compare against: that is
+    // "not checked", never a pass.
+    if expected_hex.is_some() && saw_subject {
+        inspection.subject_matches = Some(matched);
+    }
+    inspection
+}
+
+/// SLSA v1 claims. A statement without a `buildDefinition` is not provenance,
+/// so it produces no claims rather than empty ones.
+fn slsa_claims(statement: &serde_json::Value) -> Option<crate::model::AttestationClaims> {
+    let predicate = statement.get("predicate")?;
+    let definition = predicate.get("buildDefinition")?;
+    let workflow = definition
+        .get("externalParameters")
+        .and_then(|value| value.get("workflow"));
+    let claims = crate::model::AttestationClaims {
+        build_type: string_at(definition, &["buildType"]),
+        builder: string_at(predicate, &["runDetails", "builder", "id"]),
+        source_repository: workflow
+            .and_then(|workflow| string_at(workflow, &["repository"]))
+            .map(|repository| normalize_repository(&repository)),
+        source_commit: definition
+            .get("resolvedDependencies")
+            .and_then(|value| value.as_array())
+            .into_iter()
+            .flatten()
+            .find_map(|dependency| string_at(dependency, &["digest", "gitCommit"])),
+        workflow: workflow.and_then(|workflow| string_at(workflow, &["path"])),
+        invocation: string_at(predicate, &["runDetails", "metadata", "invocationId"]),
+    };
+    claims.has_any().then_some(claims)
+}
+
+fn string_at(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(key)?;
+    }
+    current.as_str().map(str::to_string)
 }
 
 fn install_scripts(doc: &VersionDoc) -> Vec<InstallScript> {
@@ -470,6 +534,13 @@ fn parse_packument(
         }
         _ => crate::model::Provenance::Missing,
     };
+    let inspection = inspect_attestations(
+        http,
+        doc.dist
+            .as_ref()
+            .and_then(|dist| dist.attestations.as_ref()),
+        doc.dist.as_ref(),
+    );
     let hooks = install_scripts(doc);
 
     let repository = doc
@@ -529,13 +600,8 @@ fn parse_packument(
         repository,
         deprecated: normalize_deprecated(doc.deprecated.clone()),
         provenance,
-        attestation_subject_matches: attestation_subject_matches(
-            http,
-            doc.dist
-                .as_ref()
-                .and_then(|dist| dist.attestations.as_ref()),
-            doc.dist.as_ref(),
-        ),
+        attestation_subject_matches: inspection.subject_matches,
+        attestation: inspection.claims,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
@@ -731,6 +797,63 @@ mod tests {
     }"#;
 
     #[test]
+    fn slsa_claims_are_read_as_claims() {
+        let statement = serde_json::json!({
+            "subject": [{ "name": "pkg:npm/x@1.0.0", "digest": { "sha512": "ab" } }],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+                "buildDefinition": {
+                    "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+                    "externalParameters": {
+                        "workflow": {
+                            "ref": "refs/heads/main",
+                            "repository": "https://github.com/vitejs/vite",
+                            "path": ".github/workflows/publish.yml"
+                        }
+                    },
+                    "resolvedDependencies": [{
+                        "uri": "git+https://github.com/vitejs/vite@refs/heads/main",
+                        "digest": { "gitCommit": "b39e6e63dcbfc3cf4be871acf3554efbd6d0e268" }
+                    }]
+                },
+                "runDetails": {
+                    "builder": { "id": "https://github.com/actions/runner/github-hosted" },
+                    "metadata": {
+                        "invocationId": "https://github.com/vitejs/vite/actions/runs/1/attempts/1"
+                    }
+                }
+            }
+        });
+        let claims = slsa_claims(&statement).expect("missing claims");
+        assert_eq!(
+            claims.source_repository.as_deref(),
+            Some("https://github.com/vitejs/vite")
+        );
+        assert_eq!(
+            claims.source_commit.as_deref(),
+            Some("b39e6e63dcbfc3cf4be871acf3554efbd6d0e268")
+        );
+        assert_eq!(
+            claims.workflow.as_deref(),
+            Some(".github/workflows/publish.yml")
+        );
+        assert_eq!(
+            claims.builder.as_deref(),
+            Some("https://github.com/actions/runner/github-hosted")
+        );
+        assert_eq!(
+            claims.build_type.as_deref(),
+            Some("https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1")
+        );
+
+        assert!(
+            slsa_claims(&serde_json::json!({ "predicate": { "name": "x" } })).is_none(),
+            "a publish attestation is not provenance"
+        );
+        assert!(slsa_claims(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
     fn subject_digests_are_compared_without_claiming_verification() {
         let payload = r#"{"subject":[{"name":"pkg:npm/x@1.0.0","digest":{"sha512":"ABCDEF"}}]}"#;
         use base64::Engine as _;
@@ -738,10 +861,27 @@ mod tests {
         let doc = format!(
             r#"{{"attestations":[{{"bundle":{{"dsseEnvelope":{{"payload":"{encoded}"}}}}}}]}}"#
         );
-        assert_eq!(subject_check(&doc, "abcdef"), Some(true));
-        assert_eq!(subject_check(&doc, "123456"), Some(false));
-        assert_eq!(subject_check("{}", "abcdef"), None);
-        assert_eq!(subject_check("not json", "abcdef"), None);
+        assert_eq!(
+            parse_attestation_document(&doc, Some("abcdef")).subject_matches,
+            Some(true)
+        );
+        assert_eq!(
+            parse_attestation_document(&doc, Some("123456")).subject_matches,
+            Some(false)
+        );
+        assert_eq!(
+            parse_attestation_document(&doc, None).subject_matches,
+            None,
+            "no published digest means no comparison, not a pass"
+        );
+        assert_eq!(
+            parse_attestation_document("{}", Some("abcdef")).subject_matches,
+            None
+        );
+        assert_eq!(
+            parse_attestation_document("not json", Some("abcdef")).subject_matches,
+            None
+        );
 
         // A truncated integrity value is not a digest and must not compare.
         assert_eq!(sha512_base64_to_hex("AAAA"), None);

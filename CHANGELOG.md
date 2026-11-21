@@ -4,7 +4,10 @@
 
 - **Attestations are checked against the artifact.** For npm, dep-vet reads the
   published attestation and compares its subject digest with the tarball
-  checksum; a mismatch is HIGH. Signatures are still not verified.
+  checksum; a mismatch is HIGH. It also reports the SLSA predicate's claimed
+  builder, workflow, source repository, and commit, flagging a source
+  repository that differs from package metadata. Signatures are still not
+  verified, and every claim is labelled as such.
 - **Richer release diffs.** npm install hooks are compared as commands (WARN,
   HIGH when the new one fetches or decodes code), and newly shipped binary
   files are listed as INFO.

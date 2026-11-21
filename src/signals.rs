@@ -93,6 +93,7 @@ pub fn report(
         deprecated: meta.deprecated,
         provenance: meta.provenance,
         attestation_subject_matches: meta.attestation_subject_matches,
+        attestation: meta.attestation,
         advisories: advisories
             .map(|list| list.advisories.clone())
             .unwrap_or_default(),
@@ -343,6 +344,19 @@ fn suspect_for<'a>(
     typosquat::closest(&meta.name, seed_for(ecosystem), local)
 }
 
+/// Case, trailing slash, and `.git` do not make two repository URLs different.
+fn same_repository(left: &str, right: &str) -> bool {
+    fn canonical(url: &str) -> String {
+        let trimmed = url.trim().trim_end_matches('/');
+        trimmed
+            .strip_suffix(".git")
+            .unwrap_or(trimmed)
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+    }
+    canonical(left) == canonical(right)
+}
+
 pub fn assess(
     meta: &PackageMeta,
     ecosystem: Ecosystem,
@@ -404,6 +418,24 @@ pub fn assess(
             evidence: vec![Evidence {
                 label: "registry metadata".to_string(),
                 value: meta.registry_url.clone(),
+                url: Some(meta.registry_url.clone()),
+            }],
+        });
+    }
+
+    if let (Some(attestation), Some(declared)) = (&meta.attestation, &meta.repository)
+        && let Some(claimed) = &attestation.source_repository
+        && !same_repository(claimed, declared)
+    {
+        findings.push(Finding {
+            id: "attestation-source-mismatch",
+            severity: Severity::Info,
+            title: "the attestation names a different source repository".to_string(),
+            detail: format!("attested: {claimed}; package metadata: {declared}"),
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "attestation".to_string(),
+                value: claimed.clone(),
                 url: Some(meta.registry_url.clone()),
             }],
         });
@@ -870,6 +902,7 @@ mod tests {
             deprecated: None,
             provenance: crate::model::Provenance::Unavailable,
             attestation_subject_matches: None,
+            attestation: None,
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
             review_url: None,
             latest_version: None,
@@ -1162,6 +1195,40 @@ mod tests {
         assert!(
             !ids(&assess(&unknown, Ecosystem::Npm, &[], &Profile::NPM, NOW))
                 .contains(&"repository-changed")
+        );
+    }
+
+    #[test]
+    fn an_attestation_naming_another_repository_is_information() {
+        let mut meta = meta();
+        meta.repository = Some("https://github.com/alice/home".to_string());
+        meta.attestation = Some(crate::model::AttestationClaims {
+            build_type: None,
+            builder: Some("https://github.com/actions/runner/github-hosted".to_string()),
+            source_repository: Some("https://github.com/mallory/elsewhere".to_string()),
+            source_commit: None,
+            workflow: None,
+            invocation: None,
+        });
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert_eq!(
+            finding(&findings, "attestation-source-mismatch").severity,
+            Severity::Info
+        );
+
+        // Same repo, spelled differently: no finding.
+        meta.attestation.as_mut().unwrap().source_repository =
+            Some("https://github.com/Alice/Home.git/".to_string());
+        assert!(
+            !ids(&assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"attestation-source-mismatch")
+        );
+
+        // No declared repository, nothing to compare against.
+        meta.repository = None;
+        assert!(
+            !ids(&assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"attestation-source-mismatch")
         );
     }
 

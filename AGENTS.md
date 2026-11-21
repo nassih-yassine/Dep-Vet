@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 475 unit + 121 end-to-end tests
+cargo test --locked                      # 477 unit + 121 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -306,8 +306,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   no report may claim a signature, builder, or source commit was verified.
   npm's `attestation_subject_matches` compares the in-toto subject's sha512
   hex with the `dist.integrity` tarball digest: a mismatch is HIGH
-  (`attestation-subject-mismatch`), unreadable stays `None`. Cryptographic
-  Sigstore/SLSA checks are not implemented.
+  (`attestation-subject-mismatch`), unreadable stays `None`. The SLSA v1
+  predicate supplies claimed builder/source/commit/workflow (`AttestationClaims`),
+  rendered with `(claimed)`; a claimed source repository differing from the
+  package repository is INFO `attestation-source-mismatch`. Never describe any
+  of this as verification. Cryptographic Sigstore/SLSA checks are not
+  implemented.
 - **Release-transition signals are history-based and gated.** `HISTORY_WINDOW_DAYS`
   (30) bounds them: PyPI and crates.io fetch two extra documents only for a
   version inside it. `previous_release` picks by timestamp, never list order.

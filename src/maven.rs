@@ -240,6 +240,7 @@ fn parse_search(
         deprecated: None,
         provenance: crate::model::Provenance::Unavailable,
         attestation_subject_matches: None,
+        attestation: None,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
@@ -306,6 +307,7 @@ fn google_meta(
         deprecated: None,
         provenance: crate::model::Provenance::Unavailable,
         attestation_subject_matches: None,
+        attestation: None,
         registry_url: url.to_string(),
         review_url: Some(format!(
             "https://maven.google.com/web/index.html#{group}:{artifact}:{version}"

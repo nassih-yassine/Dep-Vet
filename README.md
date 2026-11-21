@@ -296,10 +296,13 @@ Reports say whether a release publishes provenance, never that it is verified:
 - **Everything else** — `unavailable`; these registries publish no provenance
   this tool can read.
 
-For npm, dep-vet also reads the attestation and compares its in-toto subject
-digest with the tarball checksum the registry publishes. A match says the
-attestation names this exact artifact; a mismatch is HIGH, because the tarball
-is then not the one that was attested.
+For npm, dep-vet also reads the attestation: it compares the in-toto subject
+digest with the tarball checksum, and reports the SLSA predicate's claimed
+builder, workflow, source repository, and commit. A subject mismatch is HIGH,
+because the tarball is then not the one that was attested. If the attested
+source repository differs from the package metadata's repository, that is an
+INFO finding. The claims are labelled `(claimed)` because nothing about them is
+cryptographically verified.
 
 `present` means the attestation exists, **not** that its signature, builder, or
 source commit was verified. `missing` is not suspicious on its own: most

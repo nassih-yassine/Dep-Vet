@@ -229,6 +229,7 @@ fn parse_versions(
         deprecated,
         provenance: crate::model::Provenance::Unavailable,
         attestation_subject_matches: None,
+        attestation: None,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
