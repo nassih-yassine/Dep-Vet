@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 .depvet-cache/
+
+# local-only notes and design docs
+docs/

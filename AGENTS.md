@@ -2,7 +2,9 @@
 
 Rust CLI that checks an npm package's risk **before** it enters the lockfile.
 v0.1 ships `dep-vet npm <name>[@version]` only. `README.md` is the user-facing
-doc; `docs/brief.md` is the product rationale and evidence.
+doc. `docs/` holds the product brief and design specs but is **gitignored and
+not published**: never link to it from README or the wiki, and never `git add -f`
+it without asking.
 
 ## Working agreements
 
@@ -92,6 +94,8 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - **`lock` diffs `name@version` pairs**, so a version bump is "new" and gets
   audited. It reads `package-lock.json` v2/v3 only; v1 is rejected instead of
   approximated.
+- **`docs/` is local-only.** It is in `.gitignore` on purpose; do not track it,
+  link to it from user-facing docs, or delete it from disk.
 - **Workflow YAML is not covered by `cargo test`.** Validate it with
   `ruby -ryaml -e 'YAML.load_file(...)'`, and exercise the embedded shell with a
   stubbed `gh` and `dep-vet` before pushing. Third-party actions are avoided on

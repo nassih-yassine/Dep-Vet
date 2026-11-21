@@ -324,8 +324,7 @@ did.
 1. Prebuilt binaries via `cargo-dist`, so the GitHub Action stops compiling
    from source and users stop needing a Rust toolchain.
 2. Popular-name list built from download counts instead of a seed.
-3. PyPI, crates.io, and Go — see
-   [`docs/superpowers/specs/2026-11-21-multi-ecosystem-design.md`](docs/superpowers/specs/2026-11-21-multi-ecosystem-design.md).
+3. PyPI, crates.io, and Go. The design is kept locally (`docs/`), not published.
 4. Advisory lookups for the whole installed tree, not one package.
 
 ## License
