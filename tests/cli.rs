@@ -60,6 +60,7 @@ impl MockRegistry {
             .env("DEPVET_OSV_BASE", &self.base)
             .env("DEPVET_PYPI_BASE", &self.base)
             .env("DEPVET_CRATES_BASE", &self.base)
+            .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
         command
@@ -469,7 +470,7 @@ fn binary() -> Command {
 #[test]
 fn unknown_subcommand_is_a_tool_error_not_a_verdict() {
     binary()
-        .args(["go", "example.com/x"])
+        .args(["maven", "org.example:thing"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("usage error"))
@@ -1343,4 +1344,103 @@ fn crates_unknown_crate_is_a_tool_error() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("was not found on crates.io"));
+}
+
+const GIN_MODULE: &str = r#"{
+    "packageKey": { "system": "GO", "name": "github.com/gin-gonic/gin" },
+    "versions": [
+        {
+            "versionKey": { "version": "v1.9.1" },
+            "publishedAt": "2023-06-13T00:00:00Z",
+            "isDefault": true,
+            "isDeprecated": false
+        }
+    ]
+}"#;
+
+const GIN_ROUTE: &str = "/v3/systems/go/packages/github.com%2Fgin-gonic%2Fgin";
+
+fn go_registry(route: &str, status: u16, body: &str) -> MockRegistry {
+    let mut routes = HashMap::new();
+    routes.insert(route.to_string(), (status, body.to_string()));
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    MockRegistry::start(routes)
+}
+
+#[test]
+fn go_module_reports_what_go_cannot_check() {
+    let registry = go_registry(GIN_ROUTE, 200, GIN_MODULE);
+    registry
+        .command()
+        .args(["go", "github.com/gin-gonic/gin", "--json"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"ecosystem\": \"go\""))
+        .stdout(predicate::str::contains("\"execution\""))
+        .stdout(predicate::str::contains("\"maintainers\""))
+        .stdout(predicate::str::contains("\"repository\""))
+        .stdout(predicate::str::contains("\"downloads\""));
+}
+
+#[test]
+fn go_module_never_reports_a_missing_repository() {
+    let registry = go_registry(GIN_ROUTE, 200, GIN_MODULE);
+    registry
+        .command()
+        .args(["go", "github.com/gin-gonic/gin"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("no repository").not());
+}
+
+#[test]
+fn go_unknown_module_is_a_tool_error() {
+    let registry = go_registry(GIN_ROUTE, 200, GIN_MODULE);
+    registry
+        .command()
+        .args(["go", "example.com/ghost"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "was not found on the Go module index",
+        ));
+}
+
+#[test]
+fn go_unknown_version_is_a_tool_error() {
+    let registry = go_registry(GIN_ROUTE, 200, GIN_MODULE);
+    registry
+        .command()
+        .args(["go", "github.com/gin-gonic/gin@v9.9.9"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("v9.9.9"))
+        .stderr(predicate::str::contains("not found in the Go module index"));
+}
+
+#[test]
+fn go_malformed_response_is_a_tool_error() {
+    let registry = go_registry(GIN_ROUTE, 200, "{ nope");
+    registry
+        .command()
+        .args(["go", "github.com/gin-gonic/gin"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("could not read"));
+}
+
+#[test]
+fn go_invalid_module_never_reaches_the_network() {
+    let registry = go_registry(GIN_ROUTE, 200, GIN_MODULE);
+    registry
+        .command()
+        .args(["go", "../etc/passwd"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("characters npm does not allow"));
+
+    assert!(registry.requests().is_empty());
 }

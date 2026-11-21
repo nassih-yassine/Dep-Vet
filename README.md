@@ -28,7 +28,7 @@
 ---
 
 `npm install` runs code, and so does a Python sdist build. `dep-vet` reads
-public registry metadata and OSV advisories for **npm, PyPI, and crates.io**, then tells you
+public registry metadata and OSV advisories for **npm, PyPI, crates.io, and Go modules**, then tells you
 what a package will do at that moment: whether it runs install-time code, how
 old it is, who published this version, whether its name is one typo away from a
 package you trust, what vulnerabilities apply to this exact version, and whether
@@ -135,6 +135,19 @@ crates.io exposes a publisher per version and an owner list, so publisher
 agreement is checked. It does **not** expose the file list, so whether a crate
 has a `build.rs` cannot be seen from metadata: execution is reported as
 `not checked` rather than guessed. Yanked versions are warnings.
+
+### Check a Go module
+
+```sh
+dep-vet go github.com/gin-gonic/gin            # default version
+dep-vet go github.com/gin-gonic/gin@v1.9.1     # exact version
+dep-vet go github.com/user/repo/v2             # major-version suffix
+```
+
+Go modules have no install hooks, no owner list, no download figure, and no
+repository link in the module index, so those appear as `not checked`. What is
+checked: advisories (OSV ecosystem `Go`), deprecation, publish times, and
+module-path typosquatting.
 
 ### Audit a lockfile change
 
@@ -315,14 +328,15 @@ clean.
 
 ## Scope and limits
 
-- **npm, PyPI, and crates.io.** Bun, pnpm, and yarn install from the same npm
-  registry, so npm vetting is accurate for them. `dep-vet lock` parses
+- **npm, PyPI, crates.io, and Go.** Bun, pnpm, and yarn install from the same
+  npm registry, so npm vetting is accurate for them. `dep-vet lock` parses
   `package-lock.json` only; there is no `requirements.txt`, `Cargo.lock`, or
   `go.mod` audit yet.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
-  download count; crates.io has no file list, so `build.rs` cannot be detected.
-  Those appear as `not checked`. If crates.io's owner endpoint fails, the report
-  says "maintainer list unavailable" instead of implying agreement.
+  download count; crates.io has no file list, so `build.rs` cannot be detected;
+  Go modules have no execution, owners, downloads, or repository link in the
+  index. Those appear as `not checked`. If crates.io's owner endpoint fails, the
+  report says "maintainer list unavailable" instead of implying agreement.
 - **Typosquat context depends on what is on disk.** `dep-vet lock` compares
   against the base lockfile; `dep-vet npm` uses the nearest `package-lock.json`
   when one exists, and `--no-local` turns that off. Either way the seed list is
@@ -373,6 +387,7 @@ src/lockfile.rs   package-lock v2/v3 parsing, git-ref diff
 src/registry.rs   npm packument fetch + parsing, download counts
 src/pypi.rs       PyPI JSON API, sdist-only detection, yanked releases
 src/crates.rs     crates.io API, owner list, yanked releases
+src/go.rs         Go module index, versions, publish times, deprecation
 src/osv.rs        advisory IDs from querybatch, details per advisory
 src/http.rs       one agent, body limit, cache read/write policy
 src/cache.rs      SQLite cache with TTL and stale fallback
@@ -392,8 +407,8 @@ did.
 
 1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
    against your own dependencies.
-2. Go. The design is kept locally (`docs/`), not published.
-3. Advisory lookups for the whole installed tree, not one package.
+2. Advisory lookups for the whole installed tree, not one package.
+3. Lockfile audits for PyPI, Cargo, and Go.
 
 ## License
 

@@ -60,6 +60,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Vet a Go module before adding it
+    Go {
+        /// Module path with optional version: github.com/gin-gonic/gin@v1.9.1
+        package: String,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -127,6 +137,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_go_command() {
+        let cli =
+            Cli::try_parse_from(["dep-vet", "go", "github.com/gin-gonic/gin@v1.9.1"]).unwrap();
+        match cli.command {
+            Command::Go { package, json } => {
+                assert_eq!(package, "github.com/gin-gonic/gin@v1.9.1");
+                assert!(!json);
+            }
+            _ => panic!("expected go command"),
+        }
+    }
+
+    #[test]
     fn parses_crates_command() {
         let cli = Cli::try_parse_from(["dep-vet", "crates", "serde@1.0.229"]).unwrap();
         match cli.command {
@@ -189,7 +212,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_subcommands() {
-        assert!(Cli::try_parse_from(["dep-vet", "go", "example.com/x"]).is_err());
+        assert!(Cli::try_parse_from(["dep-vet", "maven", "org.example:thing"]).is_err());
     }
 
     #[test]

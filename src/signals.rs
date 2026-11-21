@@ -82,6 +82,7 @@ fn package_page(ecosystem: Ecosystem, name: &str, version: &str) -> String {
         Ecosystem::Npm => package_page_url(name, version),
         Ecosystem::Pypi => format!("https://pypi.org/project/{name}/{version}/"),
         Ecosystem::CratesIo => format!("https://crates.io/crates/{name}/{version}"),
+        Ecosystem::Go => format!("https://pkg.go.dev/{name}@{version}"),
     }
 }
 
@@ -90,6 +91,7 @@ fn project_page(ecosystem: Ecosystem, name: &str) -> String {
         Ecosystem::Npm => format!("https://www.npmjs.com/package/{name}"),
         Ecosystem::Pypi => format!("https://pypi.org/project/{name}/"),
         Ecosystem::CratesIo => format!("https://crates.io/crates/{name}"),
+        Ecosystem::Go => format!("https://pkg.go.dev/{name}"),
     }
 }
 
@@ -173,6 +175,7 @@ pub fn assess(
         Ecosystem::Npm => typosquat::POPULAR,
         Ecosystem::Pypi => typosquat::POPULAR_PYPI,
         Ecosystem::CratesIo => typosquat::POPULAR_CRATES,
+        Ecosystem::Go => typosquat::POPULAR_GO,
     };
     let suspect = if profile.typosquat {
         typosquat::closest(&meta.name, seed, local)
@@ -394,7 +397,7 @@ pub fn assess(
         });
     }
 
-    if meta.repository.is_none() {
+    if profile.repository && meta.repository.is_none() {
         findings.push(Finding {
             id: "no-repository",
             severity: Severity::Info,
@@ -534,6 +537,31 @@ mod tests {
 
         let report = report(meta, Ecosystem::Npm, None, None, &[], partial, NOW);
         assert_eq!(report.not_checked, vec!["typosquat"]);
+    }
+
+    #[test]
+    fn go_reports_its_missing_signals_and_suppresses_repository_noise() {
+        let report = report(meta(), Ecosystem::Go, None, None, &[], Profile::GO, NOW);
+        assert_eq!(
+            report.not_checked,
+            vec!["execution", "maintainers", "repository", "downloads"]
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "no-repository")
+        );
+    }
+
+    #[test]
+    fn go_typosquat_uses_the_module_seed() {
+        let mut meta = meta();
+        meta.name = "github.com/gin-gonic/gln".to_string();
+        let findings = assess(&meta, Ecosystem::Go, &[], &Profile::GO, NOW);
+        let finding = finding(&findings, "typosquat");
+        assert_eq!(finding.severity, Severity::High);
+        assert!(finding.detail.contains("github.com/gin-gonic/gin"));
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use dep_vet::cli::{Cli, Command};
 use dep_vet::crates::{CratesClient, CratesError};
+use dep_vet::go::{GoClient, GoError};
 use dep_vet::http::HttpClient;
 use dep_vet::lockfile;
 use dep_vet::model::Ecosystem;
@@ -70,6 +71,12 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
             let report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            emit_package(cli, *json, &report)
+        }
+
+        Command::Go { package, json } => {
+            let spec = PackageSpec::parse_go(package)?;
+            let report = auditor.audit_go(&spec, now_seconds())?;
             emit_package(cli, *json, &report)
         }
 
@@ -195,6 +202,7 @@ struct Auditor {
     registry: RegistryClient,
     pypi: PypiClient,
     crates: CratesClient,
+    go: GoClient,
     osv: OsvClient,
 }
 
@@ -204,6 +212,7 @@ impl Auditor {
             registry: RegistryClient::from_env(Arc::clone(http)),
             pypi: PypiClient::from_env(Arc::clone(http)),
             crates: CratesClient::from_env(Arc::clone(http)),
+            go: GoClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
         }
     }
@@ -229,6 +238,23 @@ impl Auditor {
             advisories.as_ref(),
             local,
             Profile::NPM,
+            now,
+        ))
+    }
+
+    fn audit_go(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, GoError> {
+        let meta = self.go.fetch(spec)?;
+        let advisories = self
+            .osv
+            .query(Ecosystem::Go, &meta.name, &meta.version)
+            .ok();
+        Ok(signals::report(
+            meta,
+            Ecosystem::Go,
+            None,
+            advisories.as_ref(),
+            &[],
+            Profile::GO,
             now,
         ))
     }
