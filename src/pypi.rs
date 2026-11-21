@@ -57,7 +57,42 @@ impl PypiClient {
             }
             Err(error) => return Err(PypiError::Http(error.to_string())),
         };
-        parse_project(spec, &body, &url)
+        let mut meta = parse_project(spec, &body, &url)?;
+        self.enrich_history(&mut meta);
+        Ok(meta)
+    }
+
+    /// Requires-dist for this release and the previous one, only for releases
+    /// inside the history window. Older versions cannot match the transition
+    /// signals, so they must not cost two requests.
+    fn enrich_history(&self, meta: &mut PackageMeta) {
+        let Some(published) = meta.published_at else {
+            return;
+        };
+        if crate::cache::now_seconds() - published
+            > crate::registry::HISTORY_WINDOW_DAYS * crate::date::SECONDS_PER_DAY
+        {
+            return;
+        }
+        let Some(previous) = meta.release.previous_version.clone() else {
+            return;
+        };
+        meta.release.dependencies = self.version_dependencies(&meta.name, &meta.version);
+        meta.release.previous_dependencies = self.version_dependencies(&meta.name, &previous);
+    }
+
+    fn version_dependencies(&self, name: &str, version: &str) -> Vec<String> {
+        let url = format!(
+            "{}/pypi/{name}/{version}/json",
+            self.base.trim_end_matches('/')
+        );
+        let Ok(body) = self.http.get(&url) else {
+            return Vec::new();
+        };
+        let Ok(project) = serde_json::from_str::<Project>(&body) else {
+            return Vec::new();
+        };
+        dependency_names(project.info.requires_dist.as_deref().unwrap_or_default())
     }
 }
 
@@ -185,10 +220,33 @@ struct Project {
     releases: BTreeMap<String, Vec<File>>,
 }
 
+/// PEP 508 strings to bare names: drop markers, extras, and version operators.
+fn dependency_names(requirements: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = requirements
+        .iter()
+        .map(|requirement| requirement.as_str())
+        .map(|requirement| requirement.split(';').next().unwrap_or(requirement))
+        .map(|requirement| {
+            requirement
+                .split(['<', '>', '=', '!', '~', '[', '(', ' '])
+                .next()
+                .unwrap_or(requirement)
+                .trim()
+        })
+        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("extra"))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 #[derive(Debug, Deserialize)]
 struct Info {
     name: String,
     version: String,
+    #[serde(default)]
+    requires_dist: Option<Vec<String>>,
     #[serde(default)]
     home_page: Option<String>,
     #[serde(default)]
@@ -259,6 +317,23 @@ mod tests {
         assert!(!meta.build_from_source, "a wheel exists");
         assert!(meta.maintainers.is_empty());
         assert_eq!(meta.publisher, None);
+    }
+
+    #[test]
+    fn dependency_strings_become_bare_names() {
+        let names = dependency_names(&[
+            "requests[socks]>=2.0".to_string(),
+            "tomli; python_version < '3.11'".to_string(),
+            "typing-extensions".to_string(),
+        ]);
+        assert_eq!(
+            names,
+            vec![
+                "requests".to_string(),
+                "tomli".to_string(),
+                "typing-extensions".to_string()
+            ]
+        );
     }
 
     #[test]

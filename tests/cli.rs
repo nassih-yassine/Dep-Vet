@@ -1793,6 +1793,117 @@ fn a_tree_audit_batches_osv_and_downloads() {
     assert_eq!(advisories, vec![1, 1]);
 }
 
+fn pypi_project(uploaded: &str, previous: &str, requires: Option<&str>) -> String {
+    let requires = match requires {
+        Some(requires) => format!("[\"{requires}\"]"),
+        None => "null".to_string(),
+    };
+    format!(
+        r#"{{
+            "info": {{ "name": "recent-pkg", "version": "1.1.0", "requires_dist": {requires} }},
+            "urls": [ {{ "packagetype": "bdist_wheel", "upload_time": "{uploaded}" }} ],
+            "releases": {{
+                "1.0.0": [ {{ "packagetype": "bdist_wheel", "upload_time": "{previous}" }} ],
+                "1.1.0": [ {{ "packagetype": "bdist_wheel", "upload_time": "{uploaded}" }} ]
+            }}
+        }}"#
+    )
+}
+
+#[test]
+fn pypi_history_is_fetched_only_for_recent_releases() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/pypi/recent-pkg/json".to_string(),
+        (
+            200,
+            pypi_project(
+                &days_ago(1),
+                &days_ago(100),
+                Some("tomli; python_version < '3.11'"),
+            ),
+        ),
+    );
+    routes.insert(
+        "/pypi/recent-pkg/1.1.0/json".to_string(),
+        (
+            200,
+            pypi_project(
+                &days_ago(1),
+                &days_ago(100),
+                Some("tomli; python_version < '3.11'"),
+            ),
+        ),
+    );
+    routes.insert(
+        "/pypi/recent-pkg/1.0.0/json".to_string(),
+        (
+            200,
+            pypi_project(&days_ago(400), &days_ago(500), Some("requests")),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["pypi", "recent-pkg==1.1.0", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["id"] == "dependency-added"),
+        "missing dependency-added: {}",
+        value["findings"]
+    );
+    assert_eq!(
+        registry
+            .requests()
+            .iter()
+            .filter(|path| path.contains("/1.1.0/json") || path.contains("/1.0.0/json"))
+            .count(),
+        2
+    );
+
+    // A release outside the window must not cost history requests.
+    let mut old = HashMap::new();
+    old.insert(
+        "/pypi/recent-pkg/json".to_string(),
+        (
+            200,
+            pypi_project(&days_ago(400), &days_ago(500), Some("tomli")),
+        ),
+    );
+    old.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(old);
+    registry
+        .command()
+        .args(["pypi", "recent-pkg==1.1.0"])
+        .assert()
+        .code(0);
+    assert!(
+        !registry
+            .requests()
+            .iter()
+            .any(|path| path.contains("/1.1.0/json")),
+        "history fetched for an old release: {:?}",
+        registry.requests()
+    );
+}
+
 #[test]
 fn scoped_packages_get_downloads_one_at_a_time() {
     let repo = Repo::new();

@@ -78,6 +78,11 @@ pub enum RegistryError {
     Decode(String),
 }
 
+/// History signals only concern releases this recent; older versions are
+/// covered by advisories, and fetching their history would cost requests that
+/// change nothing.
+pub const HISTORY_WINDOW_DAYS: i64 = 30;
+
 pub struct RegistryClient {
     http: Arc<HttpClient>,
     registry_base: String,
@@ -132,6 +137,11 @@ impl RegistryClient {
         let names = [name.to_string()];
         self.weekly_downloads_many(&names).remove(name)
     }
+
+    /// History signals only concern releases this recent; older versions are
+    /// covered by advisories, and fetching their history would cost requests that
+    /// change nothing.
+    pub const HISTORY_WINDOW_DAYS: i64 = 30;
 
     /// Weekly downloads for many packages. The endpoint takes up to 128
     /// comma-separated names; names absent from a response are absent here.

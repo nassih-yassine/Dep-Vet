@@ -13,10 +13,7 @@ use crate::version::leading_number;
 pub const FRESH_DAYS: i64 = 7;
 /// A version newer than this on a package with no history is worth a look.
 pub const RECENT_VERSION_DAYS: i64 = 7;
-/// History signals only concern releases this recent: older versions are
-/// covered by advisories, and fetching history for them would cost requests
-/// that change nothing.
-pub const HISTORY_WINDOW_DAYS: i64 = 30;
+use crate::registry::HISTORY_WINDOW_DAYS;
 /// Nothing published for this long, then a release, is the classic pattern of
 /// a hijacked or revived package.
 pub const DORMANCY_DAYS: i64 = 365;

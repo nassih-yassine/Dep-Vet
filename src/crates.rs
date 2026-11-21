@@ -63,8 +63,68 @@ impl CratesClient {
         let owners_url = format!("{}/owners", url);
         let owners = self.http.get(&owners_url).ok();
 
-        parse_crate(spec, &body, &url, owners.as_deref())
+        let mut meta = parse_crate(spec, &body, &url, owners.as_deref())?;
+        self.enrich_history(&mut meta);
+        Ok(meta)
     }
+
+    fn enrich_history(&self, meta: &mut PackageMeta) {
+        let Some(published) = meta.published_at else {
+            return;
+        };
+        if crate::cache::now_seconds() - published
+            > crate::registry::HISTORY_WINDOW_DAYS * crate::date::SECONDS_PER_DAY
+        {
+            return;
+        }
+        let Some(previous) = meta.release.previous_version.clone() else {
+            return;
+        };
+        meta.release.dependencies = self.version_dependencies(&meta.name, &meta.version);
+        meta.release.previous_dependencies = self.version_dependencies(&meta.name, &previous);
+    }
+
+    fn version_dependencies(&self, name: &str, version: &str) -> Vec<String> {
+        let url = format!(
+            "{}/api/v1/crates/{name}/{version}/dependencies",
+            self.base.trim_end_matches('/')
+        );
+        let Ok(body) = self.http.get(&url) else {
+            return Vec::new();
+        };
+        parse_dependencies(&body)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DependencyResponse {
+    #[serde(default)]
+    dependencies: Vec<CrateDependency>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CrateDependency {
+    #[serde(default)]
+    crate_id: String,
+    #[serde(default)]
+    kind: String,
+}
+
+/// Runtime and build dependencies; dev-dependencies never ship.
+fn parse_dependencies(body: &str) -> Vec<String> {
+    let Ok(response) = serde_json::from_str::<DependencyResponse>(body) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = response
+        .dependencies
+        .into_iter()
+        .filter(|dependency| dependency.kind != "dev")
+        .map(|dependency| dependency.crate_id)
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn parse_crate(
@@ -261,6 +321,19 @@ mod tests {
         assert_eq!(meta.maintainers, vec!["dtolnay", "oli-obk"]);
         assert!(meta.maintainers_known);
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn crate_dependencies_drop_dev_entries() {
+        let body = r#"{ "dependencies": [
+            { "crate_id": "rand", "kind": "normal" },
+            { "crate_id": "criterion", "kind": "dev" },
+            { "crate_id": "cc", "kind": "build" }
+        ] }"#;
+        assert_eq!(
+            parse_dependencies(body),
+            vec!["cc".to_string(), "rand".to_string()]
+        );
     }
 
     #[test]
