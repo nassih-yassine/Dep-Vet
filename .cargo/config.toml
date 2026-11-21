@@ -1,0 +1,5 @@
+[env]
+# aws-lc-sys (pulled in by sigstore verification) needs NASM only on Windows.
+# Its crate ships prebuilt assembly objects, so release runners do not need the
+# tool; Linux and macOS builds ignore this value.
+AWS_LC_SYS_PREBUILT_NASM = "1"
