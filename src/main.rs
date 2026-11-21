@@ -326,16 +326,18 @@ impl Auditor {
             .map(|package| OsvQuery {
                 ecosystem,
                 name: package.name.clone(),
-                version: package.version.clone(),
+                // Gemfile.lock records `number-platform`; OSV keys gems by
+                // the registry number.
+                version: if ecosystem == Ecosystem::RubyGems {
+                    dep_vet::rubygems::osv_version(&package.version).to_string()
+                } else {
+                    package.version.clone()
+                },
             })
             .collect();
-        match self.osv.query_batch(&queries) {
-            Ok(mut lists) => {
-                lists.resize(queries.len(), AdvisoryList::default());
-                lists.into_iter().map(Some).collect()
-            }
-            Err(_) => vec![None; packages.len()],
-        }
+        let mut lists = self.osv.query_batch(&queries);
+        lists.resize(queries.len(), None);
+        lists
     }
 
     /// Weekly downloads for a tree, in package order. npm only.
@@ -621,17 +623,6 @@ fn spec_for(
     }
 }
 
-/// Index of a package inside the slice the pre-pass used. Lockfiles can repeat
-/// a name at different versions, so match both.
-fn package_index(
-    packages: &[lockfile::LockedPackage],
-    package: &lockfile::LockedPackage,
-) -> Option<usize> {
-    packages.iter().position(|candidate| {
-        candidate.name == package.name && candidate.version == package.version
-    })
-}
-
 fn audit_packages(
     auditor: &Auditor,
     ecosystem: Ecosystem,
@@ -678,13 +669,13 @@ fn audit_packages(
     } else {
         MAX_CONCURRENT_AUDITS
     };
-    for batch in packages.chunks(concurrency) {
+    for (chunk_index, batch) in packages.chunks(concurrency).enumerate() {
         let outcomes: Vec<Result<PackageReport, LockFetchError>> = std::thread::scope(|scope| {
             let handles: Vec<_> = batch
                 .iter()
                 .enumerate()
                 .map(|(offset, package)| {
-                    let index = package_index(packages, package).unwrap_or(offset);
+                    let index = chunk_index * concurrency + offset;
                     let pre = Pre {
                         downloads: downloads.get(index).copied().flatten(),
                         advisories: advisories.get(index).and_then(Option::as_ref),

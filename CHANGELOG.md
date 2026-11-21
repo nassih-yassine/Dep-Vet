@@ -7,8 +7,11 @@
   instead of one of each per package. A shared advisory is hydrated once, and
   each package still gets its own fixed-version filtering. On a 122-package npm
   tree this is 20.2 s → 4.9 s cold and 3.2–4.2 s → 0.07 s cached. A failed
-  batch marks its packages "advisory check unavailable", never clean. npm's
-  bulk downloads endpoint rejects scoped packages, so those stay one at a time.
+  batch marks only its own packages "advisory check unavailable", never clean.
+  npm's bulk downloads endpoint rejects scoped packages, so those stay one at a
+  time, and a failed download chunk loses up to 128 figures. Gemfile.lock
+  platform suffixes are stripped before the OSV lookup, so a native gem gets
+  the same advisories as its registry version.
 
 - **Progress bar.** The stderr progress line for `audit`/`lock` now fills a
   20-cell bar as packages finish, next to the count.

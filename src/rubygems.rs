@@ -74,6 +74,39 @@ impl GemClient {
     }
 }
 
+/// Gemfile.lock records native builds as `number-platform`. OSV keys gems by
+/// the registry number, so the platform suffix must be stripped; prerelease
+/// suffixes such as `-beta` or `.pre` are part of the version and stay.
+pub fn osv_version(version: &str) -> &str {
+    const PLATFORMS: &[&str] = &[
+        "linux",
+        "darwin",
+        "mingw",
+        "ucrt",
+        "musl",
+        "java",
+        "jruby",
+        "windows",
+        "universal",
+        "arm64",
+        "aarch64",
+        "x86_64",
+        "x86",
+        "x64",
+        "arm",
+    ];
+    let Some((number, suffix)) = version.split_once('-') else {
+        return version;
+    };
+    if !number.starts_with(|c: char| c.is_ascii_digit()) {
+        return version;
+    }
+    let platform = suffix
+        .split('-')
+        .any(|part| PLATFORMS.contains(&part.to_ascii_lowercase().as_str()));
+    if platform { number } else { version }
+}
+
 fn parse_versions(
     spec: &PackageSpec,
     body: &str,
@@ -285,6 +318,16 @@ mod tests {
             meta.first_published_at,
             date::parse_timestamp("2023-01-01T00:00:00Z")
         );
+    }
+
+    #[test]
+    fn osv_lookups_strip_only_real_platform_suffixes() {
+        assert_eq!(osv_version("1.16.0-x86_64-linux"), "1.16.0");
+        assert_eq!(osv_version("1.16.0-arm64-darwin"), "1.16.0");
+        assert_eq!(osv_version("1.0.0-java"), "1.0.0");
+        assert_eq!(osv_version("9.4.5.0.pre"), "9.4.5.0.pre");
+        assert_eq!(osv_version("1.0.0-beta"), "1.0.0-beta");
+        assert_eq!(osv_version("3.2.9"), "3.2.9");
     }
 
     #[test]
