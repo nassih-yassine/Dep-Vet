@@ -603,9 +603,38 @@ pub fn assess(
                 Severity::Warn
             },
             title: "published by a user who is not a maintainer".to_string(),
+            detail: match &meta.release.previous_publisher {
+                Some(previous) => format!(
+                    "this version was published by '{publisher}', who is not in the current maintainer list [{}]; the previous release was published by '{previous}'",
+                    meta.maintainers.join(", ")
+                ),
+                None => format!(
+                    "this version was published by '{publisher}', who is not in the current maintainer list [{}]",
+                    meta.maintainers.join(", ")
+                ),
+            },
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "maintainers".to_string(),
+                value: meta.maintainers.join(", "),
+                url: Some(meta.registry_url.clone()),
+            }],
+        });
+    }
+
+    // A different existing maintainer shipping a version is normal rotation,
+    // not a handoff; only say so when the account is already trusted.
+    if !publisher_mismatch
+        && let (Some(publisher), Some(previous)) =
+            (&meta.publisher, &meta.release.previous_publisher)
+        && !publisher.eq_ignore_ascii_case(previous)
+    {
+        findings.push(Finding {
+            id: "publisher-changed",
+            severity: Severity::Info,
+            title: "a different maintainer published this version".to_string(),
             detail: format!(
-                "this version was published by '{publisher}', who is not in the current maintainer list [{}]",
-                meta.maintainers.join(", ")
+                "the previous release was published by '{previous}'; this one by '{publisher}', who is on the maintainer list"
             ),
             allowed: false,
             evidence: vec![Evidence {
@@ -1304,6 +1333,34 @@ mod tests {
         meta.first_published_at = Some(NOW + 400 * date::SECONDS_PER_DAY);
         meta.published_at = meta.first_published_at;
         assert!(assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW).is_empty());
+    }
+
+    #[test]
+    fn a_different_existing_maintainer_is_information() {
+        let mut meta = meta();
+        meta.publisher = Some("bob".to_string());
+        meta.maintainers = vec!["alice".to_string(), "bob".to_string()];
+        meta.release.previous_publisher = Some("alice".to_string());
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "publisher-changed");
+        assert_eq!(finding.severity, Severity::Info);
+        assert!(!ids(&findings).contains(&"publisher-not-maintainer"));
+    }
+
+    #[test]
+    fn a_new_account_is_only_the_existing_warning() {
+        let mut meta = meta();
+        meta.publisher = Some("mallory".to_string());
+        meta.maintainers = vec!["alice".to_string()];
+        meta.release.previous_publisher = Some("alice".to_string());
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(ids(&findings).contains(&"publisher-not-maintainer"));
+        assert!(!ids(&findings).contains(&"publisher-changed"));
+        assert!(
+            finding(&findings, "publisher-not-maintainer")
+                .detail
+                .contains("previous release was published by 'alice'")
+        );
     }
 
     #[test]
