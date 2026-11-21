@@ -1,29 +1,6 @@
 <div align="center">
 
-<pre>
-██████╗ ███████╗██████╗       ██╗   ██╗███████╗████████╗
-██╔══██╗██╔════╝██╔══██╗      ██║   ██║██╔════╝╚══██╔══╝
-██║  ██║█████╗  ██████╔╝█████╗██║   ██║█████╗     ██║
-██║  ██║██╔══╝  ██╔═══╝ ╚════╝╚██╗ ██╔╝██╔══╝     ██║
-██████╔╝███████╗██║             ╚████╔╝ ███████╗   ██║
-╚═════╝ ╚══════╝╚═╝              ╚═══╝  ╚══════╝   ╚═╝
-
-        ┌────────────────────────────────────────────────┐
-        │                                                │
-        │       THE DEPENDENCY TRUST PROTOCOL             │
-        │                                                │
-        │   ◈  INSPECT       Dependency intelligence     │
-        │   ◈  ANALYZE       Malicious code detection    │
-        │   ◈  VERIFY        Publisher provenance        │
-        │   ◈  DIFF          Release behavior changes    │
-        │   ◈  ENFORCE       Supply-chain security       │
-        │                                                │
-        └────────────────────────────────────────────────┘
-
-        ZERO BLIND TRUST. FULL SUPPLY-CHAIN VISIBILITY.
-
-        [ SYSTEM READY ]  [ RUST POWERED ]  [ SECURITY FIRST ]
-</pre>
+<img alt="Dep-Vet — Dependency Trust Engine: know what you're installing, who published it, and what changed" src="assets/banner.png" width="100%">
 
 **Check a package's risk before it enters your lockfile.**
 
