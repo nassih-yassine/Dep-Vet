@@ -32,7 +32,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 251 unit + 81 end-to-end tests
+cargo test --locked                      # 252 unit + 81 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -194,6 +194,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   auditor; JSR entries become `LockContents.notes` and never fail the run. Notes
   are a third channel beside findings and errors — use them for deliberate,
   safe omissions only.
+- **pnpm is parsed line-wise, with no YAML dependency.** Only direct children
+  (two-space indent) of the top-level `packages:` section are entries; nested
+  resolution keys and `snapshots:` are ignored. This removed
+  `serde_yaml_ng`, which pulled the unmaintained `unsafe-libyaml` advisory into
+  dep-vet's own tree. Do not reintroduce a YAML crate for pnpm.
 - **JS lockfile quirks that bite.** `bun.lock` is JSONC (comments and trailing
   commas) and `strip_jsonc` must keep `//` inside strings (URLs). pnpm keys are
   `name@ver` (v9), `/name@ver` (v6), or `/name/ver` (v5), with `(peer@x)` suffixes

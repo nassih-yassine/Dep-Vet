@@ -425,16 +425,39 @@ fn parse_deno(body: &str) -> Result<LockContents, LockError> {
     Ok(contents)
 }
 
+/// pnpm lockfiles are YAML, but only one section matters: the top-level
+/// `packages` mapping. Reading its keys line by line avoids a YAML dependency
+/// (and the unmaintained `unsafe-libyaml` it drags in).
 fn parse_pnpm(body: &str) -> Result<LockContents, LockError> {
-    let lockfile: PnpmLock =
-        serde_yaml_ng::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
     let mut packages = Vec::new();
     let mut skipped = Vec::new();
+    let mut in_packages = false;
 
-    for key in lockfile.packages.keys() {
+    for raw in body.lines() {
+        let line = raw.trim_end();
+        if line.is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        if !line.starts_with(' ') {
+            in_packages = line == "packages:";
+            continue;
+        }
+        if !in_packages {
+            continue;
+        }
+        // Only direct children of `packages:` are entries; nested keys are
+        // resolution details.
+        let indent = line.chars().take_while(|ch| *ch == ' ').count();
+        if indent != 2 {
+            continue;
+        }
+        let Some((key, _)) = line[2..].split_once(':') else {
+            continue;
+        };
+        let key = key.trim_matches(['"', '\''].as_slice());
         match split_pnpm_key(key) {
             Some((name, version)) => packages.push(LockedPackage { name, version }),
-            None => skipped.push((key.clone(), "unrecognized pnpm package key".to_string())),
+            None => skipped.push((key.to_string(), "unrecognized pnpm package key".to_string())),
         }
     }
 
@@ -725,12 +748,6 @@ struct DenoLock {
 }
 
 #[derive(Debug, Deserialize)]
-struct PnpmLock {
-    #[serde(default)]
-    packages: std::collections::BTreeMap<String, serde_yaml_ng::Value>,
-}
-
-#[derive(Debug, Deserialize)]
 struct TomlPackages {
     #[serde(default)]
     package: Vec<TomlPackage>,
@@ -968,11 +985,20 @@ packages:
     }
 
     #[test]
-    fn pnpm_rejects_malformed_yaml() {
-        assert!(matches!(
-            parse(Format::Pnpm, "packages: [unclosed"),
-            Err(LockError::Malformed(_))
-        ));
+    fn pnpm_without_a_packages_section_is_empty() {
+        let contents = parse(Format::Pnpm, "lockfileVersion: '9.0'\nsettings: {}\n").unwrap();
+        assert!(contents.packages.is_empty());
+        assert!(contents.skipped.is_empty());
+    }
+
+    #[test]
+    fn pnpm_ignores_nested_lines_and_comments() {
+        let body = "packages:\n  # comment\n  quoted@1.0.0:\n    resolution:\n      integrity: x\n  '@scope/pkg@2.0.0': {}\nsnapshots:\n  other@9.9.9: {}\n";
+        let contents = parse(Format::Pnpm, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![package("@scope/pkg", "2.0.0"), package("quoted", "1.0.0")]
+        );
     }
 
     #[test]
