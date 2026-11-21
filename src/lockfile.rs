@@ -37,6 +37,8 @@ impl LockContents {
 pub enum Format {
     Npm,
     Pip,
+    Poetry,
+    Uv,
     Cargo,
     Go,
 }
@@ -45,7 +47,7 @@ impl Format {
     pub fn ecosystem(self) -> crate::model::Ecosystem {
         match self {
             Self::Npm => crate::model::Ecosystem::Npm,
-            Self::Pip => crate::model::Ecosystem::Pypi,
+            Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
         }
@@ -63,6 +65,8 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         "package-lock.json" => Ok(Format::Npm),
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
+        "poetry.lock" => Ok(Format::Poetry),
+        "uv.lock" => Ok(Format::Uv),
         other if other.ends_with(".txt") && other.contains("requirement") => Ok(Format::Pip),
         other => Err(LockError::UnsupportedFormat(other.to_string())),
     }
@@ -72,6 +76,8 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
     match format {
         Format::Npm => parse_npm(body),
         Format::Pip => Ok(parse_pip(body)),
+        Format::Poetry => parse_poetry(body),
+        Format::Uv => parse_uv(body),
         Format::Cargo => parse_cargo(body),
         Format::Go => Ok(parse_go(body)),
     }
@@ -306,6 +312,61 @@ fn parse_pip(body: &str) -> LockContents {
     finish(packages, skipped)
 }
 
+fn parse_poetry(body: &str) -> Result<LockContents, LockError> {
+    let lockfile: TomlPackages =
+        toml::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for package in lockfile.package {
+        let is_registry = match &package.source {
+            None => true,
+            Some(source) => source
+                .get("type")
+                .and_then(|kind| kind.as_str())
+                .is_some_and(|kind| kind == "legacy"),
+        };
+        if is_registry {
+            packages.push(LockedPackage {
+                name: package.name,
+                version: package.version,
+            });
+        } else {
+            skipped.push((
+                format!("{}@{}", package.name, package.version),
+                "not a PyPI package (git, path, file, or URL source)".to_string(),
+            ));
+        }
+    }
+
+    Ok(finish(packages, skipped))
+}
+
+fn parse_uv(body: &str) -> Result<LockContents, LockError> {
+    let lockfile: TomlPackages =
+        toml::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for package in lockfile.package {
+        let source = package.source.unwrap_or_default();
+        if source.get("registry").is_some() || source.is_empty() {
+            packages.push(LockedPackage {
+                name: package.name,
+                version: package.version,
+            });
+        } else if source.get("git").is_some() || source.get("url").is_some() {
+            skipped.push((
+                format!("{}@{}", package.name, package.version),
+                "not a PyPI package (git or URL source)".to_string(),
+            ));
+        }
+        // editable/virtual/directory entries are local projects; nothing to audit.
+    }
+
+    Ok(finish(packages, skipped))
+}
+
 fn parse_cargo(body: &str) -> Result<LockContents, LockError> {
     let lockfile: CargoLock =
         toml::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
@@ -386,6 +447,20 @@ fn finish(mut packages: Vec<LockedPackage>, skipped: Vec<(String, String)>) -> L
     packages.sort();
     packages.dedup();
     LockContents { packages, skipped }
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlPackages {
+    #[serde(default)]
+    package: Vec<TomlPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TomlPackage {
+    name: String,
+    version: String,
+    #[serde(default)]
+    source: Option<toml::Table>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -485,17 +560,81 @@ mod tests {
     }
 
     #[test]
+    fn poetry_keeps_pypi_packages_and_reports_git() {
+        let body = r#"
+[[package]]
+name = "flask"
+version = "3.1.0"
+description = "A simple framework"
+optional = false
+python-versions = ">=3.9"
+
+[[package]]
+name = "git-dep2"
+version = "0.2.0"
+
+[package.source]
+type = "git"
+url = "https://github.com/example/git-dep2"
+"#;
+        let contents = parse(Format::Poetry, body).unwrap();
+        assert_eq!(contents.packages, vec![package("flask", "3.1.0")]);
+        assert_eq!(contents.skipped.len(), 1);
+        assert!(contents.skipped[0].1.contains("not a PyPI package"));
+    }
+
+    #[test]
+    fn uv_keeps_registry_packages_and_skips_local_edits() {
+        let body = r#"
+version = 1
+
+[[package]]
+name = "flask"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "my-project"
+version = "0.1.0"
+source = { editable = "." }
+
+[[package]]
+name = "viaduct"
+version = "0.2.0"
+source = { git = "https://github.com/example/viaduct" }
+"#;
+        let contents = parse(Format::Uv, body).unwrap();
+        assert_eq!(contents.packages, vec![package("flask", "3.1.0")]);
+        assert_eq!(contents.skipped.len(), 1);
+        assert!(contents.skipped[0].1.contains("git or URL"));
+    }
+
+    #[test]
+    fn poetry_and_uv_reject_malformed_toml() {
+        assert!(matches!(
+            parse(Format::Poetry, "[[package]"),
+            Err(LockError::Malformed(_))
+        ));
+        assert!(matches!(
+            parse(Format::Uv, "version = nope"),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
     fn detects_each_supported_lockfile() {
         assert_eq!(detect(Path::new("package-lock.json")).unwrap(), Format::Npm);
         assert_eq!(detect(Path::new("Cargo.lock")).unwrap(), Format::Cargo);
         assert_eq!(detect(Path::new("go.mod")).unwrap(), Format::Go);
+        assert_eq!(detect(Path::new("poetry.lock")).unwrap(), Format::Poetry);
+        assert_eq!(detect(Path::new("uv.lock")).unwrap(), Format::Uv);
         assert_eq!(detect(Path::new("requirements.txt")).unwrap(), Format::Pip);
         assert_eq!(
             detect(Path::new("dev-requirements.txt")).unwrap(),
             Format::Pip
         );
         assert!(matches!(
-            detect(Path::new("poetry.lock")),
+            detect(Path::new("yarn.lock")),
             Err(LockError::UnsupportedFormat(_))
         ));
     }
