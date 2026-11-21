@@ -2573,6 +2573,32 @@ fn inspect_verifies_npm_provenance_offline() {
 }
 
 #[test]
+fn inspect_discloses_files_the_size_cap_skipped() {
+    let big = vec![b'a'; 6 * 1024 * 1024];
+    let archive = tar_gz(&[("big.js", &big)]);
+    let registry =
+        MockRegistry::start_with(|base| npm_tarball_routes(base, &[("big", "1.0.0", &archive)]));
+
+    let output = registry
+        .command()
+        .args(["inspect", "npm", "big@1.0.0", "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let finding = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["rule"] == "archive-partially-scanned")
+        .unwrap_or_else(|| panic!("missing partial-scan finding: {value}"));
+    assert_eq!(finding["severity"], "warn");
+    assert!(finding["evidence"].as_str().unwrap().contains("big.js"));
+}
+
+#[test]
 fn inspect_reports_a_checksum_mismatch_as_high() {
     use base64::Engine as _;
     let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);

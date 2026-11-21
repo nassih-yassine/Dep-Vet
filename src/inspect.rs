@@ -493,6 +493,52 @@ mod tests {
     }
 
     #[test]
+    fn a_partial_scan_is_a_warning_when_code_was_skipped() {
+        let mut prepared = prepared(&[("a.js", "const a = 1;")], &[]);
+        prepared.extracted.oversize_files = vec!["big.js".to_string()];
+        prepared.extracted.truncated = true;
+        let report = build_report(Ecosystem::Npm, &package_spec("1.0.0"), prepared, &[]);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule == "archive-partially-scanned")
+            .expect("missing partial-scan finding");
+        assert_eq!(finding.severity, crate::model::Severity::Warn);
+        assert!(finding.evidence.contains("big.js"));
+    }
+
+    #[test]
+    fn a_partial_scan_of_data_is_only_information() {
+        let mut prepared = prepared(&[("a.js", "const a = 1;")], &[]);
+        prepared.extracted.oversize_files = vec!["data.bin".to_string()];
+        prepared.extracted.total_over_cap = true;
+        prepared.extracted.truncated = true;
+        let report = build_report(Ecosystem::Npm, &package_spec("1.0.0"), prepared, &[]);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule == "archive-partially-scanned")
+            .expect("missing partial-scan finding");
+        assert_eq!(finding.severity, crate::model::Severity::Info);
+    }
+
+    #[test]
+    fn a_diff_discloses_a_partial_scan_on_either_side() {
+        let old = prepared(&[("a.js", "const a = 1;")], &[]);
+        let mut new = prepared(&[("a.js", "const a = 2;")], &[]);
+        new.extracted.entries_over_cap = true;
+        new.extracted.truncated = true;
+        let report = diff(&old, &new);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule == "archive-partially-scanned")
+            .expect("missing partial-scan finding");
+        assert_eq!(finding.severity, crate::model::Severity::Warn);
+        assert!(finding.evidence.contains("this release"));
+    }
+
+    #[test]
     fn a_nuget_signature_is_reported_as_presence_only() {
         let mut prepared = prepared(&[("lib/a.cs", "class A {}")], &[]);
         prepared.extracted.signature_file = true;
@@ -660,6 +706,9 @@ pub fn build_report(
             format!("MISMATCH (expected {expected}, got {actual})")
         }
     };
+    if let Some(finding) = crate::rules::partially_scanned(&prepared.extracted, "") {
+        findings.push(finding);
+    }
     findings.sort_by(|left, right| {
         left.file
             .cmp(&right.file)
@@ -949,6 +998,12 @@ pub fn build_diff(
     ));
     findings.extend(new_script_findings(&new.extracted.files, &added));
     findings.extend(new_binary_findings(&old.extracted, &new.extracted));
+    if let Some(finding) = crate::rules::partially_scanned(&old.extracted, "previous release: ") {
+        findings.push(finding);
+    }
+    if let Some(finding) = crate::rules::partially_scanned(&new.extracted, "this release: ") {
+        findings.push(finding);
+    }
     let resolved: Vec<_> = old_findings
         .into_iter()
         .filter(|finding| !new_keys.contains(&key(finding)))

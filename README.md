@@ -234,6 +234,10 @@ compressed, 100 MB uncompressed, 10,000 entries, and 5 MB per file. Entries
 with absolute paths, `..`, symlinks, or hardlinks are skipped. A checksum
 mismatch is a HIGH finding, not a warning.
 
+A cap that stops the scan is disclosed as `archive-partially-scanned`: WARN when
+a skipped path looks like source code, INFO otherwise, naming the skipped files.
+A partial scan is never presented as a clean one, in `inspect` or `diff`.
+
 Rules are deliberately conservative: one suspicious API call is a WARN, and
 only a combination (network plus credential access in one file, or an encoded
 payload passed to `eval`) reaches HIGH. The 16 starter rules cover JavaScript
