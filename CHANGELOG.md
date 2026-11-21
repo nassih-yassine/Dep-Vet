@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **One retry for flaky networks.** A timeout or dropped connection is retried
+  once before dep-vet falls back to stale cache or reports "could not check".
+  404 and 429 are never retried. Previously a single slow response failed the
+  whole audit.
 - **Gradle:** `gradle.lockfile`, `buildscript-gradle.lockfile`, and
   `settings-gradle.lockfile` are audited through the Maven ecosystem. Projects
   that do not enable dependency locking have no file, so there is nothing to
