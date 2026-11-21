@@ -237,6 +237,78 @@ repository link in the module index, so those appear as `not checked`. What is
 checked: advisories (OSV ecosystem `Go`), deprecation, publish times, and
 module-path typosquatting.
 
+### Check a Maven artifact
+
+```sh
+dep-vet maven org.slf4j:slf4j-api           # latest stable
+dep-vet maven org.slf4j:slf4j-api@2.0.17    # exact version
+dep-vet maven androidx.core:core-ktx        # Google Maven, transparently
+```
+
+Maven Central and Google Maven are both read. AndroidX, the Android Gradle
+Plugin, Firebase, and Play artifacts live on Google Maven, so those coordinates
+are looked up there first and everything else goes to Central, falling back to
+Google when the artifact is not there. Google publishes no timestamps, so those
+reports list `freshness` as `not checked`, and they carry an INFO note that OSV
+only indexes Maven Central. Maven has no owner list, download figure, source
+repository, or deprecation concept, and no standard lockfile of its own.
+
+### Check an Android dependency
+
+Android projects are audited through Gradle's dependency locking:
+
+```kotlin
+// app/build.gradle.kts
+configurations
+    .matching { it.name.endsWith("RuntimeClasspath") || it.name.endsWith("CompileClasspath") }
+    .configureEach { resolutionStrategy.activateDependencyLocking() }
+```
+
+```sh
+./gradlew :app:dependencies --write-locks
+dep-vet audit app/gradle.lockfile
+```
+
+Remove the block and the next build rewrites the lockfile empty. If the
+Gradle output contains `FAILURE`, lock only the configurations that resolve.
+
+### Check a RubyGems gem
+
+```sh
+dep-vet gem rack                 # latest
+dep-vet gem rack@3.2.9           # exact version
+```
+
+RubyGems exposes versions, publish times, and a source URL. It has no owner
+list, weekly download figure, or install-time file list. Yanked versions
+disappear from its API, so asking for one reports "not found" rather than
+"yanked", and `Gemfile.lock` platform suffixes resolve to the registry number.
+
+### Check a NuGet package
+
+```sh
+dep-vet nuget Newtonsoft.Json           # latest stable
+dep-vet nuget Newtonsoft.Json@13.0.1    # exact version
+```
+
+NuGet ids are case-insensitive, so the API path is lowercased while the report
+keeps the caller's casing for advisory matching. There is no owner list,
+download figure, repository, or build-time file data. `1900-01-01` is NuGet's
+"unknown" publish date and is filtered out. Both `packages.lock.json` and
+legacy `packages.config` are audited.
+
+### Check a Composer package
+
+```sh
+dep-vet composer monolog/monolog           # latest
+dep-vet composer monolog/monolog@3.13.0    # exact version
+```
+
+Packagist supplies versions, publish times, maintainers, a source repository,
+and an abandoned flag. It has no install-time file list, and its download figure
+is monthly, so the weekly download signal stays `not checked`. `composer.lock`
+audits both `packages` and `packages-dev`.
+
 ### Audit a lockfile change
 
 ```sh
