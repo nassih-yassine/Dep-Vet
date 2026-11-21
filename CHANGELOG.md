@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 — 2026-11-22
 
 - **MCP server.** `dep-vet mcp` speaks newline-delimited JSON-RPC over stdio
   with three tools: `vet_package`, `vet_command`, and `vet_lockfile_change`.
