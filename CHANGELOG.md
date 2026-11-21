@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-11-21
 
 - **Maven:** `dep-vet maven group:artifact[@version]` reads Maven Central for
   versions and publish times, plus OSV advisories. Maven has no standard
