@@ -31,6 +31,9 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "install-scripts-changed",
     "dependency-added",
     "publisher-changed",
+    "release-burst",
+    "repository-changed",
+    "provenance-dropped",
 ];
 
 #[derive(Debug, Default, Deserialize)]

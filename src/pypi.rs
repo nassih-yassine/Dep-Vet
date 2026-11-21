@@ -182,6 +182,15 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         crate::registry::previous_release(&entries, &version, published_at)
     };
 
+    let recent_releases = crate::registry::count_recent(
+        project
+            .releases
+            .values()
+            .map(|files| files.iter().filter_map(file_time).min()),
+        crate::cache::now_seconds(),
+        crate::registry::HISTORY_WINDOW_DAYS,
+    );
+
     let deprecated = if all_yanked {
         Some(match yanked_reason {
             Some(reason) => format!("this release is yanked: {reason}"),
@@ -218,7 +227,8 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         candidate_weekly_downloads: None,
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
-            previous_published_at: previous.map(|(_, time)| time),
+            previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            recent_releases,
             ..crate::registry::ReleaseHistory::default()
         },
     })

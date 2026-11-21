@@ -134,6 +134,14 @@ fn parse_metadata(
         crate::registry::previous_release(&entries, &release.version, published_at)
     };
 
+    let recent_releases = crate::registry::count_recent(
+        releases
+            .iter()
+            .map(|release| release.time.as_deref().and_then(date::parse_timestamp)),
+        crate::cache::now_seconds(),
+        crate::registry::HISTORY_WINDOW_DAYS,
+    );
+
     let repository = release
         .source
         .as_ref()
@@ -174,6 +182,7 @@ fn parse_metadata(
                 .map(composer_dependencies)
                 .unwrap_or_default(),
             dependencies: composer_dependencies(release),
+            recent_releases,
             history_known: previous.is_some(),
             ..crate::registry::ReleaseHistory::default()
         },

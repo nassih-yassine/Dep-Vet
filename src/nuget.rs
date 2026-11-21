@@ -158,6 +158,13 @@ fn parse_versions(
         })
         .map(|release| release.dependencies.clone())
         .unwrap_or_default();
+    let recent_releases = crate::registry::count_recent(
+        registration
+            .iter()
+            .map(|release| release.published.filter(|epoch| *epoch > 0)),
+        crate::cache::now_seconds(),
+        crate::registry::HISTORY_WINDOW_DAYS,
+    );
     let deprecated = release
         .filter(|release| release.deprecated)
         .map(|_| "this version is deprecated or unlisted on NuGet".to_string());
@@ -183,6 +190,7 @@ fn parse_versions(
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
             previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            recent_releases,
             previous_dependencies,
             dependencies: current_dependencies,
             history_known: previous.is_some(),

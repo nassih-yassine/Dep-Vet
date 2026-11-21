@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Publisher intelligence.** Release bursts (INFO), source-repository changes
+  (INFO), and provenance disappearing between releases (WARN).
+
 ## 0.10.0 — 2026-11-21
 
 - **Provenance presence.** Reports say whether a release publishes provenance:

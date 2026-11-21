@@ -270,6 +270,12 @@ describes it:
   crates.io.
 - **Publisher changed** (INFO): a different existing maintainer shipped this
   version. A brand-new account is the stronger "not a maintainer" warning.
+- **Release burst** (INFO): five or more releases inside 30 days on a package
+  with history.
+- **Repository changed** (INFO): the source repository differs from the previous
+  release. Renames are common, so this is context, not a verdict.
+- **Provenance dropped** (WARN): the previous release carried an attestation and
+  this one does not, which usually means a publishing-pipeline change.
 
 History is only fetched for versions published in the last 30 days; older
 releases are covered by advisories and cost no extra requests. This still

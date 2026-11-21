@@ -62,6 +62,21 @@ pub struct ReleaseHistory {
     /// True when the previous release's shape was actually read. Empty lists
     /// with this false mean "unknown", never "nothing changed".
     pub history_known: bool,
+    /// Releases published inside the history window, current one included.
+    pub recent_releases: usize,
+    /// Previous release's repository, npm only.
+    pub previous_repository: Option<String>,
+    /// Whether the previous release carried provenance, npm only.
+    pub previous_provenance: Option<bool>,
+}
+
+/// Releases whose timestamp falls inside the last `days` days.
+pub fn count_recent(timestamps: impl Iterator<Item = Option<i64>>, now: i64, days: i64) -> usize {
+    let cutoff = now - days * 86_400;
+    timestamps
+        .flatten()
+        .filter(|timestamp| *timestamp >= cutoff && *timestamp <= now)
+        .count()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -265,6 +280,19 @@ struct Packument {
     repository: Option<RepoField>,
 }
 
+fn has_attestation(doc: &VersionDoc) -> bool {
+    doc.dist
+        .as_ref()
+        .and_then(|dist| dist.attestations.as_ref())
+        .is_some_and(|attestations| {
+            attestations.provenance.is_some()
+                || attestations
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| !url.is_empty())
+        })
+}
+
 fn install_scripts(doc: &VersionDoc) -> Vec<InstallScript> {
     doc.scripts
         .iter()
@@ -390,6 +418,15 @@ fn parse_packument(
         previous_release(&entries, &version, published_at)
     };
 
+    let recent_releases = count_recent(
+        packument
+            .time
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "created" | "modified"))
+            .map(|(_, raw)| date::parse_timestamp(raw)),
+        crate::cache::now_seconds(),
+        HISTORY_WINDOW_DAYS,
+    );
     let previous_version = previous.as_ref().map(|(version, _)| version.clone());
     let previous_time = previous.as_ref().map(|(_, time)| *time);
     let previous_doc = previous_version
@@ -432,6 +469,12 @@ fn parse_packument(
                 .unwrap_or_default(),
             dependencies: doc.dependencies.keys().cloned().collect(),
             history_known: previous_doc.is_some(),
+            recent_releases,
+            previous_repository: previous_doc
+                .and_then(|doc| doc.repository.as_ref())
+                .and_then(repo_url)
+                .map(|url| normalize_repository(&url)),
+            previous_provenance: previous_doc.map(has_attestation),
         },
     })
 }
@@ -590,6 +633,7 @@ mod tests {
         },
         "versions": {
             "1.0.0": {
+                "repository": { "url": "https://github.com/alice/repo" },
                 "scripts": { "postinstall": "node build.js" },
                 "dependencies": { "left-pad": "^1.0.0" },
                 "_npmUser": { "name": "alice" }
@@ -647,6 +691,12 @@ mod tests {
         assert_eq!(meta.release.previous_version.as_deref(), Some("1.0.0"));
         assert_eq!(meta.release.previous_publisher.as_deref(), Some("alice"));
         assert_eq!(meta.release.previous_install_scripts.len(), 1);
+        assert_eq!(
+            meta.release.previous_repository.as_deref(),
+            Some("https://github.com/alice/repo")
+        );
+        assert_eq!(meta.release.previous_provenance, Some(false));
+        assert_eq!(meta.release.recent_releases, 0, "fixture is years old");
         assert_eq!(
             meta.release.previous_dependencies,
             vec!["left-pad".to_string()]

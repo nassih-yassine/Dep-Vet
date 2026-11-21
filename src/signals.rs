@@ -352,6 +352,62 @@ pub fn assess(
     let mut findings = Vec::new();
 
     let suspect = suspect_for(meta, ecosystem, local, profile);
+    if meta.release.recent_releases >= 5
+        && meta
+            .first_published_at
+            .is_some_and(|first| now - first >= DORMANCY_DAYS * date::SECONDS_PER_DAY)
+    {
+        findings.push(Finding {
+            id: "release-burst",
+            severity: Severity::Info,
+            title: "unusually many releases recently".to_string(),
+            detail: format!(
+                "{} releases inside {} days on a package with history",
+                meta.release.recent_releases, HISTORY_WINDOW_DAYS
+            ),
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "release history".to_string(),
+                value: meta.registry_url.clone(),
+                url: Some(meta.registry_url.clone()),
+            }],
+        });
+    }
+
+    if let (Some(previous), Some(current)) = (&meta.release.previous_repository, &meta.repository)
+        && !previous.eq_ignore_ascii_case(current)
+    {
+        findings.push(Finding {
+            id: "repository-changed",
+            severity: Severity::Info,
+            title: "the source repository changed".to_string(),
+            detail: format!("previous release: {previous}; this release: {current}"),
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "repository".to_string(),
+                value: current.clone(),
+                url: Some(current.clone()),
+            }],
+        });
+    }
+
+    if meta.release.previous_provenance == Some(true)
+        && meta.provenance != crate::model::Provenance::Present
+    {
+        findings.push(Finding {
+            id: "provenance-dropped",
+            severity: Severity::Warn,
+            title: "this version no longer publishes provenance".to_string(),
+            detail: "the previous release carried an attestation; this one does not".to_string(),
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "registry metadata".to_string(),
+                value: meta.registry_url.clone(),
+                url: Some(meta.registry_url.clone()),
+            }],
+        });
+    }
+
     let recent = meta
         .published_at
         .is_some_and(|published| now - published <= HISTORY_WINDOW_DAYS * date::SECONDS_PER_DAY);
@@ -1032,6 +1088,75 @@ mod tests {
         meta.release.previous_dependencies = vec!["chalk".to_string()];
         let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         assert!(!ids(&findings).contains(&"dependency-added"));
+    }
+
+    #[test]
+    fn a_release_burst_on_an_old_package_is_information() {
+        let mut meta = meta();
+        meta.release.recent_releases = 5;
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(ids(&findings).contains(&"release-burst"));
+
+        meta.release.recent_releases = 4;
+        assert!(
+            !ids(&assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"release-burst")
+        );
+
+        let mut young = meta.clone();
+        young.release.recent_releases = 8;
+        young.first_published_at = Some(NOW - 30 * date::SECONDS_PER_DAY);
+        assert!(
+            !ids(&assess(&young, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"release-burst")
+        );
+    }
+
+    #[test]
+    fn a_repository_change_is_information_only_when_both_are_known() {
+        let mut meta = meta();
+        meta.repository = Some("https://github.com/new/home".to_string());
+        meta.release.previous_repository = Some("https://github.com/old/home".to_string());
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(ids(&findings).contains(&"repository-changed"));
+
+        meta.release.previous_repository = Some("https://github.com/new/home".to_string());
+        assert!(
+            !ids(&assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"repository-changed")
+        );
+
+        let mut unknown = meta.clone();
+        unknown.release.previous_repository = None;
+        assert!(
+            !ids(&assess(&unknown, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"repository-changed")
+        );
+    }
+
+    #[test]
+    fn dropped_provenance_is_a_warning() {
+        let mut meta = meta();
+        meta.provenance = crate::model::Provenance::Missing;
+        meta.release.previous_provenance = Some(true);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert_eq!(
+            finding(&findings, "provenance-dropped").severity,
+            Severity::Warn
+        );
+
+        meta.provenance = crate::model::Provenance::Present;
+        assert!(
+            !ids(&assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"provenance-dropped")
+        );
+
+        meta.provenance = crate::model::Provenance::Missing;
+        meta.release.previous_provenance = None;
+        assert!(
+            !ids(&assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"provenance-dropped")
+        );
     }
 
     #[test]

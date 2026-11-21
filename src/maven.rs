@@ -212,6 +212,11 @@ fn parse_search(
             .map(seconds)
             .min()
     });
+    let recent_releases = crate::registry::count_recent(
+        docs.iter().map(|doc| doc.timestamp.map(seconds)),
+        crate::cache::now_seconds(),
+        crate::registry::HISTORY_WINDOW_DAYS,
+    );
     let published_at = release.timestamp.map(seconds);
     let previous = {
         let entries: Vec<(&str, Option<i64>)> = docs
@@ -240,7 +245,8 @@ fn parse_search(
         candidate_weekly_downloads: None,
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
-            previous_published_at: previous.map(|(_, time)| time),
+            previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            recent_releases,
             ..crate::registry::ReleaseHistory::default()
         },
     })

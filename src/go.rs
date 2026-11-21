@@ -169,6 +169,17 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         crate::registry::previous_release(&entries, &release.version_key.version, published_at)
     };
 
+    let recent_releases = crate::registry::count_recent(
+        response.versions.iter().map(|release| {
+            release
+                .published_at
+                .as_deref()
+                .and_then(date::parse_timestamp)
+        }),
+        crate::cache::now_seconds(),
+        crate::registry::HISTORY_WINDOW_DAYS,
+    );
+
     let deprecated = release
         .is_deprecated
         .then(|| match release.deprecated_reason.trim() {
@@ -195,7 +206,8 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         candidate_weekly_downloads: None,
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
-            previous_published_at: previous.map(|(_, time)| time),
+            previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            recent_releases,
             ..crate::registry::ReleaseHistory::default()
         },
     })

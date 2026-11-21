@@ -183,6 +183,17 @@ fn parse_crate(
         crate::registry::previous_release(&entries, &version, published_at)
     };
 
+    let recent_releases = crate::registry::count_recent(
+        response.versions.iter().map(|release| {
+            release
+                .created_at
+                .as_deref()
+                .and_then(date::parse_timestamp)
+        }),
+        crate::cache::now_seconds(),
+        crate::registry::HISTORY_WINDOW_DAYS,
+    );
+
     let deprecated = release.yanked.then(|| match &release.yank_message {
         Some(message) if !message.trim().is_empty() => {
             format!("this version is yanked: {message}")
@@ -220,6 +231,7 @@ fn parse_crate(
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
             previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            recent_releases,
             previous_publisher: previous
                 .as_ref()
                 .and_then(|(version, _)| {
