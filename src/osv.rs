@@ -152,7 +152,11 @@ impl OsvClient {
                 }
             }
             let bodies = self.fetch_bodies(&unique);
-            lists.extend(lists_from(chunk, capped, &bodies));
+            let mut chunk_lists = lists_from(chunk, capped, &bodies);
+            // A server that returns fewer results than queries must not shift
+            // the alignment: missing answers are "no advisories".
+            chunk_lists.resize(chunk.len(), AdvisoryList::default());
+            lists.extend(chunk_lists);
         }
 
         Ok(lists)
@@ -496,6 +500,27 @@ mod tests {
             r#"{{ "results": [ {{ "vulns": [ {} ] }} ] }}"#,
             vulns.join(",")
         )
+    }
+
+    #[test]
+    fn fewer_results_than_queries_stay_aligned() {
+        let ids: Vec<(Vec<String>, usize)> = vec![(vec!["A".to_string()], 0)];
+        let queries = vec![
+            OsvQuery {
+                ecosystem: Ecosystem::Npm,
+                name: "a".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            OsvQuery {
+                ecosystem: Ecosystem::Npm,
+                name: "b".to_string(),
+                version: "1.0.0".to_string(),
+            },
+        ];
+        let mut lists = lists_from(&queries, ids, &std::collections::HashMap::new());
+        lists.resize(queries.len(), AdvisoryList::default());
+        assert_eq!(lists.len(), 2);
+        assert!(lists[1].advisories.is_empty());
     }
 
     #[test]

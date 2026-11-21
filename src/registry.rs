@@ -126,18 +126,32 @@ impl RegistryClient {
         names: &[String],
     ) -> std::collections::HashMap<String, u64> {
         let mut downloads = std::collections::HashMap::new();
-        for chunk in names.chunks(MAX_DOWNLOAD_NAMES) {
-            let url = format!(
-                "{}/{}",
-                self.downloads_base.trim_end_matches('/'),
-                downloads_path(chunk)
-            );
-            let Ok(body) = self.http.get(&url) else {
-                continue;
-            };
-            downloads.extend(parse_downloads(&body, chunk));
+        // npm's bulk endpoint rejects scoped packages ("not currently
+        // supported in bulk lookups"), so those go one at a time.
+        let bulk: Vec<String> = names
+            .iter()
+            .filter(|name| !is_scoped(name))
+            .cloned()
+            .collect();
+        for chunk in bulk.chunks(MAX_DOWNLOAD_NAMES) {
+            downloads.extend(self.download_chunk(chunk));
+        }
+        for name in names.iter().filter(|name| is_scoped(name)) {
+            downloads.extend(self.download_chunk(std::slice::from_ref(name)));
         }
         downloads
+    }
+
+    fn download_chunk(&self, names: &[String]) -> std::collections::HashMap<String, u64> {
+        let url = format!(
+            "{}/{}",
+            self.downloads_base.trim_end_matches('/'),
+            downloads_path(names)
+        );
+        match self.http.get(&url) {
+            Ok(body) => parse_downloads(&body, names),
+            Err(_) => std::collections::HashMap::new(),
+        }
     }
 }
 
@@ -146,8 +160,13 @@ fn encode_name(name: &str) -> String {
     name.replace('/', "%2F")
 }
 
-/// The npm downloads API accepts at most 128 names per request.
+/// The npm downloads API accepts at most 128 names per request, and none of
+/// them may be scoped.
 pub const MAX_DOWNLOAD_NAMES: usize = 128;
+
+fn is_scoped(name: &str) -> bool {
+    name.starts_with('@')
+}
 
 /// npm answers a bare `{downloads}` object for one name and a map keyed by
 /// package for several; accept both.
@@ -391,6 +410,12 @@ mod tests {
             }
         }
     }"#;
+
+    #[test]
+    fn scoped_names_are_not_sent_to_the_bulk_endpoint() {
+        assert!(is_scoped("@types/node"));
+        assert!(!is_scoped("chalk"));
+    }
 
     #[test]
     fn downloads_parse_both_response_shapes() {

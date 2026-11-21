@@ -1566,6 +1566,189 @@ fn audit_checks_every_package_in_the_lockfile() {
 }
 
 #[test]
+fn a_tree_audit_batches_osv_and_downloads() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("pkg-a", "1.0.0"), ("pkg-b", "1.0.0")]),
+    );
+
+    let a = PackageFixture::clean("pkg-a");
+    let b = PackageFixture::clean("pkg-b");
+    let mut routes = HashMap::new();
+    routes.insert(a.route(), (200, a.to_json()));
+    routes.insert(b.route(), (200, b.to_json()));
+    // One downloads request for both names; the mock accepts either order.
+    for url in [
+        "/downloads/last-week/pkg-a,pkg-b",
+        "/downloads/last-week/pkg-b,pkg-a",
+    ] {
+        routes.insert(
+            url.to_string(),
+            (
+                200,
+                r#"{"pkg-a":{"downloads":1},"pkg-b":{"downloads":2}}"#.to_string(),
+            ),
+        );
+    }
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (
+            200,
+            r#"{"results":[{"vulns":[{"id":"GHSA-test-0001"}]},{"vulns":[{"id":"GHSA-test-0001"}]}]}"#
+                .to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/vulns/GHSA-test-0001".to_string(),
+        (200, HIGH_ADVISORY_DETAIL.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+
+    let requests = registry.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.contains("/v1/querybatch"))
+            .count(),
+        1,
+        "{requests:?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.contains("last-week"))
+            .count(),
+        1,
+        "{requests:?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.contains("/v1/vulns/GHSA-test-0001"))
+            .count(),
+        1,
+        "a shared advisory must hydrate once: {requests:?}"
+    );
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let advisories: Vec<usize> = value["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|package| package["advisories"].as_array().unwrap().len())
+        .collect();
+    assert_eq!(advisories, vec![1, 1]);
+}
+
+#[test]
+fn scoped_packages_get_downloads_one_at_a_time() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("chalk", "1.0.0"), ("@types/node", "1.0.0")]),
+    );
+
+    let chalk = PackageFixture::clean("chalk");
+    let types = PackageFixture::clean("@types/node");
+    let mut routes = HashMap::new();
+    routes.insert(chalk.route(), (200, chalk.to_json()));
+    routes.insert(types.route(), (200, types.to_json()));
+    routes.insert(
+        "/downloads/last-week/chalk".to_string(),
+        (200, r#"{"downloads":10}"#.to_string()),
+    );
+    routes.insert(
+        "/downloads/last-week/@types%2Fnode".to_string(),
+        (200, r#"{"downloads":20}"#.to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, r#"{"results":[{},{"}]}"#.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let mut downloads: Vec<u64> = value["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|package| package["weekly_downloads"].as_u64().unwrap_or(0))
+        .collect();
+    downloads.sort_unstable();
+    assert_eq!(downloads, vec![10, 20]);
+    assert_eq!(
+        registry
+            .requests()
+            .iter()
+            .filter(|path| path.contains("last-week"))
+            .count(),
+        2,
+        "one bulk for chalk, one scoped lookup"
+    );
+}
+
+#[test]
+fn a_failed_osv_batch_marks_every_package_incomplete() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("pkg-a", "1.0.0"), ("pkg-b", "1.0.0")]),
+    );
+
+    let a = PackageFixture::clean("pkg-a");
+    let b = PackageFixture::clean("pkg-b");
+    let mut routes = HashMap::new();
+    routes.insert(a.route(), (200, a.to_json()));
+    routes.insert(b.route(), (200, b.to_json()));
+    routes.insert("/v1/querybatch".to_string(), (500, "{}".to_string()));
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    for package in value["packages"].as_array().unwrap() {
+        assert!(
+            package["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|finding| finding["id"] == "advisory-check-unavailable"),
+            "{} must say the check did not run: {package}",
+            package["name"]
+        );
+    }
+}
+
+#[test]
 fn piped_audits_print_no_progress_line() {
     let repo = Repo::new();
     repo.write(
