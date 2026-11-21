@@ -16,6 +16,67 @@ pub struct LockedPackage {
     pub version: String,
 }
 
+/// Every lockfile parser returns packages plus whatever it could not audit,
+/// so an incomplete tree is never presented as a complete one.
+#[derive(Debug)]
+pub struct LockContents {
+    pub packages: Vec<LockedPackage>,
+    pub skipped: Vec<(String, String)>,
+}
+
+impl LockContents {
+    fn packages_only(packages: Vec<LockedPackage>) -> Self {
+        Self {
+            packages,
+            skipped: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Npm,
+    Pip,
+    Cargo,
+    Go,
+}
+
+impl Format {
+    pub fn ecosystem(self) -> crate::model::Ecosystem {
+        match self {
+            Self::Npm => crate::model::Ecosystem::Npm,
+            Self::Pip => crate::model::Ecosystem::Pypi,
+            Self::Cargo => crate::model::Ecosystem::CratesIo,
+            Self::Go => crate::model::Ecosystem::Go,
+        }
+    }
+}
+
+/// File name decides the parser: `package-lock.json`, `Cargo.lock`, `go.mod`,
+/// or a requirements file (`requirements*.txt`, `*-requirements.txt`).
+pub fn detect(path: &Path) -> Result<Format, LockError> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| LockError::UnsupportedFormat(path.display().to_string()))?;
+    match name {
+        "package-lock.json" => Ok(Format::Npm),
+        "Cargo.lock" => Ok(Format::Cargo),
+        "go.mod" => Ok(Format::Go),
+        other if other.ends_with(".txt") && other.contains("requirement") => Ok(Format::Pip),
+        other => Err(LockError::UnsupportedFormat(other.to_string())),
+    }
+}
+
+pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
+    match format {
+        Format::Npm => parse_npm(body),
+        Format::Pip => Ok(parse_pip(body)),
+        Format::Cargo => parse_cargo(body),
+        Format::Go => Ok(parse_go(body)),
+    }
+}
+
 impl LockedPackage {
     pub fn spec(&self) -> String {
         format!("{}@{}", self.name, self.version)
@@ -40,19 +101,24 @@ pub enum LockError {
     Git(String),
     #[error("{0} is not inside a git repository, so there is no base revision to compare against")]
     NotInRepository(String),
+    #[error(
+        "unsupported lockfile '{0}': use package-lock.json, a requirements*.txt, Cargo.lock, or go.mod"
+    )]
+    UnsupportedFormat(String),
 }
 
-pub fn read(path: &Path) -> Result<Vec<LockedPackage>, LockError> {
+pub fn read(path: &Path) -> Result<LockContents, LockError> {
+    let format = detect(path)?;
     let body = std::fs::read_to_string(path).map_err(|source| LockError::Io {
         path: path.display().to_string(),
         source,
     })?;
-    parse(&body)
+    parse(format, &body)
 }
 
 /// Flattens the `packages` map into name/version pairs, dropping workspace
 /// links (they have no version and point at local directories).
-pub fn parse(body: &str) -> Result<Vec<LockedPackage>, LockError> {
+pub fn parse_npm(body: &str) -> Result<LockContents, LockError> {
     let lockfile: RawLockfile =
         serde_json::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
 
@@ -91,7 +157,7 @@ pub fn parse(body: &str) -> Result<Vec<LockedPackage>, LockError> {
         .collect();
     packages.sort();
     packages.dedup();
-    Ok(packages)
+    Ok(LockContents::packages_only(packages))
 }
 
 /// Packages present now that the base revision did not have. A version bump
@@ -117,7 +183,8 @@ pub fn nearest(start: &Path) -> Option<std::path::PathBuf> {
 
 /// Reads the same lockfile at a git revision, so the diff needs no second
 /// working tree.
-pub fn at_ref(lockfile: &Path, git_ref: &str) -> Result<Vec<LockedPackage>, LockError> {
+pub fn at_ref(lockfile: &Path, git_ref: &str) -> Result<LockContents, LockError> {
+    let format = detect(lockfile)?;
     // `Path::new("package-lock.json").parent()` is `Some("")`, which git
     // rejects as a working directory.
     let directory = lockfile
@@ -138,7 +205,7 @@ pub fn at_ref(lockfile: &Path, git_ref: &str) -> Result<Vec<LockedPackage>, Lock
         directory,
         &["show", &format!("{git_ref}:{}", relative.display())],
     )?;
-    parse(&blob).map_err(|error| match error {
+    parse(format, &blob).map_err(|error| match error {
         LockError::Io { source, .. } => LockError::Io {
             path: format!("{git_ref}:{}", relative.display()),
             source,
@@ -186,12 +253,161 @@ struct Entry {
     link: bool,
 }
 
+fn parse_pip(body: &str) -> LockContents {
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for raw in body.lines() {
+        let line = raw.split(" #").next().unwrap_or("").trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('-') {
+            skipped.push((
+                line.to_string(),
+                "pip option or editable install, not auditable".to_string(),
+            ));
+            continue;
+        }
+        let requirement = line.split(';').next().unwrap_or(line).trim();
+        if requirement.contains("://") || requirement.contains(" @ ") {
+            skipped.push((line.to_string(), "direct URL requirement".to_string()));
+            continue;
+        }
+        // Extras sit between the name and the version: name[extra]==1.2.3.
+        let without_extras = match requirement.find('[') {
+            Some(start) => match requirement[start..].find(']') {
+                Some(offset) => {
+                    let end = start + offset;
+                    format!("{}{}", &requirement[..start], &requirement[end + 1..])
+                }
+                None => {
+                    skipped.push((line.to_string(), "malformed extras".to_string()));
+                    continue;
+                }
+            },
+            None => requirement.to_string(),
+        };
+        match without_extras.split_once("==") {
+            Some((name, version))
+                if !name.trim().is_empty()
+                    && !version.trim().is_empty()
+                    && !version.contains('*') =>
+            {
+                packages.push(LockedPackage {
+                    name: name.trim().to_string(),
+                    version: version.trim().to_string(),
+                });
+            }
+            _ => skipped.push((line.to_string(), "not pinned with ==".to_string())),
+        }
+    }
+
+    finish(packages, skipped)
+}
+
+fn parse_cargo(body: &str) -> Result<LockContents, LockError> {
+    let lockfile: CargoLock =
+        toml::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+
+    for package in lockfile.package {
+        match package.source.as_deref() {
+            // Workspace members and path dependencies are not published.
+            None => continue,
+            Some(source) if source.starts_with("git+") => skipped.push((
+                format!("{}@{}", package.name, package.version),
+                "git dependency, not on crates.io".to_string(),
+            )),
+            Some(_) => packages.push(LockedPackage {
+                name: package.name,
+                version: package.version,
+            }),
+        }
+    }
+
+    Ok(finish(packages, skipped))
+}
+
+fn parse_go(body: &str) -> LockContents {
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+    let mut block: Option<&'static str> = None;
+
+    for raw in body.lines() {
+        let line = raw.split("//").next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(kind) = block {
+            if line == ")" {
+                block = None;
+            } else if kind == "require" {
+                push_go_requirement(line, &mut packages, &mut skipped);
+            }
+            continue;
+        }
+
+        if let Some(kind) = line.strip_suffix('(') {
+            block = Some(match kind.trim() {
+                "require" => "require",
+                _ => "other",
+            });
+            continue;
+        }
+
+        if let Some(requirement) = line.strip_prefix("require ") {
+            push_go_requirement(requirement, &mut packages, &mut skipped);
+        }
+        // module, go, toolchain, replace, exclude, and retract carry no
+        // auditable dependency, and a replaced module may not be the one built.
+    }
+
+    finish(packages, skipped)
+}
+
+fn push_go_requirement(
+    line: &str,
+    packages: &mut Vec<LockedPackage>,
+    skipped: &mut Vec<(String, String)>,
+) {
+    match line.split_whitespace().collect::<Vec<_>>().as_slice() {
+        [module, version] if version.starts_with('v') => packages.push(LockedPackage {
+            name: (*module).to_string(),
+            version: (*version).to_string(),
+        }),
+        _ => skipped.push((line.to_string(), "unreadable require line".to_string())),
+    }
+}
+
+fn finish(mut packages: Vec<LockedPackage>, skipped: Vec<(String, String)>) -> LockContents {
+    packages.sort();
+    packages.dedup();
+    LockContents { packages, skipped }
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoLock {
+    #[serde(default)]
+    package: Vec<CargoPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoPackage {
+    name: String,
+    version: String,
+    #[serde(default)]
+    source: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn lock(body: &str) -> Vec<LockedPackage> {
-        parse(body).unwrap()
+        parse_npm(body).unwrap().packages
     }
 
     fn package(name: &str, version: &str) -> LockedPackage {
@@ -269,8 +485,109 @@ mod tests {
     }
 
     #[test]
+    fn detects_each_supported_lockfile() {
+        assert_eq!(detect(Path::new("package-lock.json")).unwrap(), Format::Npm);
+        assert_eq!(detect(Path::new("Cargo.lock")).unwrap(), Format::Cargo);
+        assert_eq!(detect(Path::new("go.mod")).unwrap(), Format::Go);
+        assert_eq!(detect(Path::new("requirements.txt")).unwrap(), Format::Pip);
+        assert_eq!(
+            detect(Path::new("dev-requirements.txt")).unwrap(),
+            Format::Pip
+        );
+        assert!(matches!(
+            detect(Path::new("poetry.lock")),
+            Err(LockError::UnsupportedFormat(_))
+        ));
+    }
+
+    #[test]
+    fn pip_keeps_exact_pins_and_reports_the_rest() {
+        let body = "\
+flask==3.1.0
+requests[security]==2.31.0 ; python_version >= '3.8'  # comment
+unpinned-pkg
+-r other.txt
+https://example.test/pkg.tar.gz
+wild==1.*
+";
+        let contents = parse(Format::Pip, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![package("flask", "3.1.0"), package("requests", "2.31.0")]
+        );
+        let reasons: Vec<&str> = contents
+            .skipped
+            .iter()
+            .map(|(_, reason)| reason.as_str())
+            .collect();
+        assert!(reasons.contains(&"not pinned with =="));
+        assert!(reasons.contains(&"pip option or editable install, not auditable"));
+        assert!(reasons.contains(&"direct URL requirement"));
+    }
+
+    #[test]
+    fn cargo_keeps_registry_packages_and_skips_git_and_path() {
+        let body = r#"
+version = 3
+
+[[package]]
+name = "serde"
+version = "1.0.229"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "local-dep"
+version = "0.1.0"
+
+[[package]]
+name = "git-dep"
+version = "0.2.0"
+source = "git+https://github.com/example/git-dep#abc123"
+"#;
+        let contents = parse(Format::Cargo, body).unwrap();
+        assert_eq!(contents.packages, vec![package("serde", "1.0.229")]);
+        assert_eq!(contents.skipped.len(), 1);
+        assert!(contents.skipped[0].1.contains("git dependency"));
+    }
+
+    #[test]
+    fn cargo_rejects_malformed_toml() {
+        assert!(matches!(
+            parse(Format::Cargo, "not = [valid"),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn go_reads_require_blocks_and_single_lines() {
+        let body = "\
+module example.com/app
+
+go 1.22
+
+require github.com/gin-gonic/gin v1.9.1
+
+require (
+	golang.org/x/text v0.3.0 // indirect
+	example.com/broken
+)
+
+replace example.com/old => example.com/new v1.0.0
+";
+        let contents = parse(Format::Go, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("github.com/gin-gonic/gin", "v1.9.1"),
+                package("golang.org/x/text", "v0.3.0")
+            ]
+        );
+        assert_eq!(contents.skipped.len(), 1, "{:?}", contents.skipped);
+    }
+
+    #[test]
     fn version_one_lockfiles_are_rejected_with_guidance() {
-        let error = parse(r#"{ "lockfileVersion": 1, "dependencies": {} }"#).unwrap_err();
+        let error = parse_npm(r#"{ "lockfileVersion": 1, "dependencies": {} }"#).unwrap_err();
         assert!(matches!(error, LockError::UnsupportedVersion(1)));
         assert!(error.to_string().contains("npm install"));
     }
@@ -284,13 +601,13 @@ mod tests {
 
     #[test]
     fn missing_packages_map_is_a_clear_error() {
-        let error = parse(r#"{ "lockfileVersion": 3 }"#).unwrap_err();
+        let error = parse_npm(r#"{ "lockfileVersion": 3 }"#).unwrap_err();
         assert!(error.to_string().contains("packages"));
     }
 
     #[test]
     fn malformed_json_is_rejected() {
-        assert!(matches!(parse("nope"), Err(LockError::Malformed(_))));
+        assert!(matches!(parse_npm("nope"), Err(LockError::Malformed(_))));
     }
 
     #[test]

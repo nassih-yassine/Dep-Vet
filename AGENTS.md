@@ -18,18 +18,21 @@ These override convenience. Do not shortcut them.
 2. Every change ships with tests. Actively try to break the app: malformed
    registry JSON, future timestamps, path traversal in specs, huge packuments,
    closed pipes, missing fields.
-3. Bug found → write the failing test first, watch it fail, then fix. See
+3. Keep `README.md` and the GitHub repository About description in sync with
+   what ships. A feature is not done until both describe it: update the About
+   with `gh repo edit ... --description` in the same pass as the README.
+4. Bug found → write the failing test first, watch it fail, then fix. See
    `ci_publishers_are_not_maintainer_mismatches` in `src/signals.rs` for the
    shape of a regression test.
-4. Before writing code against a crate, fetch its docs with Context7. The ureq
+5. Before writing code against a crate, fetch its docs with Context7. The ureq
    3 API and the 10 MB default body limit both came from docs, not memory.
-5. Every finding must cite evidence with a URL. A rule that cannot be linked
+6. Every finding must cite evidence with a URL. A rule that cannot be linked
    does not ship, and no LLM belongs in a verdict.
 
 ## Commands
 
 ```sh
-cargo test --locked                      # 209 unit + 59 end-to-end tests
+cargo test --locked                      # 214 unit + 64 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -52,7 +55,7 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 | File | Owns |
 |------|------|
 | `src/model.rs` | `PackageSpec` parsing/validation, `Severity`, `Finding`, `PackageReport` |
-| `src/lockfile.rs` | `package-lock.json` v2/v3 parsing, flat diff against a git ref |
+| `src/lockfile.rs` | npm/PyPI/Cargo/Go lockfile parsing, flat diff against a git ref |
 | `src/registry.rs` | npm packument fetch + parsing, download counts, repo URL normalization |
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
 | `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |
@@ -138,8 +141,10 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.
 - **`lock` diffs `name@version` pairs**, so a version bump is "new" and gets
-  audited. It reads `package-lock.json` v2/v3 only; v1 is rejected instead of
-  approximated.
+  audited. The parser is chosen by file name (`package-lock.json`,
+  `requirements*.txt`, `Cargo.lock`, `go.mod`); npm v1 is rejected instead of
+  approximated. Unpinned pip lines, git crates, and unreadable go.mod lines
+  become `errors`, so an incomplete tree exits 3.
 - **Aliases resolve to the real package.** For `"x": "npm:real-pkg@1"`, npm
   keys the path `node_modules/x` but stores `"name": "real-pkg"` in the entry.
   Use `Entry::name` first and fall back to the path segment; auditing the alias
@@ -196,6 +201,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Tree-wide advisory lookups, and non-npm lockfiles (PyPI, Cargo, Go, yarn,
-pnpm, bun). Roadmap only: do not describe these as existing in
-code, README, or help text.
+Lockfiles for bun/pnpm/yarn, Poetry, and uv. Roadmap only: do not describe
+these as existing in code, README, or help text.

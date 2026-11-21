@@ -100,10 +100,18 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             lockfile: path,
             json,
         } => {
-            let packages = lockfile::read(path)?;
+            let format = lockfile::detect(path)?;
+            let contents = lockfile::read(path)?;
             // No tree context: every package would otherwise look suspicious
             // to every other one. The seed list is the comparison set.
-            let (reports, errors) = audit_packages(&auditor, &packages, &[], now_seconds());
+            let (reports, mut errors) = audit_packages(
+                &auditor,
+                format.ecosystem(),
+                &contents.packages,
+                &[],
+                now_seconds(),
+            );
+            errors.extend(skipped_errors(&contents));
             let report = AuditReport {
                 lockfile: path.display().to_string(),
                 packages: reports,
@@ -122,17 +130,27 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             base,
             json,
         } => {
+            let format = lockfile::detect(path)?;
+            let ecosystem = format.ecosystem();
             let current = lockfile::read(path)?;
-            let base_packages = lockfile::at_ref(path, base)?;
-            let added = lockfile::added(&current, &base_packages);
+            let base_contents = lockfile::at_ref(path, base)?;
+            let added = lockfile::added(&current.packages, &base_contents.packages);
             // What the user already trusts: typosquats of these names matter
-            // more than distance to a seed list.
-            let local: Vec<String> = base_packages
-                .iter()
-                .map(|package| package.name.to_ascii_lowercase())
-                .collect();
+            // more than distance to a seed list. Only npm names are in a shape
+            // the comparison can use.
+            let local: Vec<String> = if ecosystem == Ecosystem::Npm {
+                base_contents
+                    .packages
+                    .iter()
+                    .map(|package| package.name.to_ascii_lowercase())
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
-            let (new_packages, errors) = audit_packages(&auditor, &added, &local, now_seconds());
+            let (new_packages, mut errors) =
+                audit_packages(&auditor, ecosystem, &added, &local, now_seconds());
+            errors.extend(skipped_errors(&current));
 
             let report = LockReport {
                 lockfile: path.display().to_string(),
@@ -156,8 +174,9 @@ fn local_candidates(cli: &Cli) -> Vec<String> {
     }
     lockfile::nearest(std::path::Path::new("."))
         .and_then(|path| lockfile::read(&path).ok())
-        .map(|packages| {
-            packages
+        .map(|contents| {
+            contents
+                .packages
                 .iter()
                 .map(|package| package.name.to_ascii_lowercase())
                 .collect()
@@ -261,8 +280,33 @@ impl Auditor {
     }
 }
 
+fn skipped_errors(contents: &lockfile::LockContents) -> Vec<LockFetchError> {
+    contents
+        .skipped
+        .iter()
+        .map(|(entry, reason)| LockFetchError {
+            package: entry.clone(),
+            message: reason.clone(),
+        })
+        .collect()
+}
+
+fn spec_for(
+    ecosystem: Ecosystem,
+    name: &str,
+    version: &str,
+) -> Result<PackageSpec, dep_vet::model::SpecError> {
+    match ecosystem {
+        Ecosystem::Npm => PackageSpec::parse(&format!("{name}@{version}")),
+        Ecosystem::Pypi => PackageSpec::parse_pypi(&format!("{name}=={version}")),
+        Ecosystem::CratesIo => PackageSpec::parse_crates(&format!("{name}@{version}")),
+        Ecosystem::Go => PackageSpec::parse_go(&format!("{name}@{version}")),
+    }
+}
+
 fn audit_packages(
     auditor: &Auditor,
+    ecosystem: Ecosystem,
     packages: &[lockfile::LockedPackage],
     local: &[String],
     now: i64,
@@ -280,20 +324,29 @@ fn audit_packages(
                         scope.spawn(move || {
                             // Lockfile contents are still input: validate
                             // before they become a URL.
-                            let spec = PackageSpec::new(
-                                package.name.clone(),
-                                Some(package.version.clone()),
-                            )
-                            .map_err(|error| LockFetchError {
-                                package: package.spec(),
-                                message: error.to_string(),
-                            })?;
-                            auditor
-                                .audit_npm(&spec, local, now)
+                            let spec = spec_for(ecosystem, &package.name, &package.version)
                                 .map_err(|error| LockFetchError {
                                     package: package.spec(),
                                     message: error.to_string(),
-                                })
+                                })?;
+                            let audited = match ecosystem {
+                                Ecosystem::Npm => auditor
+                                    .audit_npm(&spec, local, now)
+                                    .map_err(|e| e.to_string()),
+                                Ecosystem::Pypi => {
+                                    auditor.audit_pypi(&spec, now).map_err(|e| e.to_string())
+                                }
+                                Ecosystem::CratesIo => {
+                                    auditor.audit_crates(&spec, now).map_err(|e| e.to_string())
+                                }
+                                Ecosystem::Go => {
+                                    auditor.audit_go(&spec, now).map_err(|e| e.to_string())
+                                }
+                            };
+                            audited.map_err(|message| LockFetchError {
+                                package: package.spec(),
+                                message,
+                            })
                         }),
                     )
                 })
