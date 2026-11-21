@@ -72,9 +72,12 @@ the weekly download count, then applies local rules.
 | `0`  | clean, or informational findings only |
 | `1`  | warnings: review before adding |
 | `2`  | high risk: install scripts plus another signal, or a near-identical name |
-| `3`  | the check could not run (bad input, network failure, unreadable response) |
+| `3`  | the check could not run (bad input, unknown subcommand or flag, network failure, unreadable response) |
 
-`3` exists so CI can tell "this package is risky" from "the scanner broke".
+`3` exists so CI can tell "this package is risky" from "the scanner broke or was
+called wrong". clap's own exit code for usage errors is `2`, which would read as
+"high risk", so parse failures are remapped to `3`; `--help` and `--version`
+still exit `0`.
 
 ### JSON
 
