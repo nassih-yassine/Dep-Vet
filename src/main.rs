@@ -104,34 +104,31 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         Command::Audit {
             lockfile: path,
             json,
-        } => {
-            let format = lockfile::detect(path)?;
-            let contents = lockfile::read(path)?;
-            // No tree context: every package would otherwise look suspicious
-            // to every other one. The seed list is the comparison set.
-            let (mut reports, mut errors) = audit_packages(
-                &auditor,
-                format.ecosystem(),
-                &contents.packages,
-                &[],
-                now_seconds(),
-            );
-            errors.extend(skipped_errors(&contents));
-            for report in &mut reports {
-                allowlist.apply(report);
-            }
-            let report = AuditReport {
-                lockfile: path.display().to_string(),
-                packages: reports,
-                errors,
-                notes: contents.notes,
+        } => run_audit(&auditor, &allowlist, path, *json, cli),
+
+        Command::Watch { lockfile } => {
+            let path = match lockfile {
+                Some(path) => path.clone(),
+                None => lockfile::nearest(std::path::Path::new(".")).ok_or_else(|| {
+                    anyhow::anyhow!("no package-lock.json found; pass a lockfile path")
+                })?,
             };
-            let output = if *json {
-                render_audit_json(&report)?
-            } else {
-                render_audit_human(&report, use_color(cli))
-            };
-            emit(&output, report.exit_code())
+            dep_vet::watch::watch(
+                &path,
+                || {
+                    println!("watching {} (Ctrl-C to stop)", path.display());
+                    if let Err(error) = run_audit(&auditor, &allowlist, &path, false, cli) {
+                        eprintln!("dep-vet: {error}");
+                    }
+                },
+                || {
+                    println!("\n── change detected ──");
+                    if let Err(error) = run_audit(&auditor, &allowlist, &path, false, cli) {
+                        eprintln!("dep-vet: {error}");
+                    }
+                },
+            )?;
+            unreachable!("watch only returns on error")
         }
 
         Command::Lock {
@@ -291,6 +288,42 @@ impl Auditor {
             now,
         ))
     }
+}
+
+fn run_audit(
+    auditor: &Auditor,
+    allowlist: &dep_vet::allowlist::Allowlist,
+    path: &std::path::Path,
+    json: bool,
+    cli: &Cli,
+) -> anyhow::Result<u8> {
+    let format = lockfile::detect(path)?;
+    let contents = lockfile::read(path)?;
+    // No tree context: every package would otherwise look suspicious
+    // to every other one. The seed list is the comparison set.
+    let (mut reports, mut errors) = audit_packages(
+        auditor,
+        format.ecosystem(),
+        &contents.packages,
+        &[],
+        now_seconds(),
+    );
+    errors.extend(skipped_errors(&contents));
+    for report in &mut reports {
+        allowlist.apply(report);
+    }
+    let report = AuditReport {
+        lockfile: path.display().to_string(),
+        packages: reports,
+        errors,
+        notes: contents.notes,
+    };
+    let output = if json {
+        render_audit_json(&report)?
+    } else {
+        render_audit_human(&report, use_color(cli))
+    };
+    emit(&output, report.exit_code())
 }
 
 fn skipped_errors(contents: &lockfile::LockContents) -> Vec<LockFetchError> {

@@ -16,3 +16,4 @@ pub mod registry;
 pub mod report;
 pub mod signals;
 pub mod typosquat;
+pub mod watch;

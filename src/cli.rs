@@ -84,6 +84,12 @@ pub enum Command {
         json: bool,
     },
 
+    /// Re-audit a lockfile every time it changes on disk
+    Watch {
+        /// Lockfile to watch (default: nearest package-lock.json)
+        lockfile: Option<std::path::PathBuf>,
+    },
+
     /// Audit every dependency a lockfile change adds
     Lock {
         /// Path to package-lock.json
@@ -148,6 +154,19 @@ mod tests {
             }
             _ => panic!("expected pypi command"),
         }
+    }
+
+    #[test]
+    fn parses_watch_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "watch", "Cargo.lock"]).unwrap();
+        match cli.command {
+            Command::Watch { lockfile } => {
+                assert_eq!(lockfile, Some(std::path::PathBuf::from("Cargo.lock")));
+            }
+            _ => panic!("expected watch command"),
+        }
+        let cli = Cli::try_parse_from(["dep-vet", "watch"]).unwrap();
+        assert!(matches!(cli.command, Command::Watch { lockfile: None }));
     }
 
     #[test]
