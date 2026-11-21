@@ -291,7 +291,8 @@ scripts or dependencies passes until an advisory exists.
 
 ### Provenance
 
-Reports say whether a release publishes provenance, never that it is verified:
+An audit says whether a release publishes provenance; `inspect npm` can verify
+it. Presence is reported for:
 
 - **npm** — an attestation is present when the version publishes a provenance
   attestation (`dist.attestations`).
@@ -316,10 +317,9 @@ OIDC issuer. Bundles signed with a managed key instead of a Fulcio certificate
 are reported as `not verified` with the reason: they cannot be checked without
 that key. Nothing is fetched to verify.
 
-`present` means the attestation exists, **not** that its signature, builder, or
-source commit was verified. `missing` is not suspicious on its own: most
-packages do not publish provenance. Cryptographic Sigstore/SLSA verification is
-not implemented yet.
+In an audit, `present` means the attestation exists, **not** that its signature
+was verified; `inspect npm` is where verification happens. `missing` is not
+suspicious on its own: most packages do not publish provenance.
 
 ### Watch mode
 
