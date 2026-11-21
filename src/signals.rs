@@ -157,7 +157,7 @@ pub fn assess(
     let mut findings = Vec::new();
 
     let seed = match ecosystem {
-        Ecosystem::Npm => typosquat::POPULAR,
+        Ecosystem::Npm => typosquat::popular_npm(),
         Ecosystem::Pypi => typosquat::POPULAR_PYPI,
         Ecosystem::CratesIo => typosquat::POPULAR_CRATES,
         Ecosystem::Go => typosquat::POPULAR_GO,

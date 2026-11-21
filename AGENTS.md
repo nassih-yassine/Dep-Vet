@@ -65,7 +65,7 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
 | `src/signals.rs` | the rules: `PackageMeta` + `now` in, `Vec<Finding>` out (no I/O) |
-| `src/typosquat.rs` | Levenshtein, homoglyph folding, curated popular-name seed |
+| `src/typosquat.rs` | Levenshtein, homoglyph folding, per-ecosystem candidate lists |
 | `src/report.rs` | human rendering and JSON envelope |
 | `src/date.rs` | hand-rolled RFC 3339 → epoch (deliberately no date crate) |
 | `src/main.rs` | wiring, color decision, exit codes |
@@ -135,6 +135,12 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - **Lockfile audits run 4 packages at a time.** `MAX_CONCURRENT_AUDITS` in
   `main.rs` bounds the burst; output order still follows the sorted diff, and
   per-package failures stay in `errors`.
+- **The npm candidate list is generated, not hand-edited.**
+  `data/popular-npm.txt` comes from `scripts/refresh-popular-npm.py` (downloads
+  ranking, unioned with the previous seed). `popular_npm()` loads it once via
+  `include_str!` + `OnceLock`. Tests require `cross-env`, `preact`, and `moment`
+  to stay present, so refresh with the script, never by deleting lines. PyPI,
+  crates.io, and Go lists are still curated constants.
 - **Advisories are deduplicated by alias.** OSV lists one issue as PYSEC, GHSA,
   and CVE records. `dedupe` unions records whose id/alias sets overlap, keeps the
   highest severity, prefers a real summary over the placeholder, and preserves
