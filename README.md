@@ -106,6 +106,10 @@ Vetting is read-only: `dep-vet` never installs the package, never writes a
 lockfile, and never executes package code. It fetches the registry packument,
 the weekly download count, and the OSV advisory list, then applies local rules.
 
+If the current directory or a parent contains `package-lock.json`, its dependency
+names join the typosquat list, so a package one edit from something you already
+use is flagged. `--no-local` ignores it.
+
 ### Audit a lockfile change
 
 ```sh
@@ -270,7 +274,7 @@ DEPVET_OSV_BASE=https://api.osv.dev dep-vet npm express
 |--------|----------|---------|
 | Advisories | High/Warn/Info from OSV | Known vulnerabilities for this exact version, one finding per advisory, linking to its OSV record and CVE aliases. An advisory whose details cannot be fetched still surfaces as a warning. If OSV is unreachable, the report says so as an INFO finding instead of implying the package is clean. |
 | Install scripts | WARN, HIGH when combined | `preinstall`/`install`/`postinstall` run during `npm install`. Combined with a fresh package, an unexpected publisher, or a typosquat name, this is the shape of a supply-chain attack. |
-| Typosquat | HIGH at ≤1 edit or homoglyph, WARN at 2 | Levenshtein distance to a curated list of popular names and, under `dep-vet lock`, to the dependency names already in your lockfile. Lookalikes are folded (`1`/`l`, `0`/`o`, `rn`/`m`); names under 4 characters are skipped to avoid noise. A package that is itself popular is never flagged for resembling something nearby (`preact` is not a `react` typo). |
+| Typosquat | HIGH at ≤1 edit or homoglyph, WARN at 2 | Levenshtein distance to a curated list of popular names and, when a lockfile is available, to the dependency names you already have. Lookalikes are folded (`1`/`l`, `0`/`o`, `rn`/`m`); names under 4 characters are skipped to avoid noise. A package that is itself popular is never flagged for resembling something nearby (`preact` is not a `react` typo). |
 | Fresh package | WARN | First publish less than 7 days ago: no track record. |
 | Fresh version | INFO | Old package, version published in the last week. |
 | Publisher not a maintainer | WARN | This version's publisher is absent from the current maintainer list, a proxy for ownership handoff. CI identities such as `GitHub Actions` are ignored. |
@@ -285,9 +289,10 @@ raw source does not ship.
 - **npm only.** Bun, pnpm, and yarn install from the same registry, so package
   vetting is accurate for them; lockfile commands and manager-specific script
   policy are not implemented.
-- **Typosquat context differs by command.** `dep-vet lock` compares each new
-  package against names you already have, plus the seed list; `dep-vet npm` has
-  no tree to compare against and uses the seed only.
+- **Typosquat context depends on what is on disk.** `dep-vet lock` compares
+  against the base lockfile; `dep-vet npm` uses the nearest `package-lock.json`
+  when one exists, and `--no-local` turns that off. Either way the seed list is
+  also consulted.
 - **Advisories describe this version, not your tree.** `dep-vet npm` answers for
   the package you named; `dep-vet lock` covers only the `name@version` pairs the
   lockfile change adds, not the pre-existing tree.

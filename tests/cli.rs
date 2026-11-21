@@ -1109,3 +1109,57 @@ fn lock_does_not_flag_a_known_package_similar_to_an_installed_one() {
         .code(0)
         .stdout(predicate::str::contains("typosquat").not());
 }
+
+#[test]
+fn npm_uses_the_nearest_lockfile_for_typosquat_context() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("cross-env", "7.0.3")]),
+    );
+    repo.commit("base");
+    let nested = repo.path().join("src");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let suspicious = PackageFixture {
+        version: "0.0.2-security",
+        ..PackageFixture::clean("crossenv")
+    };
+    let registry = registry_with(&[suspicious], None);
+    registry
+        .command()
+        .current_dir(&nested)
+        .args(["npm", "crossenv"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "name is close to a package you already use",
+        ))
+        .stdout(predicate::str::contains("already in your lockfile"));
+}
+
+#[test]
+fn no_local_flag_falls_back_to_the_seed_list() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("cross-env", "7.0.3")]),
+    );
+    repo.commit("base");
+
+    let suspicious = PackageFixture {
+        version: "0.0.2-security",
+        ..PackageFixture::clean("crossenv")
+    };
+    let registry = registry_with(&[suspicious], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["npm", "crossenv", "--no-local"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "name is close to a popular package",
+        ))
+        .stdout(predicate::str::contains("already in your lockfile").not());
+}

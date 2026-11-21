@@ -29,7 +29,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 143 unit + 36 end-to-end tests
+cargo test --locked                      # 150 unit + 41 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -88,11 +88,13 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   "advisory without a summary" for every real advisory.
 - **Advisory failure is an INFO finding**, not silence and not exit 3. "We
   could not check" must never read as "nothing found".
-- **Typosquat candidates = seed ∪ base-lockfile names.** `closest()` takes the
-  caller's local list; in `lock`, pass base lockfile names so a new package one
-  edit from something already installed is flagged with "already in your
-  lockfile". A name that is itself in the seed is never flagged for resembling
-  a local one (`preact` vs `react`) — keep that guard and its test.
+- **Typosquat candidates = seed ∪ local lockfile names.** `closest()` takes the
+  caller's local list. `lock` passes base lockfile names; `npm` finds the nearest
+  `package-lock.json` by walking up (`lockfile::nearest`) unless `--no-local`.
+  An unreadable lockfile degrades to the seed silently; do not fail the check
+  because of an unrelated file. A name that is itself in the seed is never
+  flagged for resembling a local one (`preact` vs `react`) — keep that guard
+  and its test.
 - **Lockfile audits run 4 packages at a time.** `MAX_CONCURRENT_AUDITS` in
   `main.rs` bounds the burst; output order still follows the sorted diff, and
   per-package failures stay in `errors`.

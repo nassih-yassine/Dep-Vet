@@ -106,6 +106,15 @@ pub fn added(current: &[LockedPackage], base: &[LockedPackage]) -> Vec<LockedPac
     added
 }
 
+/// Walks up from `start` looking for a `package-lock.json`, the way npm does.
+pub fn nearest(start: &Path) -> Option<std::path::PathBuf> {
+    let start = start.canonicalize().ok()?;
+    start
+        .ancestors()
+        .map(|directory| directory.join("package-lock.json"))
+        .find(|candidate| candidate.is_file())
+}
+
 /// Reads the same lockfile at a git revision, so the diff needs no second
 /// working tree.
 pub fn at_ref(lockfile: &Path, git_ref: &str) -> Result<Vec<LockedPackage>, LockError> {
@@ -246,6 +255,17 @@ mod tests {
             "packages": { "node_modules/express": { "version": "5.1.0" } }
         }"#;
         assert_eq!(lock(body), vec![package("express", "5.1.0")]);
+    }
+
+    #[test]
+    fn finds_the_nearest_lockfile_in_a_parent_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let nested = directory.path().join("packages").join("app");
+        std::fs::create_dir_all(&nested).unwrap();
+        let lockfile = directory.path().join("package-lock.json");
+        std::fs::write(&lockfile, "{}").unwrap();
+
+        assert_eq!(nearest(&nested).as_deref(), Some(lockfile.as_path()));
     }
 
     #[test]
