@@ -250,9 +250,12 @@ dep-vet diff npm lodash@4.17.20 lodash@4.17.21
 Both archives are fetched, verified, and compared by file content: added,
 removed, and modified paths, plus rule findings that appear or disappear. A
 newly added shell script or shebang file gets its own warning, because that is
-where install-time behaviour usually enters. The diff is text-based; a minified
-rewrite can look large without being suspicious, and line numbers shift, so
-rule findings are matched by rule and file, not line.
+where install-time behaviour usually enters. For npm it also diffs the
+`preinstall`/`install`/`postinstall` commands themselves: a changed hook is WARN,
+and HIGH when the new command fetches or decodes code. Newly shipped binary
+files are listed as INFO, since they cannot be read as text. The diff is
+text-based; a minified rewrite can look large without being suspicious, and
+line numbers shift, so rule findings are matched by rule and file, not line.
 
 ### Release transitions
 
@@ -639,8 +642,10 @@ clean.
   builder. `missing` is never a finding, and `unavailable` means the ecosystem
   has no provenance dep-vet can read.
 - **Release diffs are text-based.** `diff` compares extracted files by content
-  and rule hits by (rule, file). It does not decompile compiled artifacts, and
-  a minified rewrite can produce a large but harmless diff.
+  and rule hits by (rule, file). Install hooks are compared as parsed commands,
+  not as a `package.json` text diff. It does not decompile compiled artifacts;
+  added binaries are reported as INFO and never scanned, and a minified rewrite
+  can produce a large but harmless diff.
 - **Archive inspection never executes a package.** It downloads, verifies,
   extracts in memory, and reads text. No install hooks run, no script is
   sourced, and no file is written outside the process.

@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 468 unit + 119 end-to-end tests
+cargo test --locked                      # 471 unit + 120 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -285,7 +285,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   skipped, and findings sort by (file, line, rule) for reproducible output.
   `diff` compares two extracted releases by content: added/removed/modified
   paths, findings matched by (rule, file) because line numbers shift, and a
-  `DIFF-NEW-SCRIPT-001` WARN for added shell/shebang files. Both specs must
+  `DIFF-NEW-SCRIPT-001` WARN for added shell/shebang files, and
+  `DIFF-INSTALL-SCRIPTS-001` compares parsed npm install hooks (WARN, HIGH when
+  `signals::risky_install_command` matches). Added binaries become
+  `DIFF-NEW-BINARY-001` INFO from `Extracted.binaries` (capped at 200); they are
+  never scanned as text. Both specs must
   name the same package with exact versions. The same `.depvet.toml` carries
   `[inspect]` limits and `disabled_rules`; unknown rule ids and zero caps are
   configuration errors (exit 3), and `disabled_rules` is applied to both

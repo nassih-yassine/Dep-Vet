@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Richer release diffs.** npm install hooks are compared as commands (WARN,
+  HIGH when the new one fetches or decodes code), and newly shipped binary
+  files are listed as INFO.
 - **Publisher intelligence.** Release bursts (INFO), source-repository changes
   (INFO), and provenance disappearing between releases (WARN).
 

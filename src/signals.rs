@@ -163,7 +163,7 @@ fn upgrade_advice(
 
 /// Commands that fetch or decode code during install. Presence alone is not a
 /// verdict: it raises an already-changed script from WARN to HIGH.
-fn risky_install_command(command: &str) -> bool {
+pub(crate) fn risky_install_command(command: &str) -> bool {
     let lowered = command.to_ascii_lowercase();
     [
         "curl",

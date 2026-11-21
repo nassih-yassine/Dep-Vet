@@ -34,6 +34,8 @@ pub struct Extracted {
     pub entries: usize,
     pub skipped_binary: usize,
     pub skipped_unsafe: usize,
+    /// Paths of entries that looked binary; kept for diffs, capped.
+    pub binaries: Vec<String>,
     pub truncated: bool,
 }
 
@@ -181,11 +183,19 @@ fn read_text(
     }
     if buffer.contains(&0) {
         out.skipped_binary += 1;
+        if out.binaries.len() < 200 {
+            out.binaries.push(path);
+        }
         return Ok(());
     }
     match String::from_utf8(buffer) {
         Ok(text) => out.files.push(ExtractedFile { path, text }),
-        Err(_) => out.skipped_binary += 1,
+        Err(_) => {
+            out.skipped_binary += 1;
+            if out.binaries.len() < 200 {
+                out.binaries.push(path);
+            }
+        }
     }
     Ok(())
 }
