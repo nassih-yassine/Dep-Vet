@@ -37,6 +37,41 @@ impl PackageSpec {
         Ok(Self { name, version })
     }
 
+    /// Composer reference: `vendor/package` or `vendor/package@1.2.3`.
+    pub fn parse_composer(input: &str) -> Result<Self, SpecError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(SpecError::Empty);
+        }
+        let (name, version) = match trimmed.split_once('@') {
+            Some((name, version)) => (name, Some(version)),
+            None => (trimmed, None),
+        };
+        let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+        match name.split_once('/') {
+            Some((vendor, package))
+                if !vendor.is_empty()
+                    && !package.is_empty()
+                    && !package.contains('/')
+                    && vendor.chars().all(allowed)
+                    && package.chars().all(allowed) => {}
+            _ => {
+                return Err(SpecError::InvalidName(format!(
+                    "{name} (expected vendor/package)"
+                )));
+            }
+        }
+        let version = match version {
+            Some(version) => Some(validate_version(version)?),
+            None => None,
+        };
+        // Composer requires lowercase names; OSV keys Packagist by that form.
+        Ok(Self {
+            name: name.to_ascii_lowercase(),
+            version,
+        })
+    }
+
     /// Maven reference: `group:artifact` or `group:artifact@1.2.3`.
     pub fn parse_maven(input: &str) -> Result<Self, SpecError> {
         let trimmed = input.trim();
@@ -309,6 +344,8 @@ pub enum Ecosystem {
     #[serde(rename = "nuget")]
     NuGet,
     Maven,
+    #[serde(rename = "composer")]
+    Composer,
 }
 
 impl Ecosystem {
@@ -322,6 +359,7 @@ impl Ecosystem {
             Self::RubyGems => "gem",
             Self::NuGet => "nuget",
             Self::Maven => "maven",
+            Self::Composer => "composer",
         }
     }
 
@@ -337,6 +375,7 @@ impl Ecosystem {
             Self::RubyGems => "RubyGems",
             Self::NuGet => "NuGet",
             Self::Maven => "Maven",
+            Self::Composer => "Packagist",
         }
     }
 }
@@ -356,6 +395,7 @@ impl Ecosystem {
                 let (group, artifact) = name.split_once(':').unwrap_or((name, ""));
                 format!("https://search.maven.org/artifact/{group}/{artifact}/{version}/jar")
             }
+            Self::Composer => format!("https://packagist.org/packages/{name}#{version}"),
         }
     }
 
@@ -373,6 +413,7 @@ impl Ecosystem {
                 let (group, artifact) = name.split_once(':').unwrap_or((name, ""));
                 format!("https://search.maven.org/artifact/{group}/{artifact}")
             }
+            Self::Composer => format!("https://packagist.org/packages/{name}"),
         }
     }
 }
@@ -496,6 +537,19 @@ impl Profile {
         repository: false,
         downloads: false,
         deprecation: false,
+        typosquat: true,
+        freshness: true,
+    };
+
+    /// Packagist exposes maintainers, repository metadata, and an abandoned
+    /// flag, but no install-time file list and no weekly download figure.
+    pub const COMPOSER: Self = Self {
+        execution: false,
+        maintainers: true,
+        advisories: true,
+        repository: true,
+        downloads: false,
+        deprecation: true,
         typosquat: true,
         freshness: true,
     };
@@ -847,6 +901,25 @@ mod tests {
         assert_eq!(Ecosystem::Go.osv_name(), "Go");
         assert_eq!(Ecosystem::RubyGems.osv_name(), "RubyGems");
         assert_eq!(Ecosystem::NuGet.osv_name(), "NuGet");
+        assert_eq!(Ecosystem::Composer.osv_name(), "Packagist");
+    }
+
+    #[test]
+    fn parses_composer_names() {
+        assert_eq!(
+            PackageSpec::parse_composer("monolog/monolog").unwrap(),
+            spec("monolog/monolog", None)
+        );
+        assert_eq!(
+            PackageSpec::parse_composer("Symfony/Console@7.2.0").unwrap(),
+            spec("symfony/console", Some("7.2.0"))
+        );
+        for input in ["monolog", "monolog/", "/monolog", "a/b/c", "a b/c", "a/b@"] {
+            assert!(
+                PackageSpec::parse_composer(input).is_err(),
+                "accepted {input:?}"
+            );
+        }
     }
 
     #[test]

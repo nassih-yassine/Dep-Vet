@@ -4,6 +4,7 @@ pub mod allowlist;
 pub mod branding;
 pub mod cache;
 pub mod cli;
+pub mod composer;
 pub mod crates;
 pub mod date;
 pub mod go;

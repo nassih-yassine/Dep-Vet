@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 301 unit + 93 end-to-end tests
+cargo test --locked                      # 316 unit + 96 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -82,6 +82,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/rubygems.rs` | RubyGems versions, timestamps, source URL, yank flag |
 | `src/nuget.rs` | NuGet flat container, registration pages, times, deprecation |
 | `src/maven.rs` | Maven Central search: versions, timestamps |
+| `src/composer.rs` | Packagist p2 versions, maintainers, abandoned flag |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -122,6 +123,13 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **Composer has two endpoints.** `repo.packagist.org/p2/{vendor}/{name}.json`
+  lists versions and times (minified entries may omit fields); the package
+  endpoint at `packagist.org/packages/...` adds maintainers and the abandoned
+  flag. Maintainer failures must set `maintainers_known = false` (INFO "list
+  unavailable"), never look like agreement. Composer names are lowercase and
+  `parse_composer` lowercases them for OSV. Downloads are monthly-only on
+  Packagist, so the weekly download signal stays `not checked`.
 - **Maven has no lockfile.** `dep-vet maven group:artifact[@version]` audits a
   single coordinate via the Central search API (timestamps are milliseconds).
   No owners, downloads, repository, or deprecation exist; `Profile::MAVEN`
@@ -305,5 +313,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Remaining ecosystems and lockfile formats. Roadmap only: do not describe these
-as existing in code, README, or help text.
+Remaining ecosystems and lockfile formats (e.g. Gradle). Roadmap only: do not
+describe these as existing in code, README, or help text.

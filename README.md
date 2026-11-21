@@ -28,7 +28,7 @@
 ---
 
 `npm install` runs code, and so does a Python sdist build. `dep-vet` reads
-public registry metadata and OSV advisories for **npm, PyPI, crates.io, Go modules, JSR, RubyGems, NuGet, and Maven**, then tells you
+public registry metadata and OSV advisories for **npm, PyPI, crates.io, Go modules, JSR, RubyGems, NuGet, Maven, and Composer**, then tells you
 what a package will do at that moment: whether it runs install-time code, how
 old it is, who published this version, whether its name is one typo away from a
 package you trust, what vulnerabilities apply to this exact version, and whether
@@ -142,6 +142,7 @@ dep-vet audit yarn.lock              # Yarn classic and Berry
 dep-vet audit deno.lock              # Deno: npm and JSR entries
 dep-vet audit Gemfile.lock           # RubyGems
 dep-vet audit packages.lock.json     # NuGet
+dep-vet audit composer.lock          # Composer
 ```
 
 Vets **every** package the lockfile installs, not just the diff, and reports the
@@ -164,6 +165,7 @@ What each format contributes, and what it cannot:
 | `deno.lock` | `npm` and `jsr` entries | JSR advisories, which OSV does not publish |
 | `Gemfile.lock` | remote `GEM` specs | `PATH`/`GIT` sections; yanked versions are absent from the API |
 | `packages.lock.json` | resolved dependencies for every target framework | unresolved entries; project references |
+| `composer.lock` | `packages` and `packages-dev` | dev-only advisories are still reported |
 
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
@@ -411,17 +413,20 @@ clean.
 
 ## Scope and limits
 
-- **npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, and Maven**, for both
-  `audit` and `lock`, including
+- **npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven, and Composer**, for
+  both `audit` and `lock`, including
   `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`, `poetry.lock`, and
-  `uv.lock`, `Gemfile.lock`, `packages.lock.json`. JSR has no advisory source,
+  `uv.lock`, `Gemfile.lock`, `packages.lock.json`, `composer.lock`. JSR has no
+  advisory source,
   so JSR reports say advisory coverage is unavailable. RubyGems has no owner
   list, weekly downloads, or install-time file data; yanked versions disappear
   from its API, so asking for one reports "not found" rather than "yanked".
   NuGet exposes no owners, downloads, repository, or build-time file data; its
   1900-01-01 "unknown" publish dates are ignored. Maven Central has no owners,
   downloads, repository, or deprecation concept, and no standard lockfile, so
-  `dep-vet maven` only vets a single coordinate.
+  `dep-vet maven` only vets a single coordinate. Composer has maintainers,
+  repository metadata, and an abandoned flag, but no install-time file list and
+  no weekly download figure.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the
@@ -442,7 +447,8 @@ clean.
   skipped. Lockfile audits run 4 packages at a time.
 - The npm popular-name list is download-ranked; a weekly workflow runs
   `scripts/refresh-popular-npm.py`, opens a bot PR, and auto-merges after CI.
-  PyPI, crates.io, Go, JSR, RubyGems, NuGet, and Maven seeds are curated.
+  PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven, and Composer seeds are
+  curated.
 
 ## Development
 
@@ -505,7 +511,7 @@ did.
 
 ## Roadmap
 
-1. Remaining ecosystems and lockfile formats (e.g. Gradle, Composer).
+1. Remaining ecosystems and lockfile formats (e.g. Gradle).
 
 ## License
 

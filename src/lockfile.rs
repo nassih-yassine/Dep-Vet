@@ -53,6 +53,7 @@ pub enum Format {
     Go,
     Gemfile,
     NugetLock,
+    Composer,
 }
 
 impl Format {
@@ -63,6 +64,7 @@ impl Format {
             }
             Self::Gemfile => crate::model::Ecosystem::RubyGems,
             Self::NugetLock => crate::model::Ecosystem::NuGet,
+            Self::Composer => crate::model::Ecosystem::Composer,
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
             Self::Cargo => crate::model::Ecosystem::CratesIo,
             Self::Go => crate::model::Ecosystem::Go,
@@ -85,6 +87,7 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         "deno.lock" => Ok(Format::Deno),
         "Gemfile.lock" => Ok(Format::Gemfile),
         "packages.lock.json" => Ok(Format::NugetLock),
+        "composer.lock" => Ok(Format::Composer),
         "Cargo.lock" => Ok(Format::Cargo),
         "go.mod" => Ok(Format::Go),
         "poetry.lock" => Ok(Format::Poetry),
@@ -103,6 +106,7 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
         Format::Deno => parse_deno(body),
         Format::Gemfile => Ok(parse_gemfile(body)),
         Format::NugetLock => parse_nuget_lock(body),
+        Format::Composer => parse_composer_lock(body),
         Format::Pip => Ok(parse_pip(body)),
         Format::Poetry => parse_poetry(body),
         Format::Uv => parse_uv(body),
@@ -615,6 +619,25 @@ fn parse_gemfile(body: &str) -> LockContents {
     finish(packages, skipped)
 }
 
+fn parse_composer_lock(body: &str) -> Result<LockContents, LockError> {
+    let lockfile: ComposerLock =
+        serde_json::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
+    let mut packages = Vec::new();
+
+    // composer.lock splits production and dev dependencies into two arrays.
+    for entry in lockfile.packages.into_iter().chain(lockfile.packages_dev) {
+        if entry.name.is_empty() || entry.version.is_empty() {
+            continue;
+        }
+        packages.push(LockedPackage {
+            name: entry.name,
+            version: entry.version,
+        });
+    }
+
+    Ok(finish(packages, Vec::new()))
+}
+
 fn parse_nuget_lock(body: &str) -> Result<LockContents, LockError> {
     let lockfile: NugetLock =
         serde_json::from_str(body).map_err(|error| LockError::Malformed(error.to_string()))?;
@@ -832,6 +855,22 @@ fn finish(mut packages: Vec<LockedPackage>, skipped: Vec<(String, String)>) -> L
         skipped,
         notes: Vec::new(),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ComposerLock {
+    #[serde(default)]
+    packages: Vec<ComposerEntry>,
+    #[serde(rename = "packages-dev", default)]
+    packages_dev: Vec<ComposerEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ComposerEntry {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1285,6 +1324,36 @@ DEPENDENCIES
     fn nuget_lock_rejects_malformed_json() {
         assert!(matches!(
             parse(Format::NugetLock, "{ nope"),
+            Err(LockError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn composer_lock_reads_production_and_dev_packages() {
+        let body = r#"{
+            "packages": [
+                { "name": "monolog/monolog", "version": "3.13.0" },
+                { "name": "psr/log", "version": "3.0.2" }
+            ],
+            "packages-dev": [
+                { "name": "phpunit/phpunit", "version": "11.5.0" }
+            ]
+        }"#;
+        let contents = parse(Format::Composer, body).unwrap();
+        assert_eq!(
+            contents.packages,
+            vec![
+                package("monolog/monolog", "3.13.0"),
+                package("phpunit/phpunit", "11.5.0"),
+                package("psr/log", "3.0.2")
+            ]
+        );
+    }
+
+    #[test]
+    fn composer_lock_rejects_malformed_json() {
+        assert!(matches!(
+            parse(Format::Composer, "{ nope"),
             Err(LockError::Malformed(_))
         ));
     }

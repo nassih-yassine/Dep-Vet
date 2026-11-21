@@ -64,6 +64,8 @@ impl MockRegistry {
             .env("DEPVET_RUBYGEMS_BASE", &self.base)
             .env("DEPVET_NUGET_BASE", &self.base)
             .env("DEPVET_MAVEN_BASE", &self.base)
+            .env("DEPVET_COMPOSER_BASE", &self.base)
+            .env("DEPVET_PACKAGIST_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
@@ -2662,4 +2664,120 @@ fn maven_requires_group_and_artifact() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("group:artifact"));
+}
+
+const COMPOSER_P2: &str = r#"{
+    "packages": {
+        "monolog/monolog": [
+            {
+                "version": "3.13.0",
+                "time": "2026-11-16T10:43:05+00:00",
+                "source": { "url": "https://github.com/Seldaek/monolog.git" }
+            },
+            {
+                "version": "3.0.0",
+                "time": "2024-01-01T00:00:00+00:00",
+                "source": { "url": "https://github.com/Seldaek/monolog.git" }
+            }
+        ]
+    }
+}"#;
+
+const COMPOSER_PACKAGE: &str = r#"{
+    "package": {
+        "name": "monolog/monolog",
+        "repository": "https://github.com/Seldaek/monolog",
+        "maintainers": [{ "name": "Seldaek" }],
+        "abandoned": false
+    }
+}"#;
+
+fn composer_routes() -> HashMap<String, (u16, String)> {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/p2/monolog/monolog.json".to_string(),
+        (200, COMPOSER_P2.to_string()),
+    );
+    routes.insert(
+        "/packages/monolog/monolog.json".to_string(),
+        (200, COMPOSER_PACKAGE.to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    routes
+}
+
+#[test]
+fn composer_reports_maintainers_and_missing_signals() {
+    let registry = MockRegistry::start(composer_routes());
+    let output = registry
+        .command()
+        .args(["composer", "Monolog/Monolog", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["ecosystem"], "composer");
+    assert_eq!(value["name"], "monolog/monolog");
+    assert_eq!(value["version"], "3.13.0");
+    assert_eq!(
+        value["repository"],
+        "https://github.com/Seldaek/monolog.git"
+    );
+    let not_checked = value["not_checked"].as_array().unwrap();
+    for signal in ["execution", "downloads"] {
+        assert!(not_checked.iter().any(|entry| entry == signal), "{signal}");
+    }
+    assert!(
+        !not_checked.iter().any(|entry| entry == "maintainers"),
+        "maintainers were fetched"
+    );
+}
+
+#[test]
+fn audit_reads_composer_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("composer.lock"),
+        r#"{
+            "packages": [
+                { "name": "monolog/monolog", "version": "3.0.0" }
+            ],
+            "packages-dev": []
+        }"#,
+    )
+    .unwrap();
+
+    let registry = MockRegistry::start(composer_routes());
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "composer.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(value["packages"][0]["name"], "monolog/monolog");
+    assert_eq!(value["packages"][0]["version"], "3.0.0");
+    assert_eq!(value["errors"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn unknown_composer_package_is_a_tool_error() {
+    let registry = MockRegistry::start(composer_routes());
+    registry
+        .command()
+        .args(["composer", "ghost/package"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("was not found on Packagist"));
 }

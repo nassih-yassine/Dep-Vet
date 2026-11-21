@@ -429,6 +429,50 @@ pub const POPULAR_MAVEN: &[&str] = &[
     "org.yaml:snakeyaml",
 ];
 
+/// Provisional Packagist seed, as `vendor/package`.
+pub const POPULAR_COMPOSER: &[&str] = &[
+    "composer/ca-bundle",
+    "doctrine/annotations",
+    "doctrine/dbal",
+    "doctrine/orm",
+    "egulias/email-validator",
+    "firebase/php-jwt",
+    "guzzlehttp/guzzle",
+    "laravel/framework",
+    "laravel/tinker",
+    "league/flysystem",
+    "monolog/monolog",
+    "nesbot/carbon",
+    "nikic/php-parser",
+    "opis/closure",
+    "paragonie/random_compat",
+    "php-di/php-di",
+    "phpmailer/phpmailer",
+    "phpseclib/phpseclib",
+    "phpunit/phpunit",
+    "predis/predis",
+    "psr/container",
+    "psr/http-message",
+    "psr/log",
+    "ramsey/uuid",
+    "sebastian/version",
+    "squizlabs/php_codesniffer",
+    "symfony/console",
+    "symfony/css-selector",
+    "symfony/error-handler",
+    "symfony/event-dispatcher",
+    "symfony/filesystem",
+    "symfony/finder",
+    "symfony/http-foundation",
+    "symfony/http-kernel",
+    "symfony/process",
+    "symfony/routing",
+    "symfony/var-dumper",
+    "symfony/yaml",
+    "twig/twig",
+    "vlucas/phpdotenv",
+];
+
 /// A popular name that `name` is suspiciously close to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suspect<'a> {
@@ -557,6 +601,21 @@ mod tests {
         );
         for name in ["requests", "numpy", "django", "pydantic"] {
             assert!(POPULAR_PYPI.contains(&name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn composer_seed_is_clean() {
+        let mut sorted = POPULAR_COMPOSER.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            POPULAR_COMPOSER.len(),
+            "duplicate Composer names"
+        );
+        for name in ["monolog/monolog", "guzzlehttp/guzzle", "symfony/console"] {
+            assert!(POPULAR_COMPOSER.contains(&name), "missing {name}");
         }
     }
 
