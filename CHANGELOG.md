@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-11-21
 
 - **Legacy NuGet:** `packages.config` audits its `<package id version />`
   elements through the NuGet auditor. Elements missing a version are reported
