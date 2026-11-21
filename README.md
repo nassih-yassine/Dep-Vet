@@ -240,7 +240,12 @@ A partial scan is never presented as a clean one, in `inspect` or `diff`.
 
 Rules are deliberately conservative: one suspicious API call is a WARN, and
 only a combination (network plus credential access in one file, or an encoded
-payload passed to `eval`) reaches HIGH. The 16 starter rules cover JavaScript
+payload passed to `eval`) reaches HIGH. Comments are stripped per language
+family (`//` and `/* */` for JS/TS/Go/Rust/PHP, `#` for Python/shell/Ruby)
+without removing code after `*/`, string literals are respected so a URL is not
+mistaken for a comment, and patterns run over the whole file so a call split
+across lines still matches. Source extensions are scanned even when the bytes
+are not valid UTF-8; only files that are not source are treated as binary. The 16 starter rules cover JavaScript
 (dynamic execution, child processes, credential paths, encoded payloads),
 Python (exec/eval, dynamic imports, shell calls, encoded payloads), shell
 pipe-to-shell, Rust `build.rs`, Go (exec, network plus environment access), and

@@ -209,22 +209,18 @@ fn read_text(
     {
         out.signature_file = true;
     }
-    if buffer.contains(&0) {
+    // A file the rules can read is scanned even when it carries NUL bytes or
+    // invalid UTF-8: a trailing junk byte must not hide the code above it.
+    let scannable = crate::rules::is_scannable(&path);
+    if !scannable && (buffer.contains(&0) || std::str::from_utf8(&buffer).is_err()) {
         out.skipped_binary += 1;
         if out.binaries.len() < 200 {
             out.binaries.push(path);
         }
         return Ok(());
     }
-    match String::from_utf8(buffer) {
-        Ok(text) => out.files.push(ExtractedFile { path, text }),
-        Err(_) => {
-            out.skipped_binary += 1;
-            if out.binaries.len() < 200 {
-                out.binaries.push(path);
-            }
-        }
-    }
+    let text = String::from_utf8_lossy(&buffer).into_owned();
+    out.files.push(ExtractedFile { path, text });
     Ok(())
 }
 
@@ -347,6 +343,24 @@ mod tests {
         let out = extract(ArchiveKind::TarGz, &bytes, limits).unwrap();
         assert!(out.truncated);
         assert!(out.files.is_empty());
+    }
+
+    #[test]
+    fn a_scannable_file_with_invalid_bytes_is_still_scanned() {
+        for body in [
+            b"eval(atob(\"x\"))\n\xff".to_vec(),
+            b"eval(atob(\"x\"))\n\x00".to_vec(),
+        ] {
+            let bytes = tar_gz(&[("lib/x.js", &body)], None);
+            let out = extract(ArchiveKind::TarGz, &bytes, Limits::default()).unwrap();
+            assert_eq!(out.files.len(), 1, "scannable file must be kept");
+            let findings = crate::rules::scan(&out.files);
+            assert!(
+                findings.iter().any(|finding| finding.rule == "JS-OBF-001"),
+                "{:?}",
+                findings
+            );
+        }
     }
 
     #[test]
