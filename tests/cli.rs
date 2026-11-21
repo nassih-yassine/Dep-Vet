@@ -2110,3 +2110,67 @@ fn audit_reads_deno_lock_and_notes_jsr() {
             .contains("1 JSR package")
     );
 }
+
+#[test]
+fn watch_reruns_after_the_lockfile_changes() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let directory = tempfile::tempdir().unwrap();
+    let lockfile = directory.path().join("package-lock.json");
+    std::fs::write(&lockfile, lockfile_json(&[("clean-pkg", "1.0.0")])).unwrap();
+
+    let registry = registry_with(&[PackageFixture::clean("clean-pkg")], None);
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_dep-vet"))
+        .current_dir(directory.path())
+        .args(["watch", "package-lock.json"])
+        .env("DEPVET_REGISTRY_BASE", &registry.base)
+        .env(
+            "DEPVET_DOWNLOADS_BASE",
+            format!("{}/downloads", registry.base),
+        )
+        .env("DEPVET_OSV_BASE", &registry.base)
+        .env("DEPVET_NO_CACHE", "1")
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn dep-vet watch");
+
+    let stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    fn wait_for(receiver: &mpsc::Receiver<String>, needle: &str) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match receiver.recv_timeout(remaining) {
+                Ok(line) if line.contains(needle) => return,
+                Ok(_) => {}
+                Err(_) => panic!("timed out waiting for {needle:?}"),
+            }
+        }
+    }
+
+    wait_for(&receiver, "watching");
+    wait_for(&receiver, "verdict");
+    std::fs::write(
+        &lockfile,
+        format!("{}\n", lockfile_json(&[("clean-pkg", "1.0.0")])),
+    )
+    .unwrap();
+    wait_for(&receiver, "change detected");
+    wait_for(&receiver, "verdict");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}

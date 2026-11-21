@@ -32,7 +32,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 244 unit + 78 end-to-end tests
+cargo test --locked                      # 248 unit + 79 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -66,6 +66,7 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
 | `src/signals.rs` | the rules: `PackageMeta` + `now` in, `Vec<Finding>` out (no I/O) |
 | `src/typosquat.rs` | Levenshtein, homoglyph folding, per-ecosystem candidate lists |
+| `src/watch.rs` | `watch` command: notify watcher, target filtering, debounce |
 | `src/report.rs` | human rendering and JSON envelope |
 | `src/date.rs` | hand-rolled RFC 3339 → epoch (deliberately no date crate) |
 | `src/main.rs` | wiring, color decision, exit codes |
@@ -173,6 +174,13 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`); npm v1 is rejected instead of
   approximated. Unpinned pip lines, git crates, and
   unreadable go.mod lines become `errors`, so an incomplete tree exits 3.
+- **`watch` watches the file, not the folder.** `is_target` ignores sibling
+  files and same-named files elsewhere; events are debounced 300 ms. The
+  watcher is registered before `on_start` runs, so an edit during the first
+  report is not lost.
+  end-to-end test spawns the binary, edits the lockfile, and waits for a second
+  report, so it touches inotify - keep timeouts generous. Any lockfile format
+  works; the default is the nearest `package-lock.json`.
 - **Allowlists downgrade, never delete.** `Allowlist::apply` runs after a
   report exists, sets `allowed`, forces `Severity::Info`, prefixes the reason,
   and re-sorts (severity changed). Tree views must show allowed entries or the

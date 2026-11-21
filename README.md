@@ -164,6 +164,17 @@ What each format contributes, and what it cannot:
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
 
+### Watch mode
+
+```sh
+dep-vet watch package-lock.json     # or Cargo.lock, go.mod, requirements.txt, ...
+```
+
+Audits the lockfile once, then again every time it changes on disk. Saves are
+debounced (300 ms), so an editor writing the file several times produces one
+rerun. `Ctrl-C` stops it. Without an argument it watches the nearest
+`package-lock.json`.
+
 ### Check a PyPI package
 
 ```sh
