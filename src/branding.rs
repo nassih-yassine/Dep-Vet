@@ -2,36 +2,53 @@
 
 use owo_colors::OwoColorize;
 
-/// ASCII-only, for terminals that mangle box glyphs.
-pub const LOGO_ASCII: &str = r#"    #                                 #
-    #                                ###
- ####  ###  ####        #   #  ###    #
-#   # #   # #   #  ###  #   # #   #   #
-#   # ##### ####        #   # #####   #
-#   # #     #            # #  #       #
- ####  ###  #             #    ###    ##"#;
+pub const LOGO_BLOCKS: &str = r#"██████╗ ███████╗██████╗       ██╗   ██╗███████╗████████╗
+██╔══██╗██╔════╝██╔══██╗      ██║   ██║██╔════╝╚══██╔══╝
+██║  ██║█████╗  ██████╔╝█████╗██║   ██║█████╗     ██║
+██║  ██║██╔══╝  ██╔═══╝ ╚════╝╚██╗ ██╔╝██╔══╝     ██║
+██████╔╝███████╗██║             ╚████╔╝ ███████╗   ██║
+╚═════╝ ╚══════╝╚═╝              ╚═══╝  ╚══════╝   ╚═╝
 
-pub const LOGO_BLOCKS: &str = r#"    █                                 █
-    █                                ███
- ████  ███  ████        █   █  ███    █
-█   █ █   █ █   █  ███  █   █ █   █   █
-█   █ █████ ████        █   █ █████   █
-█   █ █     █            █ █  █       █
- ████  ███  █             █    ███    ██"#;
+        ┌────────────────────────────────────────────────┐
+        │                                                │
+        │       THE DEPENDENCY TRUST PROTOCOL             │
+        │                                                │
+        │   ◈  INSPECT       Dependency intelligence     │
+        │   ◈  ANALYZE       Malicious code detection    │
+        │   ◈  VERIFY        Publisher provenance        │
+        │   ◈  DIFF          Release behavior changes    │
+        │   ◈  ENFORCE       Supply-chain security       │
+        │                                                │
+        └────────────────────────────────────────────────┘
 
-pub const TAGLINE: &str = "dependency risk, checked before install";
+        ZERO BLIND TRUST. FULL SUPPLY-CHAIN VISIBILITY.
+
+        [ SYSTEM READY ]  [ RUST POWERED ]  [ SECURITY FIRST ]"#;
 
 /// Header printed above `--help`. Kept as a literal because `concat!` only
 /// accepts literals; `help_header_matches_the_logo` guards against drift.
-pub const HELP_HEADER: &str = r#"    #                                 #
-    #                                ###
- ####  ###  ####        #   #  ###    #
-#   # #   # #   #  ###  #   # #   #   #
-#   # ##### ####        #   # #####   #
-#   # #     #            # #  #       #
- ####  ###  #             #    ###    ##
+pub const HELP_HEADER: &str = r#"██████╗ ███████╗██████╗       ██╗   ██╗███████╗████████╗
+██╔══██╗██╔════╝██╔══██╗      ██║   ██║██╔════╝╚══██╔══╝
+██║  ██║█████╗  ██████╔╝█████╗██║   ██║█████╗     ██║
+██║  ██║██╔══╝  ██╔═══╝ ╚════╝╚██╗ ██╔╝██╔══╝     ██║
+██████╔╝███████╗██║             ╚████╔╝ ███████╗   ██║
+╚═════╝ ╚══════╝╚═╝              ╚═══╝  ╚══════╝   ╚═╝
 
-dependency risk, checked before install"#;
+        ┌────────────────────────────────────────────────┐
+        │                                                │
+        │       THE DEPENDENCY TRUST PROTOCOL             │
+        │                                                │
+        │   ◈  INSPECT       Dependency intelligence     │
+        │   ◈  ANALYZE       Malicious code detection    │
+        │   ◈  VERIFY        Publisher provenance        │
+        │   ◈  DIFF          Release behavior changes    │
+        │   ◈  ENFORCE       Supply-chain security       │
+        │                                                │
+        └────────────────────────────────────────────────┘
+
+        ZERO BLIND TRUST. FULL SUPPLY-CHAIN VISIBILITY.
+
+        [ SYSTEM READY ]  [ RUST POWERED ]  [ SECURITY FIRST ]"#;
 
 pub fn banner(color: bool) -> String {
     if color {
@@ -45,26 +62,16 @@ pub fn banner(color: bool) -> String {
 mod tests {
     use super::*;
 
-    fn width(logo: &str) -> usize {
-        logo.lines().map(|line| line.chars().count()).max().unwrap()
-    }
-
     #[test]
-    fn logo_lines_up() {
-        for logo in [LOGO_ASCII, LOGO_BLOCKS] {
-            assert_eq!(logo.lines().count(), 7);
-            assert!(width(logo) <= 41, "logo is too wide: {}", width(logo));
-        }
-    }
-
-    #[test]
-    fn ascii_logo_stays_ascii() {
-        assert!(LOGO_ASCII.is_ascii());
+    fn the_wordmark_is_the_trust_protocol() {
+        assert!(LOGO_BLOCKS.contains("THE DEPENDENCY TRUST PROTOCOL"));
+        assert!(LOGO_BLOCKS.contains("ZERO BLIND TRUST"));
+        assert!(LOGO_BLOCKS.lines().count() >= 20);
     }
 
     #[test]
     fn help_header_matches_the_logo() {
-        assert_eq!(HELP_HEADER, format!("{LOGO_ASCII}\n\n{TAGLINE}"));
+        assert_eq!(HELP_HEADER, LOGO_BLOCKS);
     }
 
     #[test]

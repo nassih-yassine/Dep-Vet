@@ -92,6 +92,7 @@ impl MockRegistry {
             .env("DEPVET_PACKAGIST_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
+            .env("DEPVET_HOOK_TEST_BASE", &self.base)
             .env("NO_COLOR", "1");
         command
     }
@@ -296,6 +297,398 @@ fn registry_and_osv(
         routes.insert(format!("/v1/vulns/{id}"), (200, body.to_string()));
     }
     MockRegistry::start(routes)
+}
+
+#[test]
+fn guard_audits_named_packages() {
+    let package = PackageFixture::clean("guard-clean");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--json", "--", "npm i guard-clean"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"guard-clean\""))
+        .stdout(predicate::str::contains("\"verdict\":\"info\""));
+}
+
+#[test]
+fn guard_blocks_typosquats() {
+    let package = PackageFixture::clean("expresss");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--json", "--", "npm i expresss"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("typosquat"));
+}
+
+#[test]
+fn guard_warns_for_install_scripts() {
+    let package = PackageFixture {
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        ..PackageFixture::clean("scripty")
+    };
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--", "npm i scripty"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("install-scripts"));
+}
+
+#[test]
+fn guard_audits_every_named_package() {
+    let one = PackageFixture::clean("guard-one");
+    let two = PackageFixture::clean("guard-two");
+    let registry = registry_with(&[one, two], None);
+
+    registry
+        .command()
+        .args([
+            "guard",
+            "--check",
+            "--json",
+            "--",
+            "npm i -D guard-one guard-two",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("guard-one"))
+        .stdout(predicate::str::contains("guard-two"));
+}
+
+#[test]
+fn guard_says_when_nothing_was_vetted() {
+    let registry = registry_with(&[], None);
+    for command in [
+        "npm install",
+        "npm i https://example.test/thing.tgz",
+        "deno add npm:express",
+    ] {
+        registry
+            .command()
+            .args(["guard", "--check", "--", command])
+            .assert()
+            .code(3)
+            .stdout(predicate::str::contains("not checked"));
+    }
+}
+
+#[test]
+fn guard_is_incomplete_when_one_audit_fails() {
+    let package = PackageFixture::clean("guard-ok");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--", "npm i guard-ok guard-missing"])
+        .assert()
+        .code(3);
+}
+
+fn hook_input(command: &str) -> String {
+    serde_json::json!({
+        "session_id": "s",
+        "transcript_path": "/tmp/transcript",
+        "cwd": "/repo",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command}
+    })
+    .to_string()
+}
+
+#[test]
+fn hook_denies_a_typosquat_with_an_actionable_reason() {
+    let package = PackageFixture::clean("expresss");
+    let registry = registry_with(&[package], None);
+
+    let output = registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i expresss"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(value["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    let reason = value["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("Do not retry. Ask the user."), "{reason}");
+    assert!(
+        reason.contains("transitive dependencies were not checked"),
+        "{reason}"
+    );
+    assert!(
+        !registry.requests().is_empty(),
+        "the hook must use the mock registry"
+    );
+}
+
+#[test]
+fn hook_allows_a_clean_package_silently() {
+    let package = PackageFixture::clean("hook-clean");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i hook-clean"))
+        .assert()
+        .code(0)
+        .stdout("");
+}
+
+#[test]
+fn hook_asks_for_warnings_and_strict_denies_them() {
+    let package = PackageFixture {
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        ..PackageFixture::clean("scripty")
+    };
+    let registry = registry_with(&[package], None);
+
+    let output = registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i scripty"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "ask");
+
+    let output = registry
+        .command()
+        .args(["hook", "claude", "--strict"])
+        .write_stdin(hook_input("npm i scripty"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn hook_fails_open_on_audit_failure_unless_strict() {
+    let registry = registry_with(&[], None);
+
+    registry
+        .command()
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i missing-package"))
+        .assert()
+        .code(0)
+        .stdout("");
+
+    let output = registry
+        .command()
+        .args(["hook", "claude", "--strict"])
+        .write_stdin(hook_input("npm i missing-package"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn hook_install_writes_only_with_write_and_is_idempotent() {
+    let directory = tempfile::tempdir().unwrap();
+    let settings = directory.path().join(".claude").join("settings.json");
+
+    let first = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let first = String::from_utf8(first).unwrap();
+    assert!(first.contains("hook claude"), "{first}");
+    assert!(!settings.exists(), "no --write means no file");
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--write"])
+        .assert()
+        .code(0);
+    let body = std::fs::read_to_string(&settings).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let groups = value["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["matcher"], "Bash");
+    let handlers = groups[0]["hooks"].as_array().unwrap();
+    assert_eq!(handlers.len(), 1);
+    assert_eq!(handlers[0]["timeout"], 30);
+    assert!(
+        handlers[0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("hook claude"),
+        "{body}"
+    );
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--write"])
+        .assert()
+        .code(0);
+    let again = std::fs::read_to_string(&settings).unwrap();
+    assert_eq!(body, again, "second install must be a no-op");
+}
+
+#[test]
+fn hook_install_preserves_other_settings_and_can_be_removed() {
+    let directory = tempfile::tempdir().unwrap();
+    let claude = directory.path().join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    let settings = claude.join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"theme":"dark","hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"fmt"}]}]}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--write"])
+        .assert()
+        .code(0);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(value["theme"], "dark");
+    assert_eq!(value["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "uninstall", "claude", "--write"])
+        .assert()
+        .code(0);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(value["theme"], "dark");
+    let groups = value["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["matcher"], "Edit");
+    assert_eq!(groups[0]["hooks"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn hook_install_refuses_malformed_settings_without_writing() {
+    let directory = tempfile::tempdir().unwrap();
+    let claude = directory.path().join(".claude");
+    std::fs::create_dir_all(&claude).unwrap();
+    let settings = claude.join("settings.json");
+    std::fs::write(&settings, "{not json").unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["hook", "install", "claude", "--write"])
+        .assert()
+        .code(3);
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{not json");
+}
+
+#[test]
+fn hook_install_supports_the_user_location() {
+    let home = tempfile::tempdir().unwrap();
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .args(["hook", "install", "claude", "--user", "--write"])
+        .assert()
+        .code(0);
+    assert!(home.path().join(".claude").join("settings.json").exists());
+}
+
+#[test]
+fn hook_ignores_non_bash_and_malformed_input() {
+    let registry = registry_with(&[], None);
+    let edit = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": {"file_path": "src/main.rs"}
+    })
+    .to_string();
+
+    for stdin in [edit, "not json".to_string(), String::new()] {
+        registry
+            .command()
+            .args(["hook", "claude"])
+            .write_stdin(stdin)
+            .assert()
+            .code(0)
+            .stdout("");
+    }
+    assert!(registry.requests().is_empty(), "{:?}", registry.requests());
+}
+
+#[test]
+fn hook_times_out_and_allows() {
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mut command = Command::cargo_bin("dep-vet").unwrap();
+    command
+        .env("DEPVET_REGISTRY_BASE", &base)
+        .env("DEPVET_DOWNLOADS_BASE", format!("{base}/downloads"))
+        .env("DEPVET_OSV_BASE", &base)
+        .env("DEPVET_NO_CACHE", "1")
+        .env("DEPVET_HOOK_TEST_BASE", &base)
+        .env("NO_COLOR", "1")
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i stalled-package"));
+    let started = std::time::Instant::now();
+    let output = command.assert().code(0).stdout("").get_output().clone();
+    let elapsed = started.elapsed();
+    let _ = output;
+    assert!(elapsed.as_secs() < 10, "{elapsed:?}");
+    drop(listener);
+}
+
+#[test]
+fn guard_ignores_commands_after_a_separator() {
+    let package = PackageFixture::clean("guard-safe");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--", "npm i guard-safe; rm -rf /"])
+        .assert()
+        .code(0);
+
+    assert!(
+        !registry.requests().iter().any(|path| path.contains("rm")),
+        "{:?}",
+        registry.requests()
+    );
 }
 
 #[test]
@@ -589,10 +982,8 @@ fn help_shows_the_wordmark() {
         .arg("--help")
         .assert()
         .code(0)
-        .stdout(predicate::str::contains(
-            "dependency risk, checked before install",
-        ))
-        .stdout(predicate::str::contains("####"));
+        .stdout(predicate::str::contains("THE DEPENDENCY TRUST PROTOCOL"))
+        .stdout(predicate::str::contains("ZERO BLIND TRUST"));
 }
 
 #[test]
@@ -605,7 +996,7 @@ fn piped_output_has_no_wordmark() {
         .args(["npm", "clean-pkg"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("dependency risk").not())
+        .stdout(predicate::str::contains("THE DEPENDENCY TRUST PROTOCOL").not())
         .stdout(predicate::str::contains("INFO"));
 }
 

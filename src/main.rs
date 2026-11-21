@@ -86,6 +86,29 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
 
     match &cli.command {
+        Command::Hook { action } => match action {
+            dep_vet::cli::HookAction::Claude { strict } => run_hook(*strict),
+            dep_vet::cli::HookAction::Install {
+                target,
+                project,
+                user,
+                strict,
+                write,
+            } => run_hook_install(target, *project, *user, *strict, *write),
+            dep_vet::cli::HookAction::Uninstall {
+                target,
+                project,
+                user,
+                write,
+            } => run_hook_uninstall(target, *project, *user, *write),
+        },
+
+        Command::Guard {
+            check,
+            json,
+            command,
+        } => run_guard(&auditor, &allowlist, *check, *json, &command.join(" ")),
+
         Command::Npm { package, json } => {
             let spec = PackageSpec::parse(package)?;
             // A lockfile in the current project is the same trusted-name list
@@ -640,6 +663,286 @@ impl Auditor {
     }
 }
 
+fn run_guard_child(command: &str) -> (u8, Option<String>) {
+    use std::io::Read as _;
+    use std::process::{Command as Process, Stdio};
+
+    let Ok(executable) = std::env::current_exe() else {
+        return (3, None);
+    };
+    let mut child = Process::new(executable);
+    child
+        .args(["guard", "--check", "--json", "--", command])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (key, _) in std::env::vars_os() {
+        let key = key.to_string_lossy();
+        if key.starts_with("DEPVET_")
+            && !matches!(key.as_ref(), "DEPVET_CACHE_DIR" | "DEPVET_DEBUG")
+        {
+            child.env_remove(key.as_ref());
+        }
+    }
+    // Test seam: debug builds only. The hook otherwise ignores agent-settable
+    // registry overrides, so `tests/cli.rs` must be able to point the child at
+    // its local fake registry without weakening a release binary.
+    if cfg!(debug_assertions)
+        && let Some(test_base) = std::env::var_os("DEPVET_HOOK_TEST_BASE")
+    {
+        child
+            .env("DEPVET_REGISTRY_BASE", &test_base)
+            .env(
+                "DEPVET_DOWNLOADS_BASE",
+                format!("{}/downloads", test_base.to_string_lossy()),
+            )
+            .env("DEPVET_OSV_BASE", &test_base)
+            .env("DEPVET_NO_CACHE", "1");
+    }
+    let Ok(mut child) = child.spawn() else {
+        return (3, None);
+    };
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(dep_vet::hook::HOOK_BUDGET_SECONDS);
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                timed_out = true;
+                break;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                timed_out = true;
+                break;
+            }
+        }
+    }
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(_) => return (3, None),
+    };
+    if timed_out {
+        return (3, None);
+    }
+    let mut stdout = String::new();
+    let mut reader = output.stdout.as_slice();
+    let _ = reader.read_to_string(&mut stdout);
+    (output.status.code().unwrap_or(3) as u8, Some(stdout))
+}
+
+fn hook_settings_path(project: bool, user: bool) -> anyhow::Result<std::path::PathBuf> {
+    if project && user {
+        anyhow::bail!("choose either --project or --user");
+    }
+    if user {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .ok_or_else(|| anyhow::anyhow!("could not find the home directory"))?;
+        return Ok(std::path::PathBuf::from(home)
+            .join(".claude")
+            .join("settings.json"));
+    }
+    Ok(std::path::PathBuf::from(".claude").join("settings.json"))
+}
+
+fn run_hook_install(
+    target: &str,
+    project: bool,
+    user: bool,
+    strict: bool,
+    write: bool,
+) -> anyhow::Result<u8> {
+    if target != "claude" {
+        anyhow::bail!("unknown hook target '{target}'; supported: claude");
+    }
+    let path = hook_settings_path(project, user)?;
+    let before = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let executable = std::env::current_exe()?;
+    let command = dep_vet::hook::settings::command_line(&executable, strict);
+    let after = dep_vet::hook::settings::merge(
+        &path.display().to_string(),
+        &before,
+        &command,
+        dep_vet::hook::settings::TIMEOUT_SECONDS,
+    )?;
+    println!(
+        "{}\n{}",
+        path.display(),
+        dep_vet::hook::settings::diff(&before, &after)
+    );
+    if write {
+        dep_vet::hook::settings::atomic_write(&path, &after)?;
+        println!("wrote {}", path.display());
+    } else {
+        println!("dry run; pass --write to save");
+    }
+    Ok(0)
+}
+
+fn run_hook_uninstall(target: &str, project: bool, user: bool, write: bool) -> anyhow::Result<u8> {
+    if target != "claude" {
+        anyhow::bail!("unknown hook target '{target}'; supported: claude");
+    }
+    let path = hook_settings_path(project, user)?;
+    let before = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let executable = std::env::current_exe()?;
+    for strict in [false, true] {
+        let command = dep_vet::hook::settings::command_line(&executable, strict);
+        let after =
+            dep_vet::hook::settings::remove(&path.display().to_string(), &before, &command)?;
+        if after != before {
+            println!(
+                "{}\n{}",
+                path.display(),
+                dep_vet::hook::settings::diff(&before, &after)
+            );
+            if write {
+                dep_vet::hook::settings::atomic_write(&path, &after)?;
+                println!("wrote {}", path.display());
+            } else {
+                println!("dry run; pass --write to save");
+            }
+            return Ok(0);
+        }
+    }
+    println!("no dep-vet hook in {}", path.display());
+    Ok(0)
+}
+
+fn run_hook(strict: bool) -> anyhow::Result<u8> {
+    use std::io::Read as _;
+    let mut stdin = std::io::stdin().take(dep_vet::hook::MAX_STDIN_BYTES + 1);
+    let mut body = String::new();
+    let _ = stdin.read_to_string(&mut body);
+    let Some(command) = dep_vet::hook::read_command(&body) else {
+        return Ok(0);
+    };
+    let (exit_code, guard_json) = run_guard_child(&command);
+    let decision = dep_vet::hook::decide(exit_code, guard_json.as_deref(), strict);
+    if let Some(output) = dep_vet::hook::render(&decision) {
+        println!("{output}");
+    }
+    Ok(0)
+}
+
+fn audit_intent(
+    auditor: &Auditor,
+    ecosystem: Ecosystem,
+    spec: &PackageSpec,
+    now: i64,
+) -> Result<PackageReport, String> {
+    let result: Result<PackageReport, String> = match ecosystem {
+        Ecosystem::Npm => auditor
+            .audit_npm(spec, &[], now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Pypi => auditor
+            .audit_pypi(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::CratesIo => auditor
+            .audit_crates(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Go => auditor
+            .audit_go(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Jsr => auditor
+            .audit_jsr(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::RubyGems => auditor
+            .audit_gem(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::NuGet => auditor
+            .audit_nuget(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Maven => auditor
+            .audit_maven(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Composer => auditor
+            .audit_composer(spec, now, None)
+            .map_err(|error| error.to_string()),
+    };
+    result
+}
+
+fn run_guard(
+    auditor: &Auditor,
+    allowlist: &dep_vet::allowlist::Allowlist,
+    check: bool,
+    json: bool,
+    command: &str,
+) -> anyhow::Result<u8> {
+    let parsed = dep_vet::intent::parse(command);
+    let specs: Vec<(Ecosystem, PackageSpec)> = parsed
+        .intents
+        .iter()
+        .flat_map(|intent| {
+            intent
+                .specs
+                .iter()
+                .cloned()
+                .map(move |spec| (intent.ecosystem, spec))
+        })
+        .collect();
+
+    let mut packages = Vec::new();
+    let mut errors = Vec::new();
+    if check {
+        let now = now_seconds();
+        for batch in specs.chunks(MAX_CONCURRENT_AUDITS) {
+            let outcomes: Vec<Result<PackageReport, String>> = std::thread::scope(|scope| {
+                let handles: Vec<_> = batch
+                    .iter()
+                    .map(|(ecosystem, spec)| {
+                        scope.spawn(move || audit_intent(auditor, *ecosystem, spec, now))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|_| Err("audit thread panicked".to_string()))
+                    })
+                    .collect()
+            });
+            for outcome in outcomes {
+                match outcome {
+                    Ok(report) => packages.push(report),
+                    Err(error) => errors.push(error),
+                }
+            }
+        }
+        for report in &mut packages {
+            allowlist.apply(report);
+        }
+    }
+
+    let report = dep_vet::guard::GuardReport {
+        command: command.to_string(),
+        parse: parsed,
+        packages,
+        errors,
+    };
+    let output = if json {
+        report.to_json()
+    } else {
+        report.to_human()
+    };
+    emit(&output, report.exit_code())
+}
+
 fn run_audit(
     auditor: &Auditor,
     allowlist: &dep_vet::allowlist::Allowlist,
@@ -875,9 +1178,8 @@ fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result
         // report alone.
         if io::stdout().is_terminal() {
             format!(
-                "{}\n{}\n\n{}",
+                "{}\n\n{}",
                 dep_vet::branding::banner(use_color(cli)),
-                dep_vet::branding::TAGLINE,
                 report_text
             )
         } else {
