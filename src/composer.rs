@@ -164,7 +164,15 @@ fn parse_metadata(
         latest_version: Some(latest(&releases).version.clone()),
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
-            previous_published_at: previous.map(|(_, time)| time),
+            previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            previous_dependencies: previous
+                .as_ref()
+                .and_then(|(version, _)| {
+                    releases.iter().find(|release| release.version == *version)
+                })
+                .map(composer_dependencies)
+                .unwrap_or_default(),
+            dependencies: composer_dependencies(release),
             ..crate::registry::ReleaseHistory::default()
         },
         first_published_at,
@@ -224,6 +232,24 @@ struct Release {
     time: Option<String>,
     #[serde(default)]
     source: Option<Source>,
+    #[serde(default)]
+    require: std::collections::BTreeMap<String, String>,
+}
+
+/// Composer's `require` mixes libraries with platform packages; only libraries
+/// are dependencies a reader can act on.
+fn composer_dependencies(release: &Release) -> Vec<String> {
+    release
+        .require
+        .keys()
+        .filter(|name| {
+            !(*name == "php"
+                || name.starts_with("ext-")
+                || name.starts_with("lib-")
+                || name.starts_with("composer-"))
+        })
+        .cloned()
+        .collect()
 }
 
 impl Release {
@@ -281,12 +307,14 @@ mod tests {
                 {
                     "version": "3.13.0",
                     "time": "2024-06-01T10:43:05+00:00",
-                    "source": { "url": "https://github.com/Seldaek/monolog.git" }
+                    "source": { "url": "https://github.com/Seldaek/monolog.git" },
+                    "require": { "php": ">=8.1", "psr/log": "^3.0" }
                 },
                 {
                     "version": "3.0.0",
                     "time": "2024-01-01T00:00:00+00:00",
-                    "source": { "url": "https://github.com/Seldaek/monolog.git" }
+                    "source": { "url": "https://github.com/Seldaek/monolog.git" },
+                    "require": { "php": ">=8.0" }
                 }
             ]
         }
@@ -343,6 +371,19 @@ mod tests {
         ] } }"#;
         let meta = parse_metadata(&spec("x/y", None), body, None, "url").unwrap();
         assert_eq!(meta.version, "2.0.0");
+    }
+
+    #[test]
+    fn records_dependencies_without_platform_packages() {
+        let meta = parse_metadata(
+            &spec("monolog/monolog", Some("3.13.0")),
+            P2,
+            Some(&package()),
+            "url",
+        )
+        .unwrap();
+        assert_eq!(meta.release.dependencies, vec!["psr/log".to_string()]);
+        assert!(meta.release.previous_dependencies.is_empty());
     }
 
     #[test]

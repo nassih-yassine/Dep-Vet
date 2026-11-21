@@ -141,6 +141,18 @@ fn parse_versions(
             .collect();
         crate::registry::previous_release(&entries, &version, published_at)
     };
+    let current_dependencies = release
+        .map(|release| release.dependencies.clone())
+        .unwrap_or_default();
+    let previous_dependencies = previous
+        .as_ref()
+        .and_then(|(version, _)| {
+            registration
+                .iter()
+                .find(|release| release.version == *version)
+        })
+        .map(|release| release.dependencies.clone())
+        .unwrap_or_default();
     let deprecated = release
         .filter(|release| release.deprecated)
         .map(|_| "this version is deprecated or unlisted on NuGet".to_string());
@@ -164,6 +176,8 @@ fn parse_versions(
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
             previous_published_at: previous.map(|(_, time)| time),
+            previous_dependencies,
+            dependencies: current_dependencies,
             ..crate::registry::ReleaseHistory::default()
         },
     })
@@ -174,6 +188,7 @@ struct RegVersion {
     version: String,
     published: Option<i64>,
     deprecated: bool,
+    dependencies: Vec<String>,
 }
 
 fn parse_registration(
@@ -201,10 +216,20 @@ fn parse_registration(
 fn collect_page(entries: Vec<Entry>, releases: &mut Vec<RegVersion>) {
     for entry in entries {
         let catalog = entry.catalog_entry;
+        let mut dependencies: Vec<String> = catalog
+            .dependency_groups
+            .iter()
+            .flat_map(|group| group.dependencies.iter())
+            .map(|dependency| dependency.id.clone())
+            .filter(|id| !id.is_empty())
+            .collect();
+        dependencies.sort();
+        dependencies.dedup();
         releases.push(RegVersion {
             version: catalog.version,
             published: catalog.published.as_deref().and_then(date::parse_timestamp),
             deprecated: !catalog.listed.unwrap_or(true) || catalog.deprecation.is_some(),
+            dependencies,
         });
     }
 }
@@ -244,6 +269,20 @@ struct Catalog {
     listed: Option<bool>,
     #[serde(default)]
     deprecation: Option<serde_json::Value>,
+    #[serde(rename = "dependencyGroups", default)]
+    dependency_groups: Vec<DependencyGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DependencyGroup {
+    #[serde(default)]
+    dependencies: Vec<Dependency>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Dependency {
+    #[serde(default)]
+    id: String,
 }
 
 #[cfg(test)]
@@ -266,17 +305,39 @@ mod tests {
     }
 
     #[test]
+    fn records_dependencies_from_registration_groups() {
+        let body = r#"{ "items": [ { "items": [
+            { "catalogEntry": { "version": "1.0.0", "published": "2024-01-01T00:00:00Z", "listed": true,
+                "dependencyGroups": [ { "dependencies": [ { "id": "Newtonsoft.Json" }, { "id": "Serilog" } ] } ] } }
+        ] } ] }"#;
+        let registration = parse_registration(body, |_| None);
+        let meta = parse_versions(
+            &spec("x", Some("1.0.0")),
+            r#"{ "versions": ["1.0.0"] }"#,
+            &registration,
+            "url",
+        )
+        .unwrap();
+        assert_eq!(
+            meta.release.dependencies,
+            vec!["Newtonsoft.Json".to_string(), "Serilog".to_string()]
+        );
+    }
+
+    #[test]
     fn records_the_previous_release_from_registration() {
         let registration = vec![
             RegVersion {
                 version: "12.0.3".to_string(),
                 published: date::parse_timestamp("2020-01-01T00:00:00Z"),
                 deprecated: false,
+                dependencies: Vec::new(),
             },
             RegVersion {
                 version: "13.0.1".to_string(),
                 published: date::parse_timestamp("2024-03-01T00:00:00Z"),
                 deprecated: false,
+                dependencies: Vec::new(),
             },
         ];
         let meta = parse_versions(
@@ -323,11 +384,13 @@ mod tests {
                 version: "13.0.1".to_string(),
                 published: date::parse_timestamp("2024-03-01T00:00:00Z"),
                 deprecated: false,
+                dependencies: Vec::new(),
             },
             RegVersion {
                 version: "12.0.3".to_string(),
                 published: date::parse_timestamp("2020-01-01T00:00:00Z"),
                 deprecated: true,
+                dependencies: Vec::new(),
             },
         ];
         let meta = parse_versions(&spec("x", Some("12.0.3")), FLAT, &registration, "url").unwrap();
@@ -373,11 +436,13 @@ mod tests {
                 version: "1.0.0".to_string(),
                 published: date::parse_timestamp("1900-01-01T00:00:00Z"),
                 deprecated: false,
+                dependencies: Vec::new(),
             },
             RegVersion {
                 version: "2.0.0".to_string(),
                 published: date::parse_timestamp("2024-01-01T00:00:00Z"),
                 deprecated: false,
+                dependencies: Vec::new(),
             },
         ];
         let meta = parse_versions(
