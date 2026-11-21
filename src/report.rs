@@ -3,7 +3,8 @@
 use owo_colors::OwoColorize;
 use serde::Serialize;
 
-use crate::model::{AuditReport, LockFetchError, LockReport, PackageReport, Severity};
+use crate::model::{AuditReport, LockFetchError, LockReport, PackageReport, Severity, Upgrade};
+use crate::version::leading_number;
 
 pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
@@ -119,6 +120,10 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
         }
     }
 
+    if !report.upgrades.is_empty() {
+        out.push_str(&render_advice(&report.upgrades, &report.version));
+    }
+
     out.push_str(&format!(
         "  review: {}\n",
         report
@@ -126,6 +131,50 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
             .clone()
             .unwrap_or_else(|| report.ecosystem.package_url(&report.name, &report.version))
     ));
+    out
+}
+
+/// The `fixes` block of a single-package report. A replacement hides version
+/// advice: a newer copy of a lookalike is not the fix.
+fn render_advice(upgrades: &[Upgrade], version: &str) -> String {
+    let mut out = String::from("  fixes\n");
+    let current = leading_number(version);
+
+    for upgrade in upgrades {
+        if let Some(replacement) = &upgrade.replace_with {
+            out.push_str(&format!("    use {replacement} instead\n"));
+            continue;
+        }
+
+        if !upgrade.fixed.is_empty() {
+            let shown: Vec<&str> = upgrade.fixed.iter().take(3).map(String::as_str).collect();
+            let extra = upgrade.fixed.len().saturating_sub(shown.len());
+            let mut line = format!("fixed in {}", shown.join(", "));
+            if extra > 0 {
+                line.push_str(&format!(" (+{extra} more)"));
+            }
+            if !upgrade.fixes.is_empty() {
+                let shown: Vec<&str> = upgrade.fixes.iter().take(3).map(String::as_str).collect();
+                let extra = upgrade.fixes.len().saturating_sub(shown.len());
+                line.push_str(&format!("   fixes {}", shown.join(", ")));
+                if extra > 0 {
+                    line.push_str(&format!(" (+{extra})"));
+                }
+            }
+            out.push_str(&format!("    {line}\n"));
+        } else if upgrade.fix_unknown {
+            out.push_str("    fix unknown (advisory details unavailable)\n");
+        } else {
+            out.push_str("    no fixed version published\n");
+        }
+
+        if let Some(newest) = &upgrade.newest {
+            let jump = leading_number(newest) != current;
+            let suffix = if jump { "   major jump, may break" } else { "" };
+            out.push_str(&format!("    newest {newest}{suffix}\n"));
+        }
+    }
+    out.push('\n');
     out
 }
 
@@ -384,6 +433,74 @@ mod tests {
         assert!(text.contains("-> https://registry.npmjs.org/evil-pkg"));
         assert!(text.contains("1,234/week"));
         assert!(text.contains("https://www.npmjs.com/package/evil-pkg/v/1.0.0"));
+    }
+
+    fn report_with_upgrades(upgrades: Vec<crate::model::Upgrade>, version: &str) -> PackageReport {
+        let mut report = report(Vec::new());
+        report.version = version.to_string();
+        report.upgrades = upgrades;
+        report
+    }
+
+    fn upgrade(fixed: &[&str], newest: Option<&str>) -> crate::model::Upgrade {
+        crate::model::Upgrade {
+            fixed: fixed.iter().map(|value| value.to_string()).collect(),
+            fix_unknown: false,
+            newest: newest.map(str::to_string),
+            fixes: vec!["GHSA-a".to_string()],
+            replace_with: None,
+        }
+    }
+
+    #[test]
+    fn advice_shows_the_fixed_version_and_newest_hint() {
+        let report =
+            report_with_upgrades(vec![upgrade(&["2.0.1", "1.2.3"], Some("3.0.0"))], "2.1.0");
+        let out = render_human(&report, false);
+        assert!(out.contains("fixed in 2.0.1, 1.2.3"), "{out}");
+        assert!(out.contains("newest 3.0.0"), "{out}");
+        assert!(out.contains("major jump, may break"), "{out}");
+    }
+
+    #[test]
+    fn unknown_fix_is_not_worded_as_no_fix() {
+        let mut item = upgrade(&[], None);
+        item.fix_unknown = true;
+        item.fixes = vec!["GHSA-x".to_string()];
+        let report = report_with_upgrades(vec![item], "1.0.0");
+        let out = render_human(&report, false);
+        assert!(out.contains("fix unknown"), "{out}");
+        assert!(!out.contains("no fixed version published"), "{out}");
+    }
+
+    #[test]
+    fn a_replacement_hides_version_advice() {
+        let mut item = upgrade(&["2.0.1"], Some("3.0.0"));
+        item.replace_with = Some("cross-env".to_string());
+        let report = report_with_upgrades(vec![item], "1.0.0");
+        let out = render_human(&report, false);
+        assert!(out.contains("use cross-env instead"), "{out}");
+        assert!(!out.contains("fixed in"), "{out}");
+    }
+
+    #[test]
+    fn a_clean_report_has_no_advice_block() {
+        let report = report_with_upgrades(Vec::new(), "1.0.0");
+        let out = render_human(&report, false);
+        assert!(!out.contains("  fixes"), "{out}");
+    }
+
+    #[test]
+    fn long_fixed_lists_are_capped() {
+        let report = report_with_upgrades(
+            vec![upgrade(&["2.0.1", "2.0.2", "2.0.3", "2.0.4"], None)],
+            "2.0.0",
+        );
+        let out = render_human(&report, false);
+        assert!(
+            out.contains("fixed in 2.0.1, 2.0.2, 2.0.3 (+1 more)"),
+            "{out}"
+        );
     }
 
     #[test]
