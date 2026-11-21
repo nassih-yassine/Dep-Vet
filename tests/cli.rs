@@ -1663,10 +1663,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 #[test]
 fn audit_rejects_unknown_lockfile_formats() {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("deno.lock"), "").unwrap();
+    std::fs::write(directory.path().join("go.sum"), "").unwrap();
     binary()
         .current_dir(directory.path())
-        .args(["audit", "deno.lock"])
+        .args(["audit", "go.sum"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("unsupported lockfile"));
@@ -2071,4 +2071,42 @@ fn advisories_listed_under_several_ids_are_merged() {
     assert_eq!(value["advisories"][0]["id"], "GHSA-dup-1");
     assert_eq!(value["advisories"][0]["severity"], "high");
     assert_eq!(value["findings"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn audit_reads_deno_lock_and_notes_jsr() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("deno.lock"),
+        r#"{
+  "version": "5",
+  "jsr": { "@std/assert@1.0.0": { "integrity": "abc" } },
+  "npm": { "chalk@5.3.0": { "integrity": "sha512-x" } }
+}"#,
+    )
+    .unwrap();
+
+    let chalk = PackageFixture {
+        version: "5.3.0",
+        ..PackageFixture::clean("chalk")
+    };
+    let registry = registry_with(&[chalk], None);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "deno.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"][0]["name"], "chalk");
+    assert!(
+        value["notes"][0]
+            .as_str()
+            .unwrap()
+            .contains("1 JSR package")
+    );
 }

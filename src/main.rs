@@ -124,6 +124,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 lockfile: path.display().to_string(),
                 packages: reports,
                 errors,
+                notes: contents.notes,
             };
             let output = if *json {
                 render_audit_json(&report)?
@@ -168,6 +169,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 base: base.clone(),
                 new_packages,
                 errors,
+                notes: current.notes,
             };
             let output = if *json {
                 render_lock_json(&report)?

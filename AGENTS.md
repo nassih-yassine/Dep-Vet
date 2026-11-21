@@ -32,7 +32,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 240 unit + 77 end-to-end tests
+cargo test --locked                      # 244 unit + 78 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -151,7 +151,7 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - **`lock` diffs `name@version` pairs**, so a version bump is "new" and gets
   audited. The parser is chosen by file name (`package-lock.json`,
   `requirements*.txt`, `Cargo.lock`, `go.mod`, `poetry.lock`, `uv.lock`,
-  `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`); npm v1 is rejected instead of
+  `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `deno.lock`); npm v1 is rejected instead of
   approximated. Unpinned pip lines, git crates, and
   unreadable go.mod lines become `errors`, so an incomplete tree exits 3.
 - **Allowlists downgrade, never delete.** `Allowlist::apply` runs after a
@@ -159,6 +159,10 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   and re-sorts (severity changed). Tree views must show allowed entries or the
   reason disappears. Missing reasons and unknown finding ids are config errors
   (exit 3). `KNOWN_FINDINGS` must stay in step with `signals.rs`.
+- **Deno: npm audited, JSR noted.** `deno.lock` npm entries go through the npm
+  auditor; JSR entries become `LockContents.notes` and never fail the run. Notes
+  are a third channel beside findings and errors — use them for deliberate,
+  safe omissions only.
 - **JS lockfile quirks that bite.** `bun.lock` is JSONC (comments and trailing
   commas) and `strip_jsonc` must keep `//` inside strings (URLs). pnpm keys are
   `name@ver` (v9), `/name@ver` (v6), or `/name/ver` (v5), with `(peer@x)` suffixes
@@ -219,5 +223,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-`deno.lock` and other remaining formats. Roadmap only: do not describe these
+JSR support and other remaining formats. Roadmap only: do not describe these
 as existing in code, README, or help text.

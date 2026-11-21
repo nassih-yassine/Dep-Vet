@@ -150,6 +150,7 @@ pub fn render_lock_human(report: &LockReport, color: bool) -> String {
         plural: "new packages",
         packages: &report.new_packages,
         errors: &report.errors,
+        notes: &report.notes,
         verdict: report.verdict(),
         exit_code: report.exit_code(),
         color,
@@ -180,6 +181,7 @@ pub fn render_audit_human(report: &AuditReport, color: bool) -> String {
         plural: "packages audited",
         packages: &report.packages,
         errors: &report.errors,
+        notes: &report.notes,
         verdict: report.verdict(),
         exit_code: report.exit_code(),
         color,
@@ -193,6 +195,7 @@ struct TreeView<'a> {
     plural: &'static str,
     packages: &'a [PackageReport],
     errors: &'a [LockFetchError],
+    notes: &'a [String],
     verdict: Severity,
     exit_code: u8,
     color: bool,
@@ -227,6 +230,13 @@ fn render_tree(view: TreeView<'_>) -> String {
         }) {
             out.push('\n');
             out.push_str(&render_human(package, view.color));
+        }
+    }
+
+    if !view.notes.is_empty() {
+        out.push_str("\n  notes:\n");
+        for note in view.notes {
+            out.push_str(&format!("    {note}\n"));
         }
     }
 
@@ -481,6 +491,7 @@ mod tests {
             base: "main".to_string(),
             new_packages: Vec::new(),
             errors: Vec::new(),
+            notes: Vec::new(),
         }
     }
 
@@ -489,6 +500,7 @@ mod tests {
             lockfile: "package-lock.json".to_string(),
             packages: Vec::new(),
             errors: Vec::new(),
+            notes: Vec::new(),
         }
     }
 
@@ -505,6 +517,16 @@ mod tests {
         assert!(text.contains("2 packages audited"));
         assert!(text.contains("evil-pkg@1.0.0"));
         assert!(text.contains("HIGH (exit 2)"));
+    }
+
+    #[test]
+    fn audit_report_prints_notes_without_failing() {
+        let mut audit = audit_report();
+        audit.notes = vec!["1 JSR package(s) not audited".to_string()];
+        let text = render_audit_human(&audit, false);
+        assert!(text.contains("notes:"));
+        assert!(text.contains("1 JSR package"));
+        assert!(text.contains("INFO (exit 0)"));
     }
 
     #[test]
