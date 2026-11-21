@@ -71,8 +71,21 @@ pub fn parse(body: &str) -> Result<Vec<LockedPackage>, LockError> {
         .filter(|(path, _)| path.contains("node_modules/"))
         .filter(|(_, entry)| !entry.link)
         .filter_map(|(path, entry)| {
-            let name = path.rsplit("node_modules/").next()?.to_string();
             let version = entry.version?;
+            // Aliases (`"x": "npm:real-pkg@1"`) key the path by the alias but
+            // record the real package in `name`; auditing the alias would 404.
+            let name = entry
+                .name
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| {
+                    path.rsplit("node_modules/")
+                        .next()
+                        .unwrap_or_default()
+                        .to_string()
+                });
+            if name.is_empty() {
+                return None;
+            }
             Some(LockedPackage { name, version })
         })
         .collect();
@@ -157,6 +170,8 @@ struct RawLockfile {
 #[derive(Debug, Deserialize)]
 struct Entry {
     #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
     version: Option<String>,
     #[serde(default)]
     link: bool,
@@ -209,6 +224,28 @@ mod tests {
         assert!(!names.contains(&"app".to_string()));
         assert!(!names.contains(&"local".to_string()));
         assert!(!names.contains(&"linked".to_string()));
+    }
+
+    #[test]
+    fn aliased_dependencies_keep_the_real_package_name() {
+        // package.json: "my-lodash": "npm:lodash@4.17.21" — npm keys the path
+        // by the alias but records the real package in `name`.
+        let body = r#"{
+            "lockfileVersion": 3,
+            "packages": {
+                "node_modules/my-lodash": { "name": "lodash", "version": "4.17.21" }
+            }
+        }"#;
+        assert_eq!(lock(body), vec![package("lodash", "4.17.21")]);
+    }
+
+    #[test]
+    fn entries_without_a_name_fall_back_to_the_path() {
+        let body = r#"{
+            "lockfileVersion": 3,
+            "packages": { "node_modules/express": { "version": "5.1.0" } }
+        }"#;
+        assert_eq!(lock(body), vec![package("express", "5.1.0")]);
     }
 
     #[test]

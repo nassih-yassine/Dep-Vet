@@ -916,3 +916,45 @@ fn advisory_cap_is_disclosed_and_bounded() {
         .count();
     assert_eq!(detail_requests, 25, "the cap must bound detail fetches");
 }
+
+#[test]
+fn lock_audits_the_real_package_behind_an_alias() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.commit("base");
+
+    repo.write(
+        "package-lock.json",
+        r#"{
+            "name": "app",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "packages": {
+                "": { "name": "app", "version": "1.0.0" },
+                "node_modules/express": { "version": "5.1.0" },
+                "node_modules/my-lodash": { "name": "lodash", "version": "4.17.21" }
+            }
+        }"#,
+    );
+
+    let registry = registry_with(
+        &[PackageFixture {
+            version: "4.17.21",
+            ..PackageFixture::clean("lodash")
+        }],
+        None,
+    );
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("lodash@4.17.21"));
+
+    assert!(
+        registry.requests().iter().any(|path| path == "/lodash"),
+        "the real package name must be fetched: {:?}",
+        registry.requests()
+    );
+}

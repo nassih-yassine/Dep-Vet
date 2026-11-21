@@ -29,7 +29,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test                              # 139 unit + 34 end-to-end tests
+cargo test                              # 141 unit + 35 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --all-targets -- -D warnings
@@ -94,6 +94,10 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - **`lock` diffs `name@version` pairs**, so a version bump is "new" and gets
   audited. It reads `package-lock.json` v2/v3 only; v1 is rejected instead of
   approximated.
+- **Aliases resolve to the real package.** For `"x": "npm:real-pkg@1"`, npm
+  keys the path `node_modules/x` but stores `"name": "real-pkg"` in the entry.
+  Use `Entry::name` first and fall back to the path segment; auditing the alias
+  name 404s and hides the real advisories.
 - **`docs/` is local-only.** It is in `.gitignore` on purpose; do not track it,
   link to it from user-facing docs, or delete it from disk.
 - **Workflow YAML is not covered by `cargo test`.** Validate it with

@@ -142,6 +142,7 @@ dep-vet npm crossenv --json
   "ecosystem": "npm",
   "name": "crossenv",
   "version": "0.0.2-security",
+  "hidden_advisories": 0,
   "weekly_downloads": 2039,
   "maintainers": ["npm"],
   "findings": [
@@ -164,6 +165,9 @@ dep-vet npm crossenv --json
 }
 ```
 
+`hidden_advisories` is non-zero when the advisory list was truncated at the
+25-per-package cap; the report also carries an INFO finding saying so.
+
 Timestamps are Unix seconds. `verdict` and `exit_code` are derived from the
 findings, so consumers do not re-implement the severity rules. JSON output never
 contains the wordmark or ANSI colors.
@@ -180,6 +184,9 @@ contains the wordmark or ANSI colors.
   "exit_code": 2
 }
 ```
+
+`hidden_advisories` is non-zero when the advisory list was truncated at the
+25-per-package cap; the report also carries an INFO finding saying so.
 
 ### Cache
 
