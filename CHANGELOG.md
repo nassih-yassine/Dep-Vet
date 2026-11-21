@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — 2026-11-21
+
+Three more ecosystems and their lockfiles.
+
+- **JSR:** `dep-vet jsr @scope/name`, plus JSR entries inside `deno.lock`.
+  Versions, publish times, repository, archived-as-deprecated. OSV has no JSR
+  coverage, so JSR reports say "advisory coverage unavailable" instead of
+  implying a clean result.
+- **RubyGems:** `dep-vet gem rack@3.2.9` and `Gemfile.lock` auditing. Platform
+  suffixes resolve to registry versions; yanked versions vanish from the API.
+- **NuGet:** `dep-vet nuget Newtonsoft.Json` and `packages.lock.json`. Flat
+  container versions, registration times/deprecation, case-insensitive IDs,
+  1900-01-01 sentinel dates ignored.
+- `.depvet.toml` rejects unknown keys; Yarn Berry `__metadata` no longer makes
+  audits exit 3; pnpm parsing dropped the unmaintained `unsafe-libyaml`.
+
 ## 0.2.1 — 2026-11-21
 
 Fixes found by auditing dep-vet's own repositories.
