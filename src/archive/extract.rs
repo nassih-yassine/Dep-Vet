@@ -13,6 +13,50 @@ pub enum ArchiveError {
     TooLarge(Limits),
     #[error("archive could not be read: {0}")]
     Read(String),
+    #[error("decompressed data exceeds the {0} byte limit")]
+    DecompressedTooLarge(u64),
+}
+
+/// Marker so an io error raised by the counting reader can be told apart from
+/// a genuine read failure after tar has wrapped it.
+const DECOMPRESSED_CAP: &str = "dep-vet: decompressed size cap exceeded";
+
+struct CountingReader<R> {
+    inner: R,
+    seen: u64,
+    limit: u64,
+}
+
+impl<R> CountingReader<R> {
+    fn new(inner: R, limit: u64) -> Self {
+        Self {
+            inner,
+            seen: 0,
+            limit,
+        }
+    }
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.seen += read as u64;
+        if self.seen > self.limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                DECOMPRESSED_CAP,
+            ));
+        }
+        Ok(read)
+    }
+}
+
+fn read_error(error: std::io::Error, limits: Limits) -> ArchiveError {
+    if error.to_string().contains(DECOMPRESSED_CAP) {
+        ArchiveError::DecompressedTooLarge(limits.max_decompressed)
+    } else {
+        ArchiveError::Read(error.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +108,7 @@ pub fn extract(kind: ArchiveKind, bytes: &[u8], limits: Limits) -> Result<Extrac
     let mut out = Extracted::default();
     match kind {
         ArchiveKind::TarGz => {
-            let decoder = GzDecoder::new(bytes);
+            let decoder = CountingReader::new(GzDecoder::new(bytes), limits.max_decompressed);
             read_tar(decoder, limits, &mut out)?;
         }
         ArchiveKind::Zip => read_zip(bytes, limits, &mut out)?,
@@ -75,7 +119,7 @@ pub fn extract(kind: ArchiveKind, bytes: &[u8], limits: Limits) -> Result<Extrac
                 .entries()
                 .map_err(|error| ArchiveError::Read(error.to_string()))?
             {
-                let mut entry = entry.map_err(|error| ArchiveError::Read(error.to_string()))?;
+                let mut entry = entry.map_err(|error| read_error(error, limits))?;
                 let path = entry
                     .path()
                     .map_err(|error| ArchiveError::Read(error.to_string()))?
@@ -86,7 +130,14 @@ pub fn extract(kind: ArchiveKind, bytes: &[u8], limits: Limits) -> Result<Extrac
                     entry
                         .read_to_end(&mut inner)
                         .map_err(|error| ArchiveError::Read(error.to_string()))?;
-                    read_tar(GzDecoder::new(Cursor::new(inner)), limits, &mut out)?;
+                    read_tar(
+                        CountingReader::new(
+                            GzDecoder::new(Cursor::new(inner)),
+                            limits.max_decompressed,
+                        ),
+                        limits,
+                        &mut out,
+                    )?;
                 }
                 out.entries += 1;
             }
@@ -99,7 +150,7 @@ fn read_tar<R: Read>(reader: R, limits: Limits, out: &mut Extracted) -> Result<(
     let mut archive = tar::Archive::new(reader);
     let entries = archive
         .entries()
-        .map_err(|error| ArchiveError::Read(error.to_string()))?;
+        .map_err(|error| read_error(error, limits))?;
 
     for entry in entries {
         if out.entries >= limits.max_entries {
@@ -107,7 +158,7 @@ fn read_tar<R: Read>(reader: R, limits: Limits, out: &mut Extracted) -> Result<(
             out.entries_over_cap = true;
             break;
         }
-        let mut entry = entry.map_err(|error| ArchiveError::Read(error.to_string()))?;
+        let mut entry = entry.map_err(|error| read_error(error, limits))?;
         out.entries += 1;
 
         if !entry.header().entry_type().is_file() {
@@ -197,7 +248,7 @@ fn read_text(
     reader
         .take(budget)
         .read_to_end(&mut buffer)
-        .map_err(|error| ArchiveError::Read(error.to_string()))?;
+        .map_err(|error| read_error(error, limits))?;
     if buffer.len() as u64 > limits.max_file {
         record_skipped(out, path);
         return Ok(());
@@ -420,6 +471,7 @@ mod tests {
                 extracted: out,
                 bytes: 1,
                 provenance: None,
+                decompression_limit: None,
             },
             &[],
         );
@@ -429,6 +481,21 @@ mod tests {
             .find(|finding| finding.rule == "archive-partially-scanned")
             .expect("missing partial-scan finding");
         assert_eq!(finding.severity, crate::model::Severity::Warn);
+    }
+
+    #[test]
+    fn a_gzip_that_expands_past_the_cap_is_stopped_quickly() {
+        let zeros = vec![0u8; 1024 * 1024];
+        let bytes = tar_gz(&[("zeros.bin", &zeros)], None);
+        let limits = Limits {
+            max_decompressed: 64 * 1024,
+            ..Limits::default()
+        };
+        let error = extract(ArchiveKind::TarGz, &bytes, limits).unwrap_err();
+        assert!(
+            matches!(error, ArchiveError::DecompressedTooLarge(limit) if limit == 64 * 1024),
+            "{error:?}"
+        );
     }
 
     #[test]

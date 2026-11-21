@@ -40,6 +40,9 @@ pub struct Prepared {
     pub bytes: usize,
     /// Sigstore verification of the npm attestation, when one was published.
     pub provenance: Option<crate::provenance::ProvenanceReport>,
+    /// Set when extraction stopped at the decompression cap. The archive was
+    /// not scanned, so a report must say so.
+    pub decompression_limit: Option<u64>,
 }
 
 struct ArchiveRef {
@@ -91,8 +94,13 @@ pub fn inspect_archive(
         Some(checksum) => verify(checksum, &bytes),
         None => Integrity::Unverified,
     };
-    let extracted = extract(source.kind, &bytes, limits)
-        .map_err(|error| InspectError::Archive(error.to_string()))?;
+    let (extracted, decompression_limit) = match extract(source.kind, &bytes, limits) {
+        Ok(extracted) => (extracted, None),
+        Err(crate::archive::ArchiveError::DecompressedTooLarge(limit)) => {
+            (Extracted::default(), Some(limit))
+        }
+        Err(error) => return Err(InspectError::Archive(error.to_string())),
+    };
     let provenance = source
         .provenance_url
         .as_deref()
@@ -109,6 +117,7 @@ pub fn inspect_archive(
         extracted,
         bytes: bytes.len(),
         provenance,
+        decompression_limit,
     })
 }
 
@@ -477,6 +486,7 @@ mod tests {
             },
             bytes: 0,
             provenance: None,
+            decompression_limit: None,
         }
     }
 
@@ -490,6 +500,29 @@ mod tests {
             new,
             &[],
         )
+    }
+
+    #[test]
+    fn a_decompression_bomb_is_a_high_finding_not_a_clean_report() {
+        let mut prepared = prepared(&[("a.js", "const a = 1;")], &[]);
+        prepared.extracted = crate::archive::Extracted::default();
+        prepared.decompression_limit = Some(64 * 1024);
+        let report = build_report(Ecosystem::Npm, &package_spec("1.0.0"), prepared, &[]);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule == "archive-decompression-bomb")
+            .expect("missing decompression finding");
+        assert_eq!(finding.severity, crate::model::Severity::High);
+        assert!(finding.evidence.contains("65536"));
+        assert!(
+            report
+                .not_checked
+                .iter()
+                .any(|item| item.contains("decompression")),
+            "{:?}",
+            report.not_checked
+        );
     }
 
     #[test]
@@ -642,6 +675,23 @@ mod tests {
     }
 }
 
+fn decompression_finding(limit: u64, side: &str) -> crate::rules::RuleFinding {
+    crate::rules::RuleFinding {
+        rule: "archive-decompression-bomb",
+        title: "the archive expands past the decompression cap",
+        description: "Decompressed data exceeded the configured limit, so the scan stopped.",
+        severity: crate::model::Severity::High,
+        confidence: crate::model::Confidence::High,
+        file: String::new(),
+        line: 0,
+        evidence: format!(
+            "{side}decompressed stream exceeds {limit} bytes; remaining content was not scanned"
+        ),
+        recommendation: "Treat this archive as hostile unless the size is expected; do not install it.",
+        references: vec!["https://en.wikipedia.org/wiki/Zip_bomb"],
+    }
+}
+
 /// A finished inspection, ready for rendering.
 #[derive(Debug, serde::Serialize)]
 pub struct InspectionReport {
@@ -709,6 +759,9 @@ pub fn build_report(
     if let Some(finding) = crate::rules::partially_scanned(&prepared.extracted, "") {
         findings.push(finding);
     }
+    if let Some(limit) = prepared.decompression_limit {
+        findings.push(decompression_finding(limit, ""));
+    }
     findings.sort_by(|left, right| {
         left.file
             .cmp(&right.file)
@@ -717,7 +770,9 @@ pub fn build_report(
     });
 
     let mut not_checked = Vec::new();
-    if prepared.extracted.files.is_empty() {
+    if prepared.decompression_limit.is_some() {
+        not_checked.push("source analysis (decompression cap reached)".to_string());
+    } else if prepared.extracted.files.is_empty() {
         not_checked.push("source analysis (no text files in the archive)".to_string());
     }
     InspectionReport {
@@ -1003,6 +1058,12 @@ pub fn build_diff(
     }
     if let Some(finding) = crate::rules::partially_scanned(&new.extracted, "this release: ") {
         findings.push(finding);
+    }
+    if let Some(limit) = old.decompression_limit {
+        findings.push(decompression_finding(limit, "previous release: "));
+    }
+    if let Some(limit) = new.decompression_limit {
+        findings.push(decompression_finding(limit, "this release: "));
     }
     let resolved: Vec<_> = old_findings
         .into_iter()

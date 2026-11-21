@@ -129,6 +129,7 @@ max_download_mb = 25      # default
 max_total_mb = 100
 max_entries = 10000
 max_file_mb = 5
+max_decompressed_mb = 200
 disabled_rules = ["PY-IMPORT-001"]
 ```
 
@@ -230,7 +231,10 @@ simply omit the line.
 Nothing is executed and nothing is extracted to disk. Downloads with a known
 checksum are cached for 30 days and re-verified before use; unverified archives
 are never cached, and `--no-cache` always re-downloads. Limits are 25 MB
-compressed, 100 MB uncompressed, 10,000 entries, and 5 MB per file. Entries
+compressed, 100 MB uncompressed, 200 MB decompressed, 10,000 entries, and 5 MB
+per file. A gzip stream that expands past its cap is stopped while reading and
+reported as HIGH `archive-decompression-bomb`; it is never scanned partially and
+called clean. Entries
 with absolute paths, `..`, symlinks, or hardlinks are skipped. A checksum
 mismatch is a HIGH finding, not a warning.
 

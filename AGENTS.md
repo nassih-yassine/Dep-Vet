@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 502 unit + 124 end-to-end tests
+cargo test --locked                      # 504 unit + 124 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -283,6 +283,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   per-ecosystem archive URLs and trusted checksums; a mismatch is a HIGH finding
   (`ARCHIVE-CHECKSUM-001`). JSR has no documented tarball URL; Maven without a
   sources jar and NuGet compiled packages report source analysis as not checked.
+  Every `GzDecoder` is wrapped in `CountingReader` with `Limits.max_decompressed`
+  (200 MB, `[inspect] max_decompressed_mb`); crossing it aborts with
+  `ArchiveError::DecompressedTooLarge`, which `inspect`/`diff` turn into HIGH
+  `archive-decompression-bomb` plus a not-checked line instead of exit 3.
   `Extracted.truncated` must never be read as a boolean without its reasons:
   `oversize_files` (paths capped at 50), `entries_over_cap`, and
   `total_over_cap` feed `rules::partially_scanned`, which emits

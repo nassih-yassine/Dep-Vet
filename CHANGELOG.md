@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Decompression is time- and size-bounded.** A gzip stream that expands past
+  `max_decompressed` (200 MB by default, `[inspect] max_decompressed_mb`) is
+  stopped while reading, reported as HIGH `archive-decompression-bomb`, and
+  excluded from the "clean" claim.
 - **Install-command classification is token-based.** The risky-command check
   matches whole words instead of substrings, so `node scripts/evaluate.js` is no
   longer treated as `eval`, while `python3 -c`, `perl -e`, `pwsh -c`,
