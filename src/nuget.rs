@@ -113,6 +113,14 @@ fn parse_versions(
             .unwrap_or_default(),
     };
 
+    let latest_version = flat
+        .versions
+        .iter()
+        .rev()
+        .find(|version| !version.contains('-'))
+        .or_else(|| flat.versions.last())
+        .cloned();
+
     // NuGet writes 1900-01-01 for "unknown"; it is not a real publish date.
     let real_date = |epoch: i64| (epoch > 0).then_some(epoch);
     let first_published_at = registration
@@ -144,7 +152,7 @@ fn parse_versions(
         deprecated,
         registry_url: url.to_string(),
         review_url: None,
-        latest_version: None,
+        latest_version,
     })
 }
 
@@ -242,6 +250,13 @@ mod tests {
     fn resolves_the_latest_stable_version() {
         let meta = parse_versions(&spec("newtonsoft.json", None), FLAT, &[], "url").unwrap();
         assert_eq!(meta.version, "13.0.1");
+    }
+
+    #[test]
+    fn reports_the_last_stable_version_for_an_older_pin() {
+        let meta =
+            parse_versions(&spec("newtonsoft.json", Some("12.0.3")), FLAT, &[], "url").unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("13.0.1"));
     }
 
     #[test]

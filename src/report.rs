@@ -354,6 +354,7 @@ mod tests {
             not_checked: Vec::new(),
             registry_url: "https://registry.npmjs.org/evil-pkg".to_string(),
             review_url: None,
+            upgrades: Vec::new(),
             findings,
         }
     }

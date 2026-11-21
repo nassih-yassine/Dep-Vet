@@ -176,6 +176,7 @@ mod tests {
             not_checked: Vec::new(),
             registry_url: String::new(),
             review_url: None,
+            upgrades: Vec::new(),
             findings,
         }
     }
