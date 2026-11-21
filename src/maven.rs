@@ -221,6 +221,7 @@ fn parse_search(
         deprecated: None,
         registry_url: url.to_string(),
         review_url: None,
+        latest_version: None,
     })
 }
 
@@ -279,6 +280,7 @@ fn google_meta(
         review_url: Some(format!(
             "https://maven.google.com/web/index.html#{group}:{artifact}:{version}"
         )),
+        latest_version: None,
     })
 }
 

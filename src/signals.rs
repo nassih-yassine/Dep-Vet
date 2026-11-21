@@ -492,6 +492,7 @@ mod tests {
             deprecated: None,
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
             review_url: None,
+            latest_version: None,
         }
     }
 
@@ -912,6 +913,8 @@ mod tests {
             severity,
             aliases: vec!["CVE-2000-0001".to_string()],
             url: format!("https://osv.dev/vulnerability/{id}"),
+            fixed_versions: Vec::new(),
+            details_missing: false,
         }
     }
 

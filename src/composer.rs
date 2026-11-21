@@ -159,6 +159,7 @@ fn parse_metadata(
         deprecated: package.and_then(|package| abandoned(&package.abandoned)),
         registry_url: url.to_string(),
         review_url: None,
+        latest_version: None,
     })
 }
 

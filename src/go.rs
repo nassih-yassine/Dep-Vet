@@ -111,6 +111,18 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         .filter_map(date::parse_timestamp)
         .min();
 
+    let latest_version = response
+        .versions
+        .iter()
+        .max_by_key(|release| {
+            release
+                .published_at
+                .as_deref()
+                .and_then(date::parse_timestamp)
+                .unwrap_or(0)
+        })
+        .map(|release| release.version_key.version.clone());
+
     let deprecated = release
         .is_deprecated
         .then(|| match release.deprecated_reason.trim() {
@@ -135,6 +147,7 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         deprecated,
         registry_url: url.to_string(),
         review_url: None,
+        latest_version,
     })
 }
 
@@ -212,6 +225,12 @@ mod tests {
         assert_eq!(meta.version, "v1.9.1");
         assert_eq!(meta.name, "github.com/gin-gonic/gin");
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn reports_the_newest_published_version_for_an_older_pin() {
+        let meta = fetch(GIN, Some("v1.8.0")).unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("v1.9.1"));
     }
 
     #[test]

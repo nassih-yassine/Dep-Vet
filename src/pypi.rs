@@ -129,6 +129,14 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         None
     };
 
+    // PyPI's `info.version` is the project's latest. A fully yanked latest is
+    // not a suggestion, so it becomes unknown rather than a false upgrade.
+    let latest_is_yanked = project
+        .releases
+        .get(&project.info.version)
+        .is_some_and(|files| !files.is_empty() && files.iter().all(|file| file.yanked));
+    let latest_version = (!latest_is_yanked).then(|| project.info.version.clone());
+
     Ok(PackageMeta {
         name: project.info.name,
         version,
@@ -143,6 +151,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         deprecated,
         registry_url: url.to_string(),
         review_url: None,
+        latest_version,
     })
 }
 
@@ -236,6 +245,12 @@ mod tests {
         assert!(!meta.build_from_source, "a wheel exists");
         assert!(meta.maintainers.is_empty());
         assert_eq!(meta.publisher, None);
+    }
+
+    #[test]
+    fn reports_the_project_latest_version_for_an_older_pin() {
+        let meta = fetch(WHEEL_AND_SDIST, Some("2.30.0")).unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("2.31.0"));
     }
 
     #[test]

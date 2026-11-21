@@ -103,6 +103,8 @@ fn parse_crate(
         _ => "this version is yanked".to_string(),
     });
 
+    let latest_version = response.krate.max_stable_version.clone();
+
     Ok(PackageMeta {
         name: response.krate.name,
         version,
@@ -128,6 +130,7 @@ fn parse_crate(
         deprecated,
         registry_url: url.to_string(),
         review_url: None,
+        latest_version,
     })
 }
 
@@ -234,6 +237,12 @@ mod tests {
         assert_eq!(meta.maintainers, vec!["dtolnay", "oli-obk"]);
         assert!(meta.maintainers_known);
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn reports_the_max_stable_version_for_an_older_pin() {
+        let meta = fetch(SERDE, Some("1.0.1")).unwrap();
+        assert_eq!(meta.latest_version.as_deref(), Some("1.0.229"));
     }
 
     #[test]

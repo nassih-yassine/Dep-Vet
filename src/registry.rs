@@ -38,6 +38,8 @@ pub struct PackageMeta {
     /// Where a human should look this version up. `None` uses the
     /// ecosystem's default page.
     pub review_url: Option<String>,
+    /// Highest published stable version, when the client can tell.
+    pub latest_version: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -229,6 +231,7 @@ fn parse_packument(
         .time
         .get(&version)
         .and_then(|raw| date::parse_timestamp(raw));
+    let latest_version = packument.dist_tags.get("latest").cloned();
 
     Ok(PackageMeta {
         name: packument.name.unwrap_or_else(|| spec.name.clone()),
@@ -251,6 +254,7 @@ fn parse_packument(
         deprecated: normalize_deprecated(doc.deprecated.clone()),
         registry_url: url.to_string(),
         review_url: None,
+        latest_version,
     })
 }
 
@@ -342,6 +346,13 @@ mod tests {
             }
         }
     }"#;
+
+    #[test]
+    fn reports_the_latest_tag_as_latest_version() {
+        let meta = fetch(PACKUMENT, Some("1.1.0-beta.1")).unwrap();
+        assert_eq!(meta.version, "1.1.0-beta.1");
+        assert_eq!(meta.latest_version.as_deref(), Some("1.0.0"));
+    }
 
     #[test]
     fn resolves_latest_version() {
