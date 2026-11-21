@@ -255,6 +255,28 @@ impl Ecosystem {
     }
 }
 
+impl Ecosystem {
+    /// Human-facing page for one version.
+    pub fn package_url(self, name: &str, version: &str) -> String {
+        match self {
+            Self::Npm => format!("https://www.npmjs.com/package/{name}/v/{version}"),
+            Self::Pypi => format!("https://pypi.org/project/{name}/{version}/"),
+            Self::CratesIo => format!("https://crates.io/crates/{name}/{version}"),
+            Self::Go => format!("https://pkg.go.dev/{name}@{version}"),
+        }
+    }
+
+    /// Human-facing page for the project.
+    pub fn project_url(self, name: &str) -> String {
+        match self {
+            Self::Npm => format!("https://www.npmjs.com/package/{name}"),
+            Self::Pypi => format!("https://pypi.org/project/{name}/"),
+            Self::CratesIo => format!("https://crates.io/crates/{name}"),
+            Self::Go => format!("https://pkg.go.dev/{name}"),
+        }
+    }
+}
+
 impl std::fmt::Display for Ecosystem {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.cli_name())

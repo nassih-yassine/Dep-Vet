@@ -124,6 +124,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   because of an unrelated file. A name that is itself in the seed is never
   flagged for resembling a local one (`preact` vs `react`) — keep that guard
   and its test.
+- **Human review links come from `Ecosystem::package_url`.** Never hardcode
+  npmjs.com in a renderer; a PyPI report shipped with an npm link once. Clean
+  reports include the link too.
 - **`audit` is the whole tree, `lock` is the diff.** `audit` passes an empty
   local typosquat list on purpose (every package in a tree resembles another),
   and its cold cost is one audit per package. It shares `audit_packages` with

@@ -4,7 +4,6 @@ use owo_colors::OwoColorize;
 use serde::Serialize;
 
 use crate::model::{AuditReport, LockFetchError, LockReport, PackageReport, Severity};
-use crate::registry::package_page_url;
 
 pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
@@ -80,44 +79,43 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
     out.push('\n');
     if report.findings.is_empty() {
         out.push_str("  no findings: nothing in the registry metadata stands out\n");
-        return out;
-    }
-
-    out.push_str(&format!(
-        "  {} finding{}\n\n",
-        report.findings.len(),
-        if report.findings.len() == 1 { "" } else { "s" },
-    ));
-
-    for finding in &report.findings {
+    } else {
         out.push_str(&format!(
-            "  {}  {}\n",
-            paint(
-                &format!("[{}]", finding.severity.label()),
-                verdict_color(finding.severity),
-                color
-            ),
-            finding.title
+            "  {} finding{}\n\n",
+            report.findings.len(),
+            if report.findings.len() == 1 { "" } else { "s" }
         ));
-        for line in wrap(&finding.detail, 92) {
-            out.push_str(&format!("        {line}\n"));
-        }
-        for evidence in &finding.evidence {
+
+        for finding in &report.findings {
             out.push_str(&format!(
-                "        {}: {}\n",
-                evidence.label,
-                truncate(&evidence.value, 140)
+                "  {}  {}\n",
+                paint(
+                    &format!("[{}]", finding.severity.label()),
+                    verdict_color(finding.severity),
+                    color
+                ),
+                finding.title
             ));
-            if let Some(url) = &evidence.url {
-                out.push_str(&format!("        -> {url}\n"));
+            for line in wrap(&finding.detail, 92) {
+                out.push_str(&format!("        {line}\n"));
             }
+            for evidence in &finding.evidence {
+                out.push_str(&format!(
+                    "        {}: {}\n",
+                    evidence.label,
+                    truncate(&evidence.value, 140)
+                ));
+                if let Some(url) = &evidence.url {
+                    out.push_str(&format!("        -> {url}\n"));
+                }
+            }
+            out.push('\n');
         }
-        out.push('\n');
     }
 
     out.push_str(&format!(
         "  review: {}\n",
-        package_page_url(&report.name, &report.version)
+        report.ecosystem.package_url(&report.name, &report.version)
     ));
     out
 }
@@ -365,6 +363,27 @@ mod tests {
         assert!(text.contains("-> https://registry.npmjs.org/evil-pkg"));
         assert!(text.contains("1,234/week"));
         assert!(text.contains("https://www.npmjs.com/package/evil-pkg/v/1.0.0"));
+    }
+
+    #[test]
+    fn review_link_follows_the_ecosystem() {
+        let mut pypi = report(vec![]);
+        pypi.ecosystem = Ecosystem::Pypi;
+        pypi.name = "flask".to_string();
+        pypi.version = "3.1.0".to_string();
+        assert!(render_human(&pypi, false).contains("https://pypi.org/project/flask/3.1.0/"));
+
+        let mut crates = report(vec![]);
+        crates.ecosystem = Ecosystem::CratesIo;
+        crates.name = "serde".to_string();
+        assert!(render_human(&crates, false).contains("https://crates.io/crates/serde/1.0.0"));
+
+        let mut go = report(vec![]);
+        go.ecosystem = Ecosystem::Go;
+        go.name = "github.com/gin-gonic/gin".to_string();
+        assert!(
+            render_human(&go, false).contains("https://pkg.go.dev/github.com/gin-gonic/gin@1.0.0")
+        );
     }
 
     #[test]
