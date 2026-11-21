@@ -120,6 +120,20 @@ fn parse_metadata(
         .filter_map(date::parse_timestamp)
         .min();
 
+    let published_at = release.time.as_deref().and_then(date::parse_timestamp);
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = releases
+            .iter()
+            .map(|release| {
+                (
+                    release.version.as_str(),
+                    release.time.as_deref().and_then(date::parse_timestamp),
+                )
+            })
+            .collect();
+        crate::registry::previous_release(&entries, &release.version, published_at)
+    };
+
     let repository = release
         .source
         .as_ref()
@@ -148,8 +162,23 @@ fn parse_metadata(
         name: spec.name.clone(),
         version: release.version.clone(),
         latest_version: Some(latest(&releases).version.clone()),
+        candidate_weekly_downloads: None,
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            previous_dependencies: previous
+                .as_ref()
+                .and_then(|(version, _)| {
+                    releases.iter().find(|release| release.version == *version)
+                })
+                .map(composer_dependencies)
+                .unwrap_or_default(),
+            dependencies: composer_dependencies(release),
+            history_known: previous.is_some(),
+            ..crate::registry::ReleaseHistory::default()
+        },
         first_published_at,
-        published_at: release.time.as_deref().and_then(date::parse_timestamp),
+        published_at,
         maintainers,
         // Composer records authors, not who published this version.
         publisher: None,
@@ -205,6 +234,24 @@ struct Release {
     time: Option<String>,
     #[serde(default)]
     source: Option<Source>,
+    #[serde(default)]
+    require: std::collections::BTreeMap<String, String>,
+}
+
+/// Composer's `require` mixes libraries with platform packages; only libraries
+/// are dependencies a reader can act on.
+fn composer_dependencies(release: &Release) -> Vec<String> {
+    release
+        .require
+        .keys()
+        .filter(|name| {
+            !(*name == "php"
+                || name.starts_with("ext-")
+                || name.starts_with("lib-")
+                || name.starts_with("composer-"))
+        })
+        .cloned()
+        .collect()
 }
 
 impl Release {
@@ -261,13 +308,15 @@ mod tests {
                 },
                 {
                     "version": "3.13.0",
-                    "time": "2026-11-16T10:43:05+00:00",
-                    "source": { "url": "https://github.com/Seldaek/monolog.git" }
+                    "time": "2024-06-01T10:43:05+00:00",
+                    "source": { "url": "https://github.com/Seldaek/monolog.git" },
+                    "require": { "php": ">=8.1", "psr/log": "^3.0" }
                 },
                 {
                     "version": "3.0.0",
                     "time": "2024-01-01T00:00:00+00:00",
-                    "source": { "url": "https://github.com/Seldaek/monolog.git" }
+                    "source": { "url": "https://github.com/Seldaek/monolog.git" },
+                    "require": { "php": ">=8.0" }
                 }
             ]
         }
@@ -324,6 +373,31 @@ mod tests {
         ] } }"#;
         let meta = parse_metadata(&spec("x/y", None), body, None, "url").unwrap();
         assert_eq!(meta.version, "2.0.0");
+    }
+
+    #[test]
+    fn records_dependencies_without_platform_packages() {
+        let meta = parse_metadata(
+            &spec("monolog/monolog", Some("3.13.0")),
+            P2,
+            Some(&package()),
+            "url",
+        )
+        .unwrap();
+        assert_eq!(meta.release.dependencies, vec!["psr/log".to_string()]);
+        assert!(meta.release.previous_dependencies.is_empty());
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = parse_metadata(
+            &spec("monolog/monolog", Some("3.13.0")),
+            P2,
+            Some(&package()),
+            "url",
+        )
+        .unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("3.0.0"));
     }
 
     #[test]

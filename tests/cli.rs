@@ -1793,6 +1793,222 @@ fn a_tree_audit_batches_osv_and_downloads() {
     assert_eq!(advisories, vec![1, 1]);
 }
 
+fn pypi_project(uploaded: &str, previous: &str, requires: Option<&str>) -> String {
+    let requires = match requires {
+        Some(requires) => format!("[\"{requires}\"]"),
+        None => "null".to_string(),
+    };
+    format!(
+        r#"{{
+            "info": {{ "name": "recent-pkg", "version": "1.1.0", "requires_dist": {requires} }},
+            "urls": [ {{ "packagetype": "bdist_wheel", "upload_time": "{uploaded}" }} ],
+            "releases": {{
+                "1.0.0": [ {{ "packagetype": "bdist_wheel", "upload_time": "{previous}" }} ],
+                "1.1.0": [ {{ "packagetype": "bdist_wheel", "upload_time": "{uploaded}" }} ]
+            }}
+        }}"#
+    )
+}
+
+fn crates_crate(current: &str, previous: &str) -> String {
+    format!(
+        r#"{{
+            "crate": {{
+                "name": "recent-crate",
+                "max_version": "1.1.0",
+                "max_stable_version": "1.1.0",
+                "created_at": "{previous}",
+                "repository": "https://github.com/x/y"
+            }},
+            "versions": [
+                {{ "num": "1.1.0", "created_at": "{current}", "yanked": false, "published_by": {{ "login": "a" }} }},
+                {{ "num": "1.0.0", "created_at": "{previous}", "yanked": false, "published_by": {{ "login": "a" }} }}
+            ]
+        }}"#
+    )
+}
+
+#[test]
+fn crates_history_is_fetched_only_for_recent_releases() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/api/v1/crates/recent-crate".to_string(),
+        (200, crates_crate(&days_ago(1), &days_ago(100))),
+    );
+    routes.insert(
+        "/api/v1/crates/recent-crate/owners".to_string(),
+        (200, r#"{"users":[{"login":"a"}]}"#.to_string()),
+    );
+    routes.insert(
+        "/api/v1/crates/recent-crate/1.1.0/dependencies".to_string(),
+        (
+            200,
+            r#"{"dependencies":[{"crate_id":"anyhow","kind":"normal"}]}"#.to_string(),
+        ),
+    );
+    routes.insert(
+        "/api/v1/crates/recent-crate/1.0.0/dependencies".to_string(),
+        (
+            200,
+            r#"{"dependencies":[{"crate_id":"bytes","kind":"normal"}]}"#.to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["crates", "recent-crate@1.1.0", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["id"] == "dependency-added"),
+        "{}",
+        value["findings"]
+    );
+    assert_eq!(
+        registry
+            .requests()
+            .iter()
+            .filter(|path| path.ends_with("/dependencies"))
+            .count(),
+        2
+    );
+
+    let mut old = HashMap::new();
+    old.insert(
+        "/api/v1/crates/recent-crate".to_string(),
+        (200, crates_crate(&days_ago(400), &days_ago(500))),
+    );
+    old.insert(
+        "/api/v1/crates/recent-crate/owners".to_string(),
+        (200, r#"{"users":[{"login":"a"}]}"#.to_string()),
+    );
+    old.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(old);
+    registry
+        .command()
+        .args(["crates", "recent-crate@1.1.0"])
+        .assert()
+        .code(0);
+    assert!(
+        !registry
+            .requests()
+            .iter()
+            .any(|path| path.ends_with("/dependencies")),
+        "history fetched for an old release: {:?}",
+        registry.requests()
+    );
+}
+
+#[test]
+fn pypi_history_is_fetched_only_for_recent_releases() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/pypi/recent-pkg/json".to_string(),
+        (
+            200,
+            pypi_project(
+                &days_ago(1),
+                &days_ago(100),
+                Some("tomli; python_version < '3.11'"),
+            ),
+        ),
+    );
+    routes.insert(
+        "/pypi/recent-pkg/1.1.0/json".to_string(),
+        (
+            200,
+            pypi_project(
+                &days_ago(1),
+                &days_ago(100),
+                Some("tomli; python_version < '3.11'"),
+            ),
+        ),
+    );
+    routes.insert(
+        "/pypi/recent-pkg/1.0.0/json".to_string(),
+        (
+            200,
+            pypi_project(&days_ago(400), &days_ago(500), Some("requests")),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["pypi", "recent-pkg==1.1.0", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["id"] == "dependency-added"),
+        "missing dependency-added: {}",
+        value["findings"]
+    );
+    assert_eq!(
+        registry
+            .requests()
+            .iter()
+            .filter(|path| path.contains("/1.1.0/json") || path.contains("/1.0.0/json"))
+            .count(),
+        2
+    );
+
+    // A release outside the window must not cost history requests.
+    let mut old = HashMap::new();
+    old.insert(
+        "/pypi/recent-pkg/json".to_string(),
+        (
+            200,
+            pypi_project(&days_ago(400), &days_ago(500), Some("tomli")),
+        ),
+    );
+    old.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(old);
+    registry
+        .command()
+        .args(["pypi", "recent-pkg==1.1.0"])
+        .assert()
+        .code(0);
+    assert!(
+        !registry
+            .requests()
+            .iter()
+            .any(|path| path.contains("/1.1.0/json")),
+        "history fetched for an old release: {:?}",
+        registry.requests()
+    );
+}
+
 #[test]
 fn scoped_packages_get_downloads_one_at_a_time() {
     let repo = Repo::new();
@@ -1888,6 +2104,53 @@ fn a_failed_osv_batch_marks_every_package_incomplete() {
             package["name"]
         );
     }
+}
+
+#[test]
+fn a_lookalike_more_popular_than_its_target_is_clean() {
+    let crossenv = PackageFixture::clean("crossenv");
+    let mut routes = HashMap::new();
+    routes.insert(crossenv.route(), (200, crossenv.to_json()));
+    routes.insert(
+        "/downloads/last-week/crossenv".to_string(),
+        (200, r#"{"downloads":3000000}"#.to_string()),
+    );
+    routes.insert(
+        "/downloads/last-week/cross-env".to_string(),
+        (200, r#"{"downloads":2000000}"#.to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["npm", "crossenv", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|finding| finding["id"] != "typosquat"),
+        "{}",
+        value["findings"]
+    );
+    assert!(
+        registry
+            .requests()
+            .iter()
+            .any(|path| path == "/downloads/last-week/cross-env"),
+        "the candidate's popularity was not checked: {:?}",
+        registry.requests()
+    );
 }
 
 #[test]
@@ -2831,7 +3094,7 @@ fn audit_reads_berry_lock_without_calling_metadata_a_package() {
 }
 
 const GEM_VERSIONS: &str = r#"[
-    { "number": "3.2.9", "created_at": "2026-11-20T23:14:58.183Z", "platform": "ruby",
+    { "number": "3.2.9", "created_at": "2024-06-01T23:14:58.183Z", "platform": "ruby",
       "metadata": { "source_code_uri": "https://github.com/rack/rack" } },
     { "number": "3.0.0", "created_at": "2024-01-01T00:00:00.000Z", "platform": "ruby" }
 ]"#;
@@ -3132,7 +3395,7 @@ const COMPOSER_P2: &str = r#"{
         "monolog/monolog": [
             {
                 "version": "3.13.0",
-                "time": "2026-11-16T10:43:05+00:00",
+                "time": "2024-06-01T10:43:05+00:00",
                 "source": { "url": "https://github.com/Seldaek/monolog.git" }
             },
             {

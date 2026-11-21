@@ -17,6 +17,7 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "advisory",
     "advisories-truncated",
     "advisory-check-unavailable",
+    "advisory-coverage-partial",
     "install-scripts",
     "build-from-source",
     "typosquat",
@@ -26,6 +27,10 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "maintainer-check-unavailable",
     "deprecated",
     "no-repository",
+    "release-after-dormancy",
+    "install-scripts-changed",
+    "dependency-added",
+    "publisher-changed",
 ];
 
 #[derive(Debug, Default, Deserialize)]
@@ -183,6 +188,28 @@ mod tests {
 
     fn allowlist(body: &str) -> Allowlist {
         Allowlist::parse(Path::new(".depvet.toml"), body).unwrap()
+    }
+
+    #[test]
+    fn every_finding_id_emitted_by_signals_is_allowlistable() {
+        let source = include_str!("signals.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let mut ids = Vec::new();
+        for line in production.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("id: \"")
+                && let Some(end) = rest.find('"')
+            {
+                ids.push(&rest[..end]);
+            }
+        }
+        assert!(!ids.is_empty(), "no ids found in signals.rs");
+        for id in ids {
+            assert!(
+                KNOWN_FINDINGS.contains(&id),
+                "{id} is emitted by signals but missing from KNOWN_FINDINGS"
+            );
+        }
     }
 
     #[test]

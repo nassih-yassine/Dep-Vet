@@ -57,7 +57,47 @@ impl PypiClient {
             }
             Err(error) => return Err(PypiError::Http(error.to_string())),
         };
-        parse_project(spec, &body, &url)
+        let mut meta = parse_project(spec, &body, &url)?;
+        self.enrich_history(&mut meta);
+        Ok(meta)
+    }
+
+    /// Requires-dist for this release and the previous one, only for releases
+    /// inside the history window. Older versions cannot match the transition
+    /// signals, so they must not cost two requests.
+    fn enrich_history(&self, meta: &mut PackageMeta) {
+        let Some(published) = meta.published_at else {
+            return;
+        };
+        if crate::cache::now_seconds() - published
+            > crate::registry::HISTORY_WINDOW_DAYS * crate::date::SECONDS_PER_DAY
+        {
+            return;
+        }
+        let Some(previous) = meta.release.previous_version.clone() else {
+            return;
+        };
+        let (Some(current), Some(previous_dependencies)) = (
+            self.version_dependencies(&meta.name, &meta.version),
+            self.version_dependencies(&meta.name, &previous),
+        ) else {
+            return;
+        };
+        meta.release.dependencies = current;
+        meta.release.previous_dependencies = previous_dependencies;
+        meta.release.history_known = true;
+    }
+
+    fn version_dependencies(&self, name: &str, version: &str) -> Option<Vec<String>> {
+        let url = format!(
+            "{}/pypi/{name}/{version}/json",
+            self.base.trim_end_matches('/')
+        );
+        let body = self.http.get(&url).ok()?;
+        let project = serde_json::from_str::<Project>(&body).ok()?;
+        Some(dependency_names(
+            project.info.requires_dist.as_deref().unwrap_or_default(),
+        ))
     }
 }
 
@@ -120,6 +160,15 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         .or_else(|| project.info.home_page.clone())
         .filter(|url| !url.trim().is_empty());
 
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = project
+            .releases
+            .iter()
+            .map(|(version, files)| (version.as_str(), files.iter().filter_map(file_time).min()))
+            .collect();
+        crate::registry::previous_release(&entries, &version, published_at)
+    };
+
     let deprecated = if all_yanked {
         Some(match yanked_reason {
             Some(reason) => format!("this release is yanked: {reason}"),
@@ -152,6 +201,12 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
+        candidate_weekly_downloads: None,
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -171,10 +226,33 @@ struct Project {
     releases: BTreeMap<String, Vec<File>>,
 }
 
+/// PEP 508 strings to bare names: drop markers, extras, and version operators.
+fn dependency_names(requirements: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = requirements
+        .iter()
+        .map(|requirement| requirement.as_str())
+        .map(|requirement| requirement.split(';').next().unwrap_or(requirement))
+        .map(|requirement| {
+            requirement
+                .split(['<', '>', '=', '!', '~', '[', '(', ' '])
+                .next()
+                .unwrap_or(requirement)
+                .trim()
+        })
+        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("extra"))
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 #[derive(Debug, Deserialize)]
 struct Info {
     name: String,
     version: String,
+    #[serde(default)]
+    requires_dist: Option<Vec<String>>,
     #[serde(default)]
     home_page: Option<String>,
     #[serde(default)]
@@ -225,14 +303,14 @@ mod tests {
             }
         },
         "urls": [
-            { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00" },
-            { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00" }
+            { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00Z" },
+            { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00Z" }
         ],
         "releases": {
-            "2.30.0": [{ "packagetype": "sdist", "upload_time": "2023-05-01T00:00:00" }],
+            "2.30.0": [{ "packagetype": "sdist", "upload_time": "2023-05-01T00:00:00Z" }],
             "2.31.0": [
-                { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00" },
-                { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00" }
+                { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00Z" },
+                { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00Z" }
             ]
         }
     }"#;
@@ -245,6 +323,29 @@ mod tests {
         assert!(!meta.build_from_source, "a wheel exists");
         assert!(meta.maintainers.is_empty());
         assert_eq!(meta.publisher, None);
+    }
+
+    #[test]
+    fn dependency_strings_become_bare_names() {
+        let names = dependency_names(&[
+            "requests[socks]>=2.0".to_string(),
+            "tomli; python_version < '3.11'".to_string(),
+            "typing-extensions".to_string(),
+        ]);
+        assert_eq!(
+            names,
+            vec![
+                "requests".to_string(),
+                "tomli".to_string(),
+                "typing-extensions".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = fetch(WHEEL_AND_SDIST, Some("2.31.0")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("2.30.0"));
     }
 
     #[test]
@@ -271,11 +372,11 @@ mod tests {
         let meta = fetch(WHEEL_AND_SDIST, None).unwrap();
         assert_eq!(
             meta.first_published_at,
-            date::parse_timestamp("2023-05-01T00:00:00")
+            date::parse_timestamp("2023-05-01T00:00:00Z")
         );
         assert_eq!(
             meta.published_at,
-            date::parse_timestamp("2023-05-22T12:00:00")
+            date::parse_timestamp("2023-05-22T12:00:00Z")
         );
     }
 

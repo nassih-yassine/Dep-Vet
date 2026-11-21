@@ -63,8 +63,73 @@ impl CratesClient {
         let owners_url = format!("{}/owners", url);
         let owners = self.http.get(&owners_url).ok();
 
-        parse_crate(spec, &body, &url, owners.as_deref())
+        let mut meta = parse_crate(spec, &body, &url, owners.as_deref())?;
+        self.enrich_history(&mut meta);
+        Ok(meta)
     }
+
+    fn enrich_history(&self, meta: &mut PackageMeta) {
+        let Some(published) = meta.published_at else {
+            return;
+        };
+        if crate::cache::now_seconds() - published
+            > crate::registry::HISTORY_WINDOW_DAYS * crate::date::SECONDS_PER_DAY
+        {
+            return;
+        }
+        let Some(previous) = meta.release.previous_version.clone() else {
+            return;
+        };
+        let (Some(current), Some(previous_dependencies)) = (
+            self.version_dependencies(&meta.name, &meta.version),
+            self.version_dependencies(&meta.name, &previous),
+        ) else {
+            return;
+        };
+        meta.release.dependencies = current;
+        meta.release.previous_dependencies = previous_dependencies;
+        meta.release.history_known = true;
+    }
+
+    fn version_dependencies(&self, name: &str, version: &str) -> Option<Vec<String>> {
+        let url = format!(
+            "{}/api/v1/crates/{name}/{version}/dependencies",
+            self.base.trim_end_matches('/')
+        );
+        let body = self.http.get(&url).ok()?;
+        Some(parse_dependencies(&body))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DependencyResponse {
+    #[serde(default)]
+    dependencies: Vec<CrateDependency>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CrateDependency {
+    #[serde(default)]
+    crate_id: String,
+    #[serde(default)]
+    kind: String,
+}
+
+/// Runtime and build dependencies; dev-dependencies never ship.
+fn parse_dependencies(body: &str) -> Vec<String> {
+    let Ok(response) = serde_json::from_str::<DependencyResponse>(body) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = response
+        .dependencies
+        .into_iter()
+        .filter(|dependency| dependency.kind != "dev")
+        .map(|dependency| dependency.crate_id)
+        .filter(|name| !name.is_empty())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn parse_crate(
@@ -96,6 +161,28 @@ fn parse_crate(
         None => (Vec::new(), false),
     };
 
+    let published_at = release
+        .created_at
+        .as_deref()
+        .and_then(date::parse_timestamp);
+
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = response
+            .versions
+            .iter()
+            .map(|release| {
+                (
+                    release.num.as_str(),
+                    release
+                        .created_at
+                        .as_deref()
+                        .and_then(date::parse_timestamp),
+                )
+            })
+            .collect();
+        crate::registry::previous_release(&entries, &version, published_at)
+    };
+
     let deprecated = release.yanked.then(|| match &release.yank_message {
         Some(message) if !message.trim().is_empty() => {
             format!("this version is yanked: {message}")
@@ -113,10 +200,7 @@ fn parse_crate(
             .created_at
             .as_deref()
             .and_then(date::parse_timestamp),
-        published_at: release
-            .created_at
-            .as_deref()
-            .and_then(date::parse_timestamp),
+        published_at,
         maintainers,
         publisher: release.published_by.as_ref().map(|user| user.login.clone()),
         maintainers_known,
@@ -131,6 +215,22 @@ fn parse_crate(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
+        candidate_weekly_downloads: None,
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.as_ref().map(|(_, time)| *time),
+            previous_publisher: previous
+                .as_ref()
+                .and_then(|(version, _)| {
+                    response
+                        .versions
+                        .iter()
+                        .find(|release| release.num == *version)
+                })
+                .and_then(|release| release.published_by.as_ref())
+                .map(|user| user.login.clone()),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -237,6 +337,31 @@ mod tests {
         assert_eq!(meta.maintainers, vec!["dtolnay", "oli-obk"]);
         assert!(meta.maintainers_known);
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn crate_dependencies_drop_dev_entries() {
+        let body = r#"{ "dependencies": [
+            { "crate_id": "rand", "kind": "normal" },
+            { "crate_id": "criterion", "kind": "dev" },
+            { "crate_id": "cc", "kind": "build" }
+        ] }"#;
+        assert_eq!(
+            parse_dependencies(body),
+            vec!["cc".to_string(), "rand".to_string()]
+        );
+    }
+
+    #[test]
+    fn records_the_previous_publisher() {
+        let meta = fetch(SERDE, Some("1.0.229")).unwrap();
+        assert_eq!(meta.release.previous_publisher.as_deref(), Some("oli-obk"));
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = fetch(SERDE, Some("1.0.229")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("1.0.1"));
     }
 
     #[test]

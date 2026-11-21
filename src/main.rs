@@ -288,7 +288,14 @@ impl Auditor {
         now: i64,
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, RegistryError> {
-        let meta = self.registry.fetch(spec)?;
+        let mut meta = self.registry.fetch(spec)?;
+        // One extra lookup only when the name resembles a popular one: compare
+        // the two download counts instead of trusting the generated seed.
+        if let Some(candidate) =
+            dep_vet::signals::typosquat_candidate(&meta.name, Ecosystem::Npm, local)
+        {
+            meta.candidate_weekly_downloads = self.registry.weekly_downloads(&candidate);
+        }
         let (downloads, advisories) = match pre {
             Some(pre) => (pre.downloads, pre.advisories.cloned()),
             // Advisories are best effort: a failure is reported as an INFO
