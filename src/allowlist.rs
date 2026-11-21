@@ -62,6 +62,8 @@ pub struct InspectConfig {
     #[serde(default)]
     pub max_file_mb: Option<u64>,
     #[serde(default)]
+    pub max_decompressed_mb: Option<u64>,
+    #[serde(default)]
     pub disabled_rules: Vec<String>,
 }
 
@@ -87,6 +89,7 @@ impl InspectConfig {
             max_total: mb(self.max_total_mb, defaults.max_total),
             max_entries: self.max_entries.unwrap_or(defaults.max_entries),
             max_file: mb(self.max_file_mb, defaults.max_file),
+            max_decompressed: mb(self.max_decompressed_mb, defaults.max_decompressed),
             max_path: defaults.max_path,
         }
     }
@@ -163,6 +166,7 @@ impl Allowlist {
             ("max_download_mb", list.inspect.max_download_mb),
             ("max_total_mb", list.inspect.max_total_mb),
             ("max_file_mb", list.inspect.max_file_mb),
+            ("max_decompressed_mb", list.inspect.max_decompressed_mb),
         ] {
             if value == Some(0) {
                 return Err(AllowError::ZeroLimit {
@@ -281,6 +285,17 @@ mod tests {
         let limits = config.inspect().limits();
         assert_eq!(limits.max_compressed, 10 * 1024 * 1024);
         assert_eq!(limits.max_entries, 500);
+        assert_eq!(limits.max_decompressed, 200 * 1024 * 1024);
+
+        let configured = Allowlist::parse(path, "[inspect]\nmax_decompressed_mb = 10\n").unwrap();
+        assert_eq!(
+            configured.inspect().limits().max_decompressed,
+            10 * 1024 * 1024
+        );
+        assert!(matches!(
+            Allowlist::parse(path, "[inspect]\nmax_decompressed_mb = 0\n"),
+            Err(AllowError::ZeroLimit { .. })
+        ));
         assert_eq!(config.inspect().disabled_rules, vec!["JS-EXEC-001"]);
 
         assert!(matches!(

@@ -15,6 +15,9 @@ pub struct Limits {
     pub max_total: u64,
     pub max_entries: usize,
     pub max_file: u64,
+    /// Decompressed bytes a gzip stream may produce. Stops zip bombs before
+    /// they reach the per-file and total caps.
+    pub max_decompressed: u64,
     pub max_path: usize,
 }
 
@@ -25,6 +28,7 @@ impl Default for Limits {
             max_total: 100 * 1024 * 1024,
             max_entries: 10_000,
             max_file: 5 * 1024 * 1024,
+            max_decompressed: 200 * 1024 * 1024,
             max_path: 1_024,
         }
     }
