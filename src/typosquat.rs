@@ -254,6 +254,44 @@ pub const POPULAR_GO: &[&str] = &[
     "sigs.k8s.io/controller-runtime",
 ];
 
+/// Provisional JSR seed. JSR names are always scoped, so a typo usually lands
+/// in a similar scope or a near-identical package name.
+pub const POPULAR_JSR: &[&str] = &[
+    "@fresh/core",
+    "@hono/hono",
+    "@oak/oak",
+    "@std/assert",
+    "@std/async",
+    "@std/bytes",
+    "@std/cli",
+    "@std/collections",
+    "@std/crypto",
+    "@std/csv",
+    "@std/datetime",
+    "@std/dotenv",
+    "@std/encoding",
+    "@std/fmt",
+    "@std/fs",
+    "@std/html",
+    "@std/http",
+    "@std/io",
+    "@std/json",
+    "@std/log",
+    "@std/media-types",
+    "@std/mime",
+    "@std/path",
+    "@std/regexp",
+    "@std/semver",
+    "@std/streams",
+    "@std/testing",
+    "@std/text",
+    "@std/time",
+    "@std/toml",
+    "@std/url",
+    "@std/uuid",
+    "@std/yaml",
+];
+
 /// A popular name that `name` is suspiciously close to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suspect<'a> {
@@ -382,6 +420,17 @@ mod tests {
         );
         for name in ["requests", "numpy", "django", "pydantic"] {
             assert!(POPULAR_PYPI.contains(&name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn jsr_seed_is_clean() {
+        let mut sorted = POPULAR_JSR.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), POPULAR_JSR.len(), "duplicate JSR names");
+        for name in ["@std/assert", "@std/path", "@oak/oak"] {
+            assert!(POPULAR_JSR.contains(&name), "missing {name}");
         }
     }
 

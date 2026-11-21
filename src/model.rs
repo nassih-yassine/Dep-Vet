@@ -37,6 +37,20 @@ impl PackageSpec {
         Ok(Self { name, version })
     }
 
+    /// JSR reference: `@scope/name` or `@scope/name@1.2.3`.
+    pub fn parse_jsr(input: &str) -> Result<Self, SpecError> {
+        let spec = Self::parse(input)?;
+        let (scope, name) = spec
+            .name
+            .strip_prefix('@')
+            .and_then(|rest| rest.split_once('/'))
+            .ok_or_else(|| SpecError::InvalidName(spec.name.clone()))?;
+        if scope.is_empty() || name.is_empty() || name.contains('/') {
+            return Err(SpecError::InvalidName(spec.name.clone()));
+        }
+        Ok(spec)
+    }
+
     /// Go module reference: `module/path` or `module/path@v1.2.3`. Module paths
     /// are case-sensitive; uppercase is preserved for the API but folded for
     /// typosquat comparison.
@@ -236,6 +250,7 @@ pub enum Ecosystem {
     #[serde(rename = "crates")]
     CratesIo,
     Go,
+    Jsr,
 }
 
 impl Ecosystem {
@@ -245,6 +260,7 @@ impl Ecosystem {
             Self::Pypi => "pypi",
             Self::CratesIo => "crates",
             Self::Go => "go",
+            Self::Jsr => "jsr",
         }
     }
 
@@ -255,6 +271,8 @@ impl Ecosystem {
             Self::Pypi => "PyPI",
             Self::CratesIo => "crates.io",
             Self::Go => "Go",
+            // OSV does not publish advisories for JSR; nothing queries this.
+            Self::Jsr => "JSR",
         }
     }
 }
@@ -267,6 +285,7 @@ impl Ecosystem {
             Self::Pypi => format!("https://pypi.org/project/{name}/{version}/"),
             Self::CratesIo => format!("https://crates.io/crates/{name}/{version}"),
             Self::Go => format!("https://pkg.go.dev/{name}@{version}"),
+            Self::Jsr => format!("https://jsr.io/{name}/{version}"),
         }
     }
 
@@ -277,6 +296,7 @@ impl Ecosystem {
             Self::Pypi => format!("https://pypi.org/project/{name}/"),
             Self::CratesIo => format!("https://crates.io/crates/{name}"),
             Self::Go => format!("https://pkg.go.dev/{name}"),
+            Self::Jsr => format!("https://jsr.io/{name}"),
         }
     }
 }
@@ -293,6 +313,7 @@ impl std::fmt::Display for Ecosystem {
 pub struct Profile {
     pub execution: bool,
     pub maintainers: bool,
+    pub advisories: bool,
     pub repository: bool,
     pub downloads: bool,
     pub deprecation: bool,
@@ -304,6 +325,7 @@ impl Profile {
     pub const NPM: Self = Self {
         execution: true,
         maintainers: true,
+        advisories: true,
         repository: true,
         downloads: true,
         deprecation: true,
@@ -316,6 +338,7 @@ impl Profile {
     pub const PYPI: Self = Self {
         execution: true,
         maintainers: false,
+        advisories: true,
         repository: true,
         downloads: false,
         deprecation: true,
@@ -328,6 +351,7 @@ impl Profile {
     pub const CRATES: Self = Self {
         execution: false,
         maintainers: true,
+        advisories: true,
         repository: true,
         downloads: false,
         deprecation: true,
@@ -340,7 +364,21 @@ impl Profile {
     pub const GO: Self = Self {
         execution: false,
         maintainers: false,
+        advisories: true,
         repository: false,
+        downloads: false,
+        deprecation: true,
+        typosquat: true,
+        freshness: true,
+    };
+
+    /// JSR exposes no owner list, download figure, execution surface, or OSV
+    /// advisories. Repository, freshness, deprecation, and typosquats work.
+    pub const JSR: Self = Self {
+        execution: false,
+        maintainers: false,
+        advisories: false,
+        repository: true,
         downloads: false,
         deprecation: true,
         typosquat: true,
@@ -360,6 +398,9 @@ impl Profile {
         }
         if !self.downloads {
             missing.push("downloads");
+        }
+        if !self.advisories {
+            missing.push("advisories");
         }
         if !self.deprecation {
             missing.push("deprecation");
@@ -689,6 +730,27 @@ mod tests {
         assert_eq!(Ecosystem::Pypi.osv_name(), "PyPI");
         assert_eq!(Ecosystem::CratesIo.osv_name(), "crates.io");
         assert_eq!(Ecosystem::Go.osv_name(), "Go");
+    }
+
+    #[test]
+    fn parses_jsr_specs() {
+        assert_eq!(
+            PackageSpec::parse_jsr("@std/assert").unwrap(),
+            spec("@std/assert", None)
+        );
+        assert_eq!(
+            PackageSpec::parse_jsr("@std/assert@1.0.19").unwrap(),
+            spec("@std/assert", Some("1.0.19"))
+        );
+        for input in [
+            "express",
+            "@std",
+            "@/assert",
+            "@std/assert/deep",
+            "@std/assert@",
+        ] {
+            assert!(PackageSpec::parse_jsr(input).is_err(), "accepted {input:?}");
+        }
     }
 
     #[test]
