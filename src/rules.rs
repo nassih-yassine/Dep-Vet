@@ -36,31 +36,111 @@ fn regex(pattern: &'static str) -> &'static Regex {
         .or_insert_with(|| Box::leak(Box::new(Regex::new(pattern).expect("valid rule regex"))))
 }
 
-fn is_comment(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    trimmed.starts_with("//")
-        || trimmed.starts_with('#')
-        || trimmed.starts_with('*')
-        || trimmed.starts_with("/*")
-        || trimmed.starts_with("--")
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommentStyle {
+    /// `//` and `/* ... */`
+    CStyle,
+    /// `#` to end of line.
+    Hash,
 }
 
-fn first_hit(text: &str, pattern: &'static str) -> Option<(usize, String)> {
-    for (index, line) in text.lines().enumerate() {
-        if is_comment(line) {
+fn comment_style(extension: &str) -> CommentStyle {
+    match extension {
+        "py" | "sh" | "bash" | "zsh" | "rb" => CommentStyle::Hash,
+        _ => CommentStyle::CStyle,
+    }
+}
+
+/// Blank comment text while keeping newlines, so line numbers survive and code
+/// after `*/` is scanned. String literals are respected, so `https://` in a
+/// URL is not mistaken for a comment.
+fn strip_comments(text: &str, style: CommentStyle) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut block = false;
+    while let Some(character) = chars.next() {
+        if block {
+            if character == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                block = false;
+                out.push_str("  ");
+            } else if character == '\n' {
+                out.push('\n');
+            } else {
+                out.push(' ');
+            }
             continue;
         }
-        if regex(pattern).is_match(line) {
-            return Some((index + 1, line.trim().chars().take(160).collect()));
+        if let Some(open) = quote {
+            out.push(character);
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == open {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '/' if style == CommentStyle::CStyle && chars.peek() == Some(&'/') => {
+                chars.next();
+                out.push_str("  ");
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                    out.push(' ');
+                }
+            }
+            '/' if style == CommentStyle::CStyle && chars.peek() == Some(&'*') => {
+                chars.next();
+                block = true;
+                out.push_str("  ");
+            }
+            '#' if style == CommentStyle::Hash => {
+                out.push(' ');
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                    out.push(' ');
+                }
+            }
+            '"' | '\'' | '`' => {
+                quote = Some(character);
+                out.push(character);
+            }
+            _ => out.push(character),
         }
     }
-    None
+    out
 }
 
-fn any_hit(text: &str, pattern: &'static str) -> bool {
-    text.lines()
-        .filter(|line| !is_comment(line))
-        .any(|line| regex(pattern).is_match(line))
+fn first_hit(original: &str, stripped: &str, pattern: &'static str) -> Option<(usize, String)> {
+    let start = regex(pattern).find(stripped)?.start();
+    let line = stripped[..start]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1;
+    let evidence = original
+        .lines()
+        .nth(line - 1)
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(160)
+        .collect();
+    Some((line, evidence))
+}
+
+fn any_hit(stripped: &str, pattern: &'static str) -> bool {
+    regex(pattern).is_match(stripped)
 }
 
 struct Rule {
@@ -297,6 +377,7 @@ pub fn scan_with(files: &[ExtractedFile], disabled: &[String]) -> Vec<RuleFindin
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
+        let stripped = strip_comments(&file.text, comment_style(&extension));
         for rule in RULES {
             if !allowed(rule.id) {
                 continue;
@@ -307,7 +388,7 @@ pub fn scan_with(files: &[ExtractedFile], disabled: &[String]) -> Vec<RuleFindin
             if rule.id == "RS-BUILD-001" && !file.path.ends_with("build.rs") {
                 continue;
             }
-            let Some((line, evidence)) = first_hit(&file.text, rule.pattern) else {
+            let Some((line, evidence)) = first_hit(&file.text, &stripped, rule.pattern) else {
                 continue;
             };
             findings.push(RuleFinding {
@@ -330,12 +411,9 @@ pub fn scan_with(files: &[ExtractedFile], disabled: &[String]) -> Vec<RuleFindin
             "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx"
         );
         if js
-            && any_hit(
-                &file.text,
-                r#"require\(['"](https?|net)['"]\)|\bfetch\s*\("#,
-            )
-            && any_hit(&file.text, r"process\.env")
-            && let Some((line, evidence)) = first_hit(&file.text, r"process\.env")
+            && any_hit(&stripped, r#"require\(['"](https?|net)['"]\)|\bfetch\s*\("#)
+            && any_hit(&stripped, r"process\.env")
+            && let Some((line, evidence)) = first_hit(&file.text, &stripped, r"process\.env")
         {
             findings.push(RuleFinding {
                 rule: "JS-NET-001",
@@ -353,11 +431,11 @@ pub fn scan_with(files: &[ExtractedFile], disabled: &[String]) -> Vec<RuleFindin
         if allowed("PY-NET-001")
             && extension == "py"
             && any_hit(
-                &file.text,
+                &stripped,
                 r"\b(import|from)\s+requests\b|\brequests\.(get|post|put|delete|request)\s*\(|\bsocket\.socket\s*\(|urllib\.request\b|\bhttp\.client\b",
             )
-            && any_hit(&file.text, r"os\.environ")
-            && let Some((line, evidence)) = first_hit(&file.text, r"os\.environ")
+            && any_hit(&stripped, r"os\.environ")
+            && let Some((line, evidence)) = first_hit(&file.text, &stripped, r"os\.environ")
         {
             findings.push(RuleFinding {
                 rule: "PY-NET-001",
@@ -375,9 +453,9 @@ pub fn scan_with(files: &[ExtractedFile], disabled: &[String]) -> Vec<RuleFindin
 
         if allowed("GO-NET-001")
             && extension == "go"
-            && any_hit(&file.text, r#""net/http"|"net"\b"#)
-            && any_hit(&file.text, r"os\.Getenv")
-            && let Some((line, evidence)) = first_hit(&file.text, r"os\.Getenv")
+            && any_hit(&stripped, r#""net/http"|"net"\b"#)
+            && any_hit(&stripped, r"os\.Getenv")
+            && let Some((line, evidence)) = first_hit(&file.text, &stripped, r"os\.Getenv")
         {
             findings.push(RuleFinding {
                 rule: "GO-NET-001",
@@ -415,6 +493,49 @@ mod tests {
             path: path.to_string(),
             text: text.to_string(),
         }
+    }
+
+    #[test]
+    fn a_closed_block_comment_does_not_hide_the_code_after_it() {
+        let findings = scan(&[file("lib/x.js", "/**/ eval(atob(\"x\"))\n")]);
+        assert!(
+            findings.iter().any(|finding| finding.rule == "JS-OBF-001"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_call_split_across_lines_is_found() {
+        let findings = scan(&[file("lib/x.js", "eval(\n  atob(\"x\")\n)\n")]);
+        assert!(
+            findings.iter().any(|finding| finding.rule == "JS-OBF-001"),
+            "{findings:?}"
+        );
+        let findings = scan(&[file("x.py", "exec(\n  b64decode(blob)\n)\n")]);
+        assert!(
+            findings.iter().any(|finding| finding.rule == "PY-OBF-001"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn commented_out_calls_are_still_ignored() {
+        for text in [
+            "// eval(atob(\"x\"))\n",
+            "/* eval(atob(\"x\")) */\n",
+            "x = 1; // eval(atob(\"x\"))\n",
+        ] {
+            let findings = scan(&[file("lib/x.js", text)]);
+            assert!(
+                findings.iter().all(|finding| finding.rule != "JS-OBF-001"),
+                "{text}: {findings:?}"
+            );
+        }
+        let findings = scan(&[file("x.py", "# exec(b64decode(blob))\n")]);
+        assert!(
+            findings.iter().all(|finding| finding.rule != "PY-OBF-001"),
+            "{findings:?}"
+        );
     }
 
     #[test]

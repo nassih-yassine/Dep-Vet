@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 489 unit + 124 end-to-end tests
+cargo test --locked                      # 493 unit + 124 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -288,7 +288,14 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   HIGH. Every rule carries a description and at least one reference URL, and a
   test fails when either is missing. Dynamic imports are intentionally WARN:
   frameworks use them legitimately. Comments are
-  skipped, and findings sort by (file, line, rule) for reproducible output.
+  skipped with `rules::strip_comments` (C-style for JS/TS/Go/Rust/PHP, `#` for
+  Python/shell/Ruby), which tracks string literals so URLs are not comments and
+  keeps code after `*/`. Patterns run over the whole stripped file, so a call
+  split across lines matches; line numbers come from the stripped text and
+  evidence from the original line. `Extracted` keeps any file with a scannable
+  extension and decodes it lossily, so a trailing `0xFF` or NUL cannot hide
+  code; only non-source files with NUL/invalid UTF-8 become binary. Findings
+  sort by (file, line, rule) for reproducible output.
   `diff` compares two extracted releases by content: added/removed/modified
   paths, findings matched by (rule, file) because line numbers shift, and a
   `DIFF-NEW-SCRIPT-001` WARN for added shell/shebang files, and

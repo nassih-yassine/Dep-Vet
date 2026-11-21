@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Rule evasions closed.** Comment detection is now a per-language stripper
+  that keeps code after `*/` and does not mistake `https://` for a comment;
+  patterns run over whole files so calls split across lines match; and source
+  files with NUL or invalid UTF-8 bytes are lossily decoded and scanned instead
+  of being silently treated as binary.
 - **Partial scans are disclosed.** Archive limits used to skip oversize files
   and entries past the cap silently. They now record why, and `inspect`/`diff`
   report `archive-partially-scanned` (WARN when skipped paths look like source,
