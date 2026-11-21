@@ -163,6 +163,25 @@ fn parse_versions(
         })
         .filter(|url| !url.trim().is_empty());
 
+    let published_at = release
+        .created_at
+        .as_deref()
+        .and_then(date::parse_timestamp);
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = releases
+            .iter()
+            .map(|release| {
+                (
+                    release.number.as_str(),
+                    release
+                        .created_at
+                        .as_deref()
+                        .and_then(date::parse_timestamp),
+                )
+            })
+            .collect();
+        crate::registry::previous_release(&entries, &release.number, published_at)
+    };
     let latest_version = latest
         .as_ref()
         .map(|latest| latest.version.clone())
@@ -190,10 +209,7 @@ fn parse_versions(
         name: spec.name.clone(),
         version: release.number.clone(),
         first_published_at,
-        published_at: release
-            .created_at
-            .as_deref()
-            .and_then(date::parse_timestamp),
+        published_at,
         maintainers: Vec::new(),
         publisher: None,
         maintainers_known: false,
@@ -204,7 +220,11 @@ fn parse_versions(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
-        release: crate::registry::ReleaseHistory::default(),
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -303,6 +323,12 @@ mod tests {
             Some("https://github.com/rack/rack")
         );
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = fetch(VERSIONS, Some(LATEST), Some("3.0.0")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("1.16.0"));
     }
 
     #[test]

@@ -96,6 +96,28 @@ fn parse_crate(
         None => (Vec::new(), false),
     };
 
+    let published_at = release
+        .created_at
+        .as_deref()
+        .and_then(date::parse_timestamp);
+
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = response
+            .versions
+            .iter()
+            .map(|release| {
+                (
+                    release.num.as_str(),
+                    release
+                        .created_at
+                        .as_deref()
+                        .and_then(date::parse_timestamp),
+                )
+            })
+            .collect();
+        crate::registry::previous_release(&entries, &version, published_at)
+    };
+
     let deprecated = release.yanked.then(|| match &release.yank_message {
         Some(message) if !message.trim().is_empty() => {
             format!("this version is yanked: {message}")
@@ -113,10 +135,7 @@ fn parse_crate(
             .created_at
             .as_deref()
             .and_then(date::parse_timestamp),
-        published_at: release
-            .created_at
-            .as_deref()
-            .and_then(date::parse_timestamp),
+        published_at,
         maintainers,
         publisher: release.published_by.as_ref().map(|user| user.login.clone()),
         maintainers_known,
@@ -131,7 +150,11 @@ fn parse_crate(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
-        release: crate::registry::ReleaseHistory::default(),
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -238,6 +261,12 @@ mod tests {
         assert_eq!(meta.maintainers, vec!["dtolnay", "oli-obk"]);
         assert!(meta.maintainers_known);
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = fetch(SERDE, Some("1.0.229")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("1.0.1"));
     }
 
     #[test]

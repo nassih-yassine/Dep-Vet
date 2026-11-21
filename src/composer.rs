@@ -120,6 +120,20 @@ fn parse_metadata(
         .filter_map(date::parse_timestamp)
         .min();
 
+    let published_at = release.time.as_deref().and_then(date::parse_timestamp);
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = releases
+            .iter()
+            .map(|release| {
+                (
+                    release.version.as_str(),
+                    release.time.as_deref().and_then(date::parse_timestamp),
+                )
+            })
+            .collect();
+        crate::registry::previous_release(&entries, &release.version, published_at)
+    };
+
     let repository = release
         .source
         .as_ref()
@@ -148,9 +162,13 @@ fn parse_metadata(
         name: spec.name.clone(),
         version: release.version.clone(),
         latest_version: Some(latest(&releases).version.clone()),
-        release: crate::registry::ReleaseHistory::default(),
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
         first_published_at,
-        published_at: release.time.as_deref().and_then(date::parse_timestamp),
+        published_at,
         maintainers,
         // Composer records authors, not who published this version.
         publisher: None,
@@ -325,6 +343,18 @@ mod tests {
         ] } }"#;
         let meta = parse_metadata(&spec("x/y", None), body, None, "url").unwrap();
         assert_eq!(meta.version, "2.0.0");
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = parse_metadata(
+            &spec("monolog/monolog", Some("3.13.0")),
+            P2,
+            Some(&package()),
+            "url",
+        )
+        .unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("3.0.0"));
     }
 
     #[test]

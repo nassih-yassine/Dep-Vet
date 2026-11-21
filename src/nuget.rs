@@ -131,6 +131,16 @@ fn parse_versions(
     let release = registration
         .iter()
         .find(|release| release.version.eq_ignore_ascii_case(&version));
+    let published_at = release
+        .and_then(|release| release.published)
+        .filter(|epoch| *epoch > 0);
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = registration
+            .iter()
+            .map(|release| (release.version.as_str(), release.published))
+            .collect();
+        crate::registry::previous_release(&entries, &version, published_at)
+    };
     let deprecated = release
         .filter(|release| release.deprecated)
         .map(|_| "this version is deprecated or unlisted on NuGet".to_string());
@@ -139,9 +149,7 @@ fn parse_versions(
         name: spec.name.clone(),
         version,
         first_published_at,
-        published_at: release
-            .and_then(|release| release.published)
-            .filter(|epoch| *epoch > 0),
+        published_at,
         maintainers: Vec::new(),
         publisher: None,
         maintainers_known: false,
@@ -153,7 +161,11 @@ fn parse_versions(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
-        release: crate::registry::ReleaseHistory::default(),
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -251,6 +263,30 @@ mod tests {
     fn resolves_the_latest_stable_version() {
         let meta = parse_versions(&spec("newtonsoft.json", None), FLAT, &[], "url").unwrap();
         assert_eq!(meta.version, "13.0.1");
+    }
+
+    #[test]
+    fn records_the_previous_release_from_registration() {
+        let registration = vec![
+            RegVersion {
+                version: "12.0.3".to_string(),
+                published: date::parse_timestamp("2020-01-01T00:00:00Z"),
+                deprecated: false,
+            },
+            RegVersion {
+                version: "13.0.1".to_string(),
+                published: date::parse_timestamp("2024-03-01T00:00:00Z"),
+                deprecated: false,
+            },
+        ];
+        let meta = parse_versions(
+            &spec("x", Some("13.0.1")),
+            r#"{ "versions": ["12.0.3", "13.0.1"] }"#,
+            &registration,
+            "url",
+        )
+        .unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("12.0.3"));
     }
 
     #[test]

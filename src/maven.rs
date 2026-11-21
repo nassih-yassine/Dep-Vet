@@ -213,6 +213,13 @@ fn parse_search(
             .min()
     });
     let published_at = release.timestamp.map(seconds);
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = docs
+            .iter()
+            .map(|doc| (doc.v.as_str(), doc.timestamp.map(seconds)))
+            .collect();
+        crate::registry::previous_release(&entries, &release.v, published_at)
+    };
 
     Ok(PackageMeta {
         name: spec.name.clone(),
@@ -229,7 +236,11 @@ fn parse_search(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
-        release: crate::registry::ReleaseHistory::default(),
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -449,6 +460,12 @@ mod tests {
         for version in ["1.0.0-M1", "1.0.0-rc1", "1.0.0-SNAPSHOT", "2.0-beta"] {
             assert!(is_prerelease(version), "{version}");
         }
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = fetch(SEARCH, Some("2.0.16")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("1.7.36"));
     }
 
     #[test]

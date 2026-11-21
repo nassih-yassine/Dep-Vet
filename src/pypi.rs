@@ -120,6 +120,15 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         .or_else(|| project.info.home_page.clone())
         .filter(|url| !url.trim().is_empty());
 
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = project
+            .releases
+            .iter()
+            .map(|(version, files)| (version.as_str(), files.iter().filter_map(file_time).min()))
+            .collect();
+        crate::registry::previous_release(&entries, &version, published_at)
+    };
+
     let deprecated = if all_yanked {
         Some(match yanked_reason {
             Some(reason) => format!("this release is yanked: {reason}"),
@@ -152,7 +161,11 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
-        release: crate::registry::ReleaseHistory::default(),
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -226,14 +239,14 @@ mod tests {
             }
         },
         "urls": [
-            { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00" },
-            { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00" }
+            { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00Z" },
+            { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00Z" }
         ],
         "releases": {
-            "2.30.0": [{ "packagetype": "sdist", "upload_time": "2023-05-01T00:00:00" }],
+            "2.30.0": [{ "packagetype": "sdist", "upload_time": "2023-05-01T00:00:00Z" }],
             "2.31.0": [
-                { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00" },
-                { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00" }
+                { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00Z" },
+                { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00Z" }
             ]
         }
     }"#;
@@ -246,6 +259,12 @@ mod tests {
         assert!(!meta.build_from_source, "a wheel exists");
         assert!(meta.maintainers.is_empty());
         assert_eq!(meta.publisher, None);
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = fetch(WHEEL_AND_SDIST, Some("2.31.0")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("2.30.0"));
     }
 
     #[test]
@@ -272,11 +291,11 @@ mod tests {
         let meta = fetch(WHEEL_AND_SDIST, None).unwrap();
         assert_eq!(
             meta.first_published_at,
-            date::parse_timestamp("2023-05-01T00:00:00")
+            date::parse_timestamp("2023-05-01T00:00:00Z")
         );
         assert_eq!(
             meta.published_at,
-            date::parse_timestamp("2023-05-22T12:00:00")
+            date::parse_timestamp("2023-05-22T12:00:00Z")
         );
     }
 

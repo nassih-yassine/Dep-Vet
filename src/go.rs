@@ -148,6 +148,27 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         })
         .map(|release| release.version_key.version.clone());
 
+    let published_at = release
+        .published_at
+        .as_deref()
+        .and_then(date::parse_timestamp);
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = response
+            .versions
+            .iter()
+            .map(|release| {
+                (
+                    release.version_key.version.as_str(),
+                    release
+                        .published_at
+                        .as_deref()
+                        .and_then(date::parse_timestamp),
+                )
+            })
+            .collect();
+        crate::registry::previous_release(&entries, &release.version_key.version, published_at)
+    };
+
     let deprecated = release
         .is_deprecated
         .then(|| match release.deprecated_reason.trim() {
@@ -159,10 +180,7 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         name: response.package_key.name,
         version: release.version_key.version.clone(),
         first_published_at,
-        published_at: release
-            .published_at
-            .as_deref()
-            .and_then(date::parse_timestamp),
+        published_at,
         maintainers: Vec::new(),
         publisher: None,
         maintainers_known: false,
@@ -173,7 +191,11 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
-        release: crate::registry::ReleaseHistory::default(),
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -265,6 +287,12 @@ mod tests {
         }"#;
         let meta = fetch(body, Some("v1.9.0")).unwrap();
         assert_eq!(meta.latest_version.as_deref(), Some("v1.9.0"));
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = fetch(GIN, Some("v1.9.1")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("v1.8.0"));
     }
 
     #[test]

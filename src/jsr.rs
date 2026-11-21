@@ -118,6 +118,26 @@ fn parse_package(
         .as_ref()
         .and_then(|info| info.github_repository.as_ref())
         .map(|repo| format!("https://github.com/{}/{}", repo.owner, repo.name));
+    let published_at = release
+        .created_at
+        .as_deref()
+        .and_then(date::parse_timestamp);
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = meta
+            .versions
+            .iter()
+            .map(|(version, release)| {
+                (
+                    version.as_str(),
+                    release
+                        .created_at
+                        .as_deref()
+                        .and_then(date::parse_timestamp),
+                )
+            })
+            .collect();
+        crate::registry::previous_release(&entries, &version, published_at)
+    };
     let latest_version = meta.latest.clone();
 
     let deprecated = info
@@ -129,10 +149,7 @@ fn parse_package(
         name: spec.name.clone(),
         version,
         first_published_at,
-        published_at: release
-            .created_at
-            .as_deref()
-            .and_then(date::parse_timestamp),
+        published_at,
         maintainers: Vec::new(),
         publisher: None,
         maintainers_known: false,
@@ -143,7 +160,11 @@ fn parse_package(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
-        release: crate::registry::ReleaseHistory::default(),
+        release: crate::registry::ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..crate::registry::ReleaseHistory::default()
+        },
     })
 }
 
@@ -229,6 +250,12 @@ mod tests {
             Some("https://github.com/denoland/std")
         );
         assert_eq!(meta.deprecated, None);
+    }
+
+    #[test]
+    fn records_the_previous_release() {
+        let meta = fetch(META, None, Some("1.0.19")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("0.1.0"));
     }
 
     #[test]

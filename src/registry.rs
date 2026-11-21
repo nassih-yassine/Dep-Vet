@@ -169,6 +169,24 @@ impl RegistryClient {
     }
 }
 
+/// The most recently published version strictly older than the audited one.
+/// Timestamps decide, never list order: registries do not promise ordering, and
+/// a backport can be published after a major.
+pub fn previous_release(
+    versions: &[(&str, Option<i64>)],
+    current_version: &str,
+    current_time: Option<i64>,
+) -> Option<(String, i64)> {
+    let current = current_time?;
+    versions
+        .iter()
+        .filter(|(version, _)| *version != current_version)
+        .filter_map(|(version, time)| time.map(|time| (*version, time)))
+        .filter(|(_, time)| *time < current)
+        .max_by_key(|(_, time)| *time)
+        .map(|(version, time)| (version.to_string(), time))
+}
+
 /// Scoped names travel as one path segment: `@scope%2Fname`.
 fn encode_name(name: &str) -> String {
     name.replace('/', "%2F")
@@ -310,6 +328,15 @@ fn parse_packument(
         .get(&version)
         .and_then(|raw| date::parse_timestamp(raw));
     let latest_version = packument.dist_tags.get("latest").cloned();
+    let previous = {
+        let entries: Vec<(&str, Option<i64>)> = packument
+            .time
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "created" | "modified"))
+            .map(|(key, raw)| (key.as_str(), date::parse_timestamp(raw)))
+            .collect();
+        previous_release(&entries, &version, published_at)
+    };
 
     Ok(PackageMeta {
         name: packument.name.unwrap_or_else(|| spec.name.clone()),
@@ -333,7 +360,11 @@ fn parse_packument(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
-        release: crate::registry::ReleaseHistory::default(),
+        release: ReleaseHistory {
+            previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
+            previous_published_at: previous.map(|(_, time)| time),
+            ..ReleaseHistory::default()
+        },
     })
 }
 
@@ -459,6 +490,34 @@ mod tests {
             "last-week/chalk,@types%2Fnode"
         );
         assert_eq!(MAX_DOWNLOAD_NAMES, 128);
+    }
+
+    #[test]
+    fn the_previous_release_is_the_nearest_older_publish() {
+        let versions = [
+            ("1.0.0", Some(100)),
+            ("3.0.0", Some(300)),
+            ("2.0.0", Some(200)),
+        ];
+        assert_eq!(
+            previous_release(&versions, "3.0.0", Some(300)),
+            Some(("2.0.0".to_string(), 200))
+        );
+        assert_eq!(previous_release(&versions, "1.0.0", Some(100)), None);
+        assert_eq!(previous_release(&versions, "2.0.0", None), None);
+    }
+
+    #[test]
+    fn the_previous_release_skips_the_audited_entry() {
+        let versions = [("1.0.0", Some(100)), ("1.0.0", Some(100))];
+        assert_eq!(previous_release(&versions, "1.0.0", Some(100)), None);
+    }
+
+    #[test]
+    fn records_the_previous_release_by_timestamp() {
+        let meta = fetch(PACKUMENT, Some("1.1.0-beta.1")).unwrap();
+        assert_eq!(meta.release.previous_version.as_deref(), Some("1.0.0"));
+        assert!(meta.release.previous_published_at.is_some());
     }
 
     #[test]
