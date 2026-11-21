@@ -22,6 +22,7 @@ use dep_vet::report::{
     render_audit_human, render_audit_json, render_human, render_json, render_lock_human,
     render_lock_json,
 };
+use dep_vet::rubygems::{GemClient, GemError};
 use dep_vet::signals;
 
 /// Packages audited at once. Each one can fan out to a few OSV detail
@@ -76,6 +77,13 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
             let mut report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            allowlist.apply(&mut report);
+            emit_package(cli, *json, &report)
+        }
+
+        Command::Gem { package, json } => {
+            let spec = PackageSpec::parse_gem(package)?;
+            let mut report = auditor.audit_gem(&spec, now_seconds())?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
@@ -214,6 +222,7 @@ struct Auditor {
     crates: CratesClient,
     go: GoClient,
     jsr: JsrClient,
+    gems: GemClient,
     osv: OsvClient,
 }
 
@@ -225,6 +234,7 @@ impl Auditor {
             crates: CratesClient::from_env(Arc::clone(http)),
             go: GoClient::from_env(Arc::clone(http)),
             jsr: JsrClient::from_env(Arc::clone(http)),
+            gems: GemClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
         }
     }
@@ -250,6 +260,23 @@ impl Auditor {
             advisories.as_ref(),
             local,
             Profile::NPM,
+            now,
+        ))
+    }
+
+    fn audit_gem(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, GemError> {
+        let meta = self.gems.fetch(spec)?;
+        let advisories = self
+            .osv
+            .query(Ecosystem::RubyGems, &meta.name, &meta.version)
+            .ok();
+        Ok(signals::report(
+            meta,
+            Ecosystem::RubyGems,
+            None,
+            advisories.as_ref(),
+            &[],
+            Profile::RUBYGEMS,
             now,
         ))
     }
@@ -377,6 +404,7 @@ fn spec_for(
         Ecosystem::CratesIo => PackageSpec::parse_crates(&format!("{name}@{version}")),
         Ecosystem::Go => PackageSpec::parse_go(&format!("{name}@{version}")),
         Ecosystem::Jsr => PackageSpec::parse_jsr(&format!("{name}@{version}")),
+        Ecosystem::RubyGems => PackageSpec::parse_gem(&format!("{name}@{version}")),
     }
 }
 
@@ -420,6 +448,9 @@ fn audit_packages(
                                 }
                                 Ecosystem::Jsr => {
                                     auditor.audit_jsr(&spec, now).map_err(|e| e.to_string())
+                                }
+                                Ecosystem::RubyGems => {
+                                    auditor.audit_gem(&spec, now).map_err(|e| e.to_string())
                                 }
                             };
                             audited.map_err(|message| LockFetchError {

@@ -61,6 +61,7 @@ impl MockRegistry {
             .env("DEPVET_PYPI_BASE", &self.base)
             .env("DEPVET_CRATES_BASE", &self.base)
             .env("DEPVET_JSR_BASE", &self.base)
+            .env("DEPVET_RUBYGEMS_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("NO_COLOR", "1");
@@ -2351,4 +2352,92 @@ fn audit_reads_berry_lock_without_calling_metadata_a_package() {
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["packages"].as_array().unwrap().len(), 1);
     assert_eq!(value["errors"].as_array().unwrap().len(), 0);
+}
+
+const GEM_VERSIONS: &str = r#"[
+    { "number": "3.2.9", "created_at": "2026-11-20T23:14:58.183Z", "platform": "ruby",
+      "metadata": { "source_code_uri": "https://github.com/rack/rack" } },
+    { "number": "3.0.0", "created_at": "2024-01-01T00:00:00.000Z", "platform": "ruby" }
+]"#;
+
+const GEM_LATEST: &str = r#"{
+    "version": "3.2.9",
+    "source_code_uri": "https://github.com/rack/rack",
+    "yanked": false
+}"#;
+
+fn gem_registry(name: &str, versions: &str, latest: &str) -> MockRegistry {
+    let mut routes = HashMap::new();
+    routes.insert(
+        format!("/api/v1/versions/{name}.json"),
+        (200, versions.to_string()),
+    );
+    routes.insert(
+        format!("/api/v1/gems/{name}.json"),
+        (200, latest.to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    MockRegistry::start(routes)
+}
+
+#[test]
+fn gem_reports_metadata_and_missing_signals() {
+    let registry = gem_registry("rack", GEM_VERSIONS, GEM_LATEST);
+    let output = registry
+        .command()
+        .args(["gem", "rack", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["ecosystem"], "rubygems");
+    assert_eq!(value["version"], "3.2.9");
+    assert_eq!(value["repository"], "https://github.com/rack/rack");
+    let not_checked = value["not_checked"].as_array().unwrap();
+    for signal in ["execution", "maintainers", "downloads"] {
+        assert!(not_checked.iter().any(|entry| entry == signal), "{signal}");
+    }
+}
+
+#[test]
+fn audit_reads_gemfile_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("Gemfile.lock"),
+        "GEM\n  remote: https://rubygems.org/\n  specs:\n    rack (3.0.0)\n\nPATH\n  remote: .\n  specs:\n    local (0.1.0)\n",
+    )
+    .unwrap();
+
+    let registry = gem_registry("rack", GEM_VERSIONS, GEM_LATEST);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "Gemfile.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(value["packages"][0]["name"], "rack");
+    assert_eq!(value["errors"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn unknown_gem_is_a_tool_error() {
+    let registry = gem_registry("rack", GEM_VERSIONS, GEM_LATEST);
+    registry
+        .command()
+        .args(["gem", "ghost-gem"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("was not found on RubyGems"));
 }

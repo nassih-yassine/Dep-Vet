@@ -292,6 +292,64 @@ pub const POPULAR_JSR: &[&str] = &[
     "@std/yaml",
 ];
 
+/// Provisional RubyGems seed.
+pub const POPULAR_RUBYGEMS: &[&str] = &[
+    "actioncable",
+    "actionpack",
+    "activemodel",
+    "activerecord",
+    "activesupport",
+    "aws-sdk-s3",
+    "bcrypt",
+    "bundler",
+    "capybara",
+    "carrierwave",
+    "cucumber",
+    "devise",
+    "dotenv",
+    "faraday",
+    "ffi",
+    "google-cloud-storage",
+    "httparty",
+    "jbuilder",
+    "jquery-rails",
+    "json",
+    "kaminari",
+    "listen",
+    "mini_magick",
+    "mysql2",
+    "net-http",
+    "nokogiri",
+    "omniauth",
+    "pg",
+    "pry",
+    "puma",
+    "rack",
+    "rack-test",
+    "rails",
+    "railties",
+    "rake",
+    "redis",
+    "resque",
+    "rspec",
+    "rspec-core",
+    "rspec-rails",
+    "rubocop",
+    "sass-rails",
+    "selenium-webdriver",
+    "sidekiq",
+    "sinatra",
+    "sprockets",
+    "sqlite3",
+    "thor",
+    "tilt",
+    "turbo-rails",
+    "tzinfo",
+    "uglifier",
+    "webmock",
+    "zeitwerk",
+];
+
 /// A popular name that `name` is suspiciously close to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Suspect<'a> {
@@ -420,6 +478,17 @@ mod tests {
         );
         for name in ["requests", "numpy", "django", "pydantic"] {
             assert!(POPULAR_PYPI.contains(&name), "missing {name}");
+        }
+    }
+
+    #[test]
+    fn rubygems_seed_is_clean() {
+        let mut sorted = POPULAR_RUBYGEMS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), POPULAR_RUBYGEMS.len(), "duplicate gem names");
+        for name in ["rails", "rack", "rake", "rspec"] {
+            assert!(POPULAR_RUBYGEMS.contains(&name), "missing {name}");
         }
     }
 

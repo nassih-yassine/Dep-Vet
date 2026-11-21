@@ -180,6 +180,7 @@ pub fn assess(
         Ecosystem::CratesIo => typosquat::POPULAR_CRATES,
         Ecosystem::Go => typosquat::POPULAR_GO,
         Ecosystem::Jsr => typosquat::POPULAR_JSR,
+        Ecosystem::RubyGems => typosquat::POPULAR_RUBYGEMS,
     };
     let suspect = if profile.typosquat {
         typosquat::closest(&meta.name, seed, local)

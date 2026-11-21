@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 265 unit + 83 end-to-end tests
+cargo test --locked                      # 276 unit + 86 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -79,6 +79,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |
 | `src/go.rs` | deps.dev Go module index, versions, publish times, deprecation |
 | `src/jsr.rs` | JSR meta/package APIs, repository, archived flag |
+| `src/rubygems.rs` | RubyGems versions, timestamps, source URL, yank flag |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -119,6 +120,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   they show as `not checked`. The `PackageSource` trait is still deferred: two
   sources share only `PackageMeta` and the auditor, which is not yet enough
   duplication to justify it.
+- **RubyGems hides yanked versions.** `/api/v1/versions/{gem}.json` omits them,
+  so an exact yanked version reports VersionNotFound, not "deprecated". Gemfile
+  versions may carry a platform suffix (`1.16.0-x86_64-linux`); `Release::matches`
+  resolves it to the registry number. Only the `GEM` section is auditable;
+  `PATH`/`GIT` are local sources.
 - **JSR has no advisory source.** `Profile::JSR` sets `advisories: false`; the
   report emits an INFO "advisory coverage unavailable" instead of querying OSV.
   No owners, downloads, or execution either. `deno.lock` keeps npm and JSR
@@ -284,5 +290,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Other ecosystems and remaining lockfile formats. Roadmap only: do not describe
-these as existing in code, README, or help text.
+Other ecosystems (Maven, NuGet) and remaining lockfile formats. Roadmap only:
+do not describe these as existing in code, README, or help text.
