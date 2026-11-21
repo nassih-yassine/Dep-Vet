@@ -15,7 +15,7 @@ use predicates::prelude::*;
 
 struct MockRegistry {
     base: String,
-    requests: Arc<Mutex<Vec<String>>>,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
 impl MockRegistry {
@@ -28,10 +28,13 @@ impl MockRegistry {
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                let Some(path) = read_path(&mut stream) else {
+                let Some((path, body)) = read_request(&mut stream) else {
                     continue;
                 };
-                recorded.lock().unwrap().push(path.clone());
+                recorded.lock().unwrap().push(RecordedRequest {
+                    path: path.clone(),
+                    body,
+                });
                 let (status, body) = routes
                     .get(&path)
                     .cloned()
@@ -74,30 +77,69 @@ impl MockRegistry {
     }
 
     fn requests(&self) -> Vec<String> {
-        self.requests.lock().unwrap().clone()
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request.path.clone())
+            .collect()
+    }
+
+    fn request_bodies(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request.body.clone())
+            .collect()
     }
 }
 
-fn read_path(stream: &mut TcpStream) -> Option<String> {
+#[derive(Clone)]
+struct RecordedRequest {
+    path: String,
+    body: String,
+}
+
+fn read_request(stream: &mut TcpStream) -> Option<(String, String)> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 1024];
-    loop {
+    let header_end = loop {
         let read = stream.read(&mut chunk).ok()?;
         if read == 0 {
             return None;
         }
         buffer.extend_from_slice(&chunk[..read]);
-        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
+        if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
         }
         if buffer.len() > 64 * 1024 {
             return None;
         }
-    }
-    let text = String::from_utf8_lossy(&buffer);
-    let first_line = text.lines().next()?;
+    };
+    let head = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+    let first_line = head.lines().next()?;
     let path = first_line.split_whitespace().nth(1)?.to_string();
-    Some(path)
+    let length = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    while buffer.len() < header_end + length {
+        let read = stream.read(&mut chunk).ok()?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    }
+    let body =
+        String::from_utf8_lossy(&buffer[header_end..(header_end + length).min(buffer.len())])
+            .to_string();
+    Some((path, body))
 }
 
 fn days_ago(days: i64) -> String {
@@ -1563,6 +1605,106 @@ fn audit_checks_every_package_in_the_lockfile() {
         .collect();
     assert_eq!(names, vec!["clean-pkg", "evil-pkg"]);
     assert_eq!(value["exit_code"], 2);
+}
+
+#[test]
+fn gemfile_platform_suffix_is_stripped_before_osv() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("Gemfile.lock"),
+        "GEM\n  remote: https://rubygems.org/\n  specs:\n    nokogiri (1.16.0-x86_64-linux)\n",
+    )
+    .unwrap();
+
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/api/v1/versions/nokogiri.json".to_string(),
+        (
+            200,
+            r#"[{ "number": "1.16.0", "created_at": "2024-01-01T00:00:00Z", "platform": "x86_64-linux" }]"#
+                .to_string(),
+        ),
+    );
+    routes.insert(
+        "/api/v1/gems/nokogiri.json".to_string(),
+        (
+            200,
+            r#"{ "version": "1.16.0", "source_code_uri": "https://github.com/sparklemotion/nokogiri", "yanked": false }"#
+                .to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, HIGH_ADVISORY.to_string()),
+    );
+    routes.insert(
+        "/v1/vulns/GHSA-test-0001".to_string(),
+        (200, HIGH_ADVISORY_DETAIL.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "Gemfile.lock"])
+        .assert()
+        .code(2);
+
+    let bodies = registry.request_bodies().join("\n").replace(' ', "");
+    assert!(bodies.contains("\"version\":\"1.16.0\""), "{bodies}");
+    assert!(!bodies.contains("x86_64"), "{bodies}");
+}
+
+#[test]
+fn large_trees_are_chunked() {
+    let names: Vec<String> = (1..=501).map(|index| format!("p{index:03}")).collect();
+    let entries: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "1.0.0")).collect();
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&entries));
+
+    let mut routes = HashMap::new();
+    let results = "{}".repeat(0); // placeholder, replaced below
+    let _ = results;
+    let body = format!(
+        "{{\"results\":[{}]}}",
+        std::iter::repeat_n("{}", names.len())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    routes.insert("/v1/querybatch".to_string(), (200, body));
+    for chunk in names.chunks(128) {
+        let joined = chunk.join(",");
+        routes.insert(
+            format!("/downloads/last-week/{joined}"),
+            (200, "{}".to_string()),
+        );
+    }
+    let registry = MockRegistry::start(routes);
+
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json"])
+        .assert()
+        .code(3);
+
+    let requests = registry.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.contains("/v1/querybatch"))
+            .count(),
+        2,
+        "501 queries must take two batches"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.contains("last-week"))
+            .count(),
+        4,
+        "501 names must take four download batches"
+    );
 }
 
 #[test]

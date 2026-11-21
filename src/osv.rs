@@ -106,60 +106,63 @@ impl OsvClient {
         name: &str,
         version: &str,
     ) -> Result<AdvisoryList, OsvError> {
-        let mut lists = self.query_batch(&[OsvQuery {
+        let queries = [OsvQuery {
             ecosystem,
             name: name.to_string(),
             version: version.to_string(),
-        }])?;
-        lists
+        }];
+        self.query_batch(&queries)
             .pop()
-            .ok_or_else(|| OsvError::Decode("empty batch".to_string()))
+            .flatten()
+            .ok_or_else(|| OsvError::Decode("advisory batch unavailable".to_string()))
     }
 
     /// Ask about many packages at once. Results stay in input order; each
     /// advisory body is fetched once and filtered per package, so fixed
-    /// versions remain package-specific.
-    pub fn query_batch(&self, queries: &[OsvQuery]) -> Result<Vec<AdvisoryList>, OsvError> {
-        let url = format!("{}/v1/querybatch", self.base.trim_end_matches('/'));
+    /// versions remain package-specific. A failed chunk yields `None` for its
+    /// packages only; later chunks still run.
+    pub fn query_batch(&self, queries: &[OsvQuery]) -> Vec<Option<AdvisoryList>> {
         let mut lists = Vec::with_capacity(queries.len());
-
         for chunk in queries.chunks(MAX_QUERIES_PER_BATCH) {
-            let body = serde_json::json!({
-                "queries": chunk
-                    .iter()
-                    .map(|query| serde_json::json!({
-                        "package": {
-                            "name": query.name,
-                            "ecosystem": query.ecosystem.osv_name()
-                        },
-                        "version": query.version
-                    }))
-                    .collect::<Vec<_>>()
-            });
-            let response = self.http.post_json(&url, &body)?;
-            // Cap before hydrating: the cap exists to bound detail requests.
-            let capped: Vec<(Vec<String>, usize)> = parse_batch_ids(&response)?
-                .into_iter()
-                .map(take_capped)
-                .collect();
+            match self.fetch_chunk(chunk) {
+                Ok(chunk_lists) => lists.extend(chunk_lists.into_iter().map(Some)),
+                Err(_) => lists.extend(std::iter::repeat_n(None, chunk.len())),
+            }
+        }
+        lists
+    }
 
-            let mut unique: Vec<String> = Vec::new();
-            for (ids, _) in &capped {
-                for id in ids {
-                    if !unique.contains(id) {
-                        unique.push(id.clone());
-                    }
+    fn fetch_chunk(&self, chunk: &[OsvQuery]) -> Result<Vec<AdvisoryList>, OsvError> {
+        let url = format!("{}/v1/querybatch", self.base.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "queries": chunk
+                .iter()
+                .map(|query| serde_json::json!({
+                    "package": {
+                        "name": query.name,
+                        "ecosystem": query.ecosystem.osv_name()
+                    },
+                    "version": query.version
+                }))
+                .collect::<Vec<_>>()
+        });
+        let response = self.http.post_json(&url, &body)?;
+        // Cap before hydrating: the cap exists to bound detail requests.
+        let capped: Vec<(Vec<String>, usize)> = parse_batch_ids(&response)?
+            .into_iter()
+            .map(take_capped)
+            .collect();
+
+        let mut unique: Vec<String> = Vec::new();
+        for (ids, _) in &capped {
+            for id in ids {
+                if !unique.contains(id) {
+                    unique.push(id.clone());
                 }
             }
-            let bodies = self.fetch_bodies(&unique);
-            let mut chunk_lists = lists_from(chunk, capped, &bodies);
-            // A server that returns fewer results than queries must not shift
-            // the alignment: missing answers are "no advisories".
-            chunk_lists.resize(chunk.len(), AdvisoryList::default());
-            lists.extend(chunk_lists);
         }
-
-        Ok(lists)
+        let bodies = self.fetch_bodies(&unique);
+        check_len(lists_from(chunk, capped, &bodies), chunk.len())
     }
 
     /// Raw advisory bodies keyed by id. A failed fetch is `None`, which becomes
@@ -183,6 +186,19 @@ impl OsvClient {
             bodies.extend(fetched);
         }
         bodies
+    }
+}
+
+/// A server that answers a different number of queries than it was given has
+/// broken the batch contract; the whole chunk is then unknown, never clean.
+fn check_len(lists: Vec<AdvisoryList>, expected: usize) -> Result<Vec<AdvisoryList>, OsvError> {
+    if lists.len() == expected {
+        Ok(lists)
+    } else {
+        Err(OsvError::Decode(format!(
+            "batch returned {} answers for {expected} queries",
+            lists.len()
+        )))
     }
 }
 
@@ -231,22 +247,6 @@ fn lists_from(
             }
         })
         .collect()
-}
-
-#[cfg(test)]
-fn parse_advisory_ids(body: &str) -> Result<Vec<String>, OsvError> {
-    let response: BatchResponse =
-        serde_json::from_str(body).map_err(|error| OsvError::Decode(error.to_string()))?;
-
-    let mut ids: Vec<String> = Vec::new();
-    for result in response.results {
-        for vuln in result.vulns {
-            if !ids.contains(&vuln.id) {
-                ids.push(vuln.id);
-            }
-        }
-    }
-    Ok(ids)
 }
 
 fn advisory_batches(ids: &[String]) -> impl Iterator<Item = &[String]> {
@@ -503,27 +503,6 @@ mod tests {
     }
 
     #[test]
-    fn fewer_results_than_queries_stay_aligned() {
-        let ids: Vec<(Vec<String>, usize)> = vec![(vec!["A".to_string()], 0)];
-        let queries = vec![
-            OsvQuery {
-                ecosystem: Ecosystem::Npm,
-                name: "a".to_string(),
-                version: "1.0.0".to_string(),
-            },
-            OsvQuery {
-                ecosystem: Ecosystem::Npm,
-                name: "b".to_string(),
-                version: "1.0.0".to_string(),
-            },
-        ];
-        let mut lists = lists_from(&queries, ids, &std::collections::HashMap::new());
-        lists.resize(queries.len(), AdvisoryList::default());
-        assert_eq!(lists.len(), 2);
-        assert!(lists[1].advisories.is_empty());
-    }
-
-    #[test]
     fn batch_ids_stay_aligned_with_empty_results() {
         let body = r#"{"results":[{"vulns":[{"id":"A"}]},{},{"vulns":[{"id":"B"},{"id":"B"}]}]}"#;
         assert_eq!(
@@ -577,33 +556,36 @@ mod tests {
     #[test]
     fn extracts_ids_in_order() {
         assert_eq!(
-            parse_advisory_ids(&batch(&["A", "B"])).unwrap(),
-            vec!["A", "B"]
+            parse_batch_ids(&batch(&["A", "B"])).unwrap(),
+            vec![vec!["A".to_string(), "B".to_string()]]
         );
     }
 
     #[test]
     fn duplicate_ids_are_collapsed() {
-        assert_eq!(parse_advisory_ids(&batch(&["A", "A"])).unwrap(), vec!["A"]);
+        assert_eq!(
+            parse_batch_ids(&batch(&["A", "A"])).unwrap(),
+            vec![vec!["A".to_string()]]
+        );
     }
 
     #[test]
     fn empty_results_mean_no_advisories() {
         assert_eq!(
-            parse_advisory_ids(r#"{"results":[]}"#).unwrap(),
-            Vec::<String>::new()
+            parse_batch_ids(r#"{"results":[]}"#).unwrap(),
+            Vec::<Vec<String>>::new()
         );
         assert_eq!(
-            parse_advisory_ids(r#"{"results":[{}]}"#).unwrap(),
-            Vec::<String>::new()
+            parse_batch_ids(r#"{"results":[{}]}"#).unwrap(),
+            vec![Vec::<String>::new()]
         );
-        assert_eq!(parse_advisory_ids("{}").unwrap(), Vec::<String>::new());
+        assert_eq!(parse_batch_ids("{}").unwrap(), Vec::<Vec<String>>::new());
     }
 
     #[test]
     fn malformed_json_is_a_decode_error() {
         assert!(matches!(
-            parse_advisory_ids("not json"),
+            parse_batch_ids("not json"),
             Err(OsvError::Decode(_))
         ));
     }
@@ -611,7 +593,13 @@ mod tests {
     #[test]
     fn missing_id_is_a_decode_error() {
         let body = r#"{"results":[{"vulns":[{"summary":"no id"}]}]}"#;
-        assert!(matches!(parse_advisory_ids(body), Err(OsvError::Decode(_))));
+        assert!(matches!(parse_batch_ids(body), Err(OsvError::Decode(_))));
+    }
+
+    #[test]
+    fn a_short_answer_for_a_batch_is_rejected() {
+        assert!(check_len(Vec::new(), 2).is_err());
+        assert!(check_len(vec![AdvisoryList::default(); 2], 2).is_ok());
     }
 
     const VULN_MULTI: &str = r#"{
