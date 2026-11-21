@@ -151,6 +151,13 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   the logo because `concat!` only takes literals; a test keeps it in sync with
   `LOGO_ASCII`. The banner prints only on a terminal, never in JSON or pipes.
 
+## Branch protection
+
+`main` requires the CI `test` check and blocks force pushes and deletion.
+Repository admins bypass these rules, because this repo pushes branches and
+merges locally instead of using PRs. Do not force push; the real gate is the
+pre-push hook plus CI on every push.
+
 ## Releases
 
 - `cargo-dist` owns `.github/workflows/release.yml`, `dist-workspace.toml`, and
