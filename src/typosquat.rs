@@ -158,6 +158,7 @@ pub const POPULAR_CRATES: &[&str] = &[
     "image",
     "indexmap",
     "indicatif",
+    "inotify",
     "itertools",
     "lazy_static",
     "libc",
@@ -184,10 +185,12 @@ pub const POPULAR_CRATES: &[&str] = &[
     "regex",
     "reqwest",
     "ring",
+    "rustix",
     "rustls",
     "serde",
     "serde_json",
     "sha2",
+    "shlex",
     "smallvec",
     "sqlx",
     "syn",
@@ -388,7 +391,9 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), POPULAR_CRATES.len(), "duplicate crate names");
-        for name in ["serde", "tokio", "clap", "rand"] {
+        for name in [
+            "serde", "tokio", "clap", "rand", "inotify", "rustix", "shlex",
+        ] {
             assert!(POPULAR_CRATES.contains(&name), "missing {name}");
         }
     }
@@ -433,6 +438,11 @@ mod tests {
         ] {
             assert!(popular.contains(&name), "missing popular name {name}");
         }
+    }
+
+    #[test]
+    fn inotify_is_not_a_typo_of_notify() {
+        assert_eq!(closest("inotify", POPULAR_CRATES, &[]), None);
     }
 
     #[test]

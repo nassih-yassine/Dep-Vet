@@ -32,7 +32,7 @@ These override convenience. Do not shortcut them.
 ## Commands
 
 ```sh
-cargo test --locked                      # 248 unit + 81 end-to-end tests
+cargo test --locked                      # 251 unit + 81 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -112,6 +112,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **crates.io execution is not checkable.** The API has no file list, so
   `build.rs` cannot be detected; `Profile::CRATES` disables execution and the
   report says `not checked`. Do not infer build scripts from metadata.
+- **crates.io publisher mismatches are INFO, not WARN.** Owner lists contain
+  users, not GitHub org members, so crates published by org teams look
+  mismatched. Keep this severity per ecosystem; do not "fix" it back to WARN.
 - **crates.io owners can fail.** A missing or unreadable owner list sets
   `maintainers_known = false`, which becomes an INFO "maintainer list
   unavailable" finding. Never treat it as agreement.
