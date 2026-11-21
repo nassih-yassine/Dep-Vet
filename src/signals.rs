@@ -132,6 +132,25 @@ fn advisory_coverage_missing(ecosystem: Ecosystem) -> Finding {
     }
 }
 
+/// OSV's Maven data is built from Maven Central. A Google Maven artifact is
+/// not indexed there, so a clean result may be missing advisories.
+pub fn advisory_coverage_partial() -> Finding {
+    Finding {
+        id: "advisory-coverage-partial",
+        severity: Severity::Info,
+        title: "advisory coverage may be incomplete".to_string(),
+        detail: "this package comes from Google Maven, which OSV does not index; \
+                 advisories filed only against Google Maven may be missing"
+            .to_string(),
+        allowed: false,
+        evidence: vec![Evidence {
+            label: "OSV ecosystems".to_string(),
+            value: "https://osv.dev/#use".to_string(),
+            url: Some("https://osv.dev/#use".to_string()),
+        }],
+    }
+}
+
 /// The per-run cap dropped advisories; the report must not look complete.
 pub fn advisories_hidden(hidden: usize) -> Finding {
     Finding {

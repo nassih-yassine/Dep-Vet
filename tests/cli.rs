@@ -2941,4 +2941,13 @@ fn maven_reads_androidx_from_google_maven() {
     }
     // Google metadata has no publish times.
     assert!(not_checked.iter().any(|entry| entry == "freshness"));
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["title"] == "advisory coverage may be incomplete"),
+        "missing Google Maven coverage note: {}",
+        value["findings"]
+    );
 }
