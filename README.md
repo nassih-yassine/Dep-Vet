@@ -257,7 +257,8 @@ did.
 1. `dep-vet lock <lockfile>`: diff new dependencies against a base ref.
 2. GitHub Action wrapping `lock` with a sticky PR comment.
 3. Popular-name list built from download counts instead of a seed.
-4. PyPI and crates.io.
+4. PyPI, crates.io, and Go — see
+   [`docs/superpowers/specs/2026-11-21-multi-ecosystem-design.md`](docs/superpowers/specs/2026-11-21-multi-ecosystem-design.md).
 5. Advisory lookups for the whole installed tree, not one package.
 
 ## License
