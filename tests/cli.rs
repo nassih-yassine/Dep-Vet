@@ -958,3 +958,45 @@ fn lock_audits_the_real_package_behind_an_alias() {
         registry.requests()
     );
 }
+
+#[test]
+fn advisory_details_are_parallel_but_keep_batch_order() {
+    let package = PackageFixture::clean("multi-adv-pkg");
+    let mut routes = HashMap::new();
+    routes.insert(package.route(), (200, package.to_json()));
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (
+            200,
+            r#"{"results":[{"vulns":[{"id":"GHSA-aaa"},{"id":"GHSA-bbb"},{"id":"GHSA-ccc"}]}]}"#
+                .to_string(),
+        ),
+    );
+    for id in ["GHSA-aaa", "GHSA-bbb", "GHSA-ccc"] {
+        routes.insert(
+            format!("/v1/vulns/{id}"),
+            (
+                200,
+                format!(r#"{{"id":"{id}","summary":"summary for {id}"}}"#),
+            ),
+        );
+    }
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["npm", "multi-adv-pkg", "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let ids: Vec<&str> = value["advisories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|advisory| advisory["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["GHSA-aaa", "GHSA-bbb", "GHSA-ccc"]);
+}

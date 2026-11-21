@@ -89,8 +89,23 @@ impl OsvClient {
         let response = self.http.post_json(&url, &body)?;
         let (ids, hidden) = take_capped(parse_advisory_ids(&response)?);
         Ok(AdvisoryList {
-            advisories: ids.into_iter().map(|id| self.advisory(&id)).collect(),
+            advisories: self.advisories(&ids),
             hidden,
+        })
+    }
+
+    /// Details are independent requests; fetch them together and keep the
+    /// batch order so the report is stable.
+    fn advisories(&self, ids: &[String]) -> Vec<Advisory> {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = ids
+                .iter()
+                .map(|id| (id, scope.spawn(move || self.advisory(id))))
+                .collect();
+            handles
+                .into_iter()
+                .map(|(id, handle)| handle.join().unwrap_or_else(|_| Advisory::unavailable(id)))
+                .collect()
         })
     }
 

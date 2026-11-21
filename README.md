@@ -195,10 +195,12 @@ $ time dep-vet npm lodash@4.17.15
 real    0m0.009s
 ```
 
-Entries live for 24 hours. A network failure or 5xx falls back to the stale
-entry, so a warmed cache keeps working offline; a 404 never falls back, because
-a deleted package must not look alive. `--no-cache` bypasses the cache for one
-run.
+Entries live for 24 hours and are deleted after 30 days, so the database stays
+bounded (large packuments are stored whole). A network failure, 5xx, or 429
+falls back to the stale entry, so a warmed cache keeps working offline; a 404
+never falls back, because a deleted package must not look alive. `--no-cache`
+bypasses the cache for one run. A cache written by an older schema is dropped
+instead of misread.
 
 | Variable | Effect |
 |---|---|
@@ -225,9 +227,13 @@ jobs:
 
 It diffs the lockfile against `origin/<base>`, comments the report, and fails
 the job on high risk (exit 2) or an incomplete audit (exit 3). Warnings (exit 1)
-pass with the findings visible in the comment. Because there are no release
-binaries yet, the action builds dep-vet from source — expect roughly a minute
-and a half per run.
+pass with the findings visible in the comment. Very long reports are truncated
+in the comment; the full output always lands in the job log.
+
+Because there are no release binaries yet, the action builds dep-vet from
+source — expect roughly a minute and a half per run. It builds the `ref` input
+(default `main`), so pinning `uses:` alone does not pin the binary: pass
+`ref: v0.1.0` once tags exist.
 
 ### Color
 
@@ -272,8 +278,9 @@ raw source does not ship.
   lockfiles are not parsed yet.
 - Not an SBOM generator or a Dependabot replacement.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
-- One batch query plus one request per advisory on a cold cache; bounded at 25
-  advisories per run, and the report says how many were skipped.
+- One batch query plus one request per advisory on a cold cache, fetched in
+  parallel; bounded at 25 advisories per run, and the report says how many were
+  skipped.
 - The popular-name list is a curated seed, not a download ranking.
 
 ## Development

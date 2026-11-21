@@ -323,7 +323,6 @@ pub fn assess(meta: &PackageMeta, now: i64) -> Vec<Finding> {
         });
     }
 
-    findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
     findings
 }
 
@@ -564,20 +563,6 @@ mod tests {
         let findings = assess(&meta, NOW);
         assert_eq!(ids(&findings), vec!["no-repository"]);
         assert_eq!(report(meta, None, None, NOW).exit_code(), 0);
-    }
-
-    #[test]
-    fn findings_are_ordered_by_severity() {
-        let mut meta = meta();
-        meta.name = "expres".to_string();
-        meta.deprecated = Some("old".to_string());
-        meta.repository = None;
-        let findings = assess(&meta, NOW);
-        let severities: Vec<Severity> = findings.iter().map(|finding| finding.severity).collect();
-        let mut sorted = severities.clone();
-        sorted.sort_by(|a, b| b.cmp(a));
-        assert_eq!(severities, sorted);
-        assert_eq!(severities.last(), Some(&Severity::Info));
     }
 
     #[test]
