@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-11-21
 
 - **Progress while auditing.** `audit` and `lock` print `auditing N/M packages…`
   on stderr when it is a terminal, then clear the line before the report.
