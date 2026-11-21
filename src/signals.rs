@@ -99,6 +99,7 @@ pub fn advisory_findings(advisories: &[Advisory]) -> Vec<Finding> {
                 severity: advisory.severity,
                 title: advisory.display_title(),
                 detail: advisory.summary.clone(),
+                allowed: false,
                 evidence,
             }
         })
@@ -120,6 +121,7 @@ pub fn advisories_hidden(hidden: usize) -> Finding {
                 "{hidden} additional advisories were not fetched; dep-vet shows at most {MAX_ADVISORIES} per package. Review OSV before installing"
             )
         },
+        allowed: false,
         evidence: vec![Evidence {
             label: "OSV".to_string(),
             value: "https://osv.dev".to_string(),
@@ -136,6 +138,7 @@ pub fn advisory_check_unavailable() -> Finding {
         title: "advisory check unavailable".to_string(),
         detail: "OSV could not be reached, so this report says nothing about known vulnerabilities"
             .to_string(),
+        allowed: false,
         evidence: vec![Evidence {
             label: "OSV".to_string(),
             value: "https://osv.dev".to_string(),
@@ -189,6 +192,7 @@ pub fn assess(
                     "name is close to a popular package".to_string()
                 },
                 detail,
+                allowed: false,
                 evidence: vec![
                     Evidence {
                         label: "this package".to_string(),
@@ -226,6 +230,7 @@ pub fn assess(
             detail: format!(
                 "first published {days} day(s) ago; there is no track record to review"
             ),
+            allowed: false,
             evidence: vec![Evidence {
                 label: "first publish".to_string(),
                 value: meta
@@ -253,6 +258,7 @@ pub fn assess(
             detail:
                 "the package has history, but this exact version was published in the last week"
                     .to_string(),
+            allowed: false,
             evidence: vec![Evidence {
                 label: "version publish".to_string(),
                 value: meta.published_at.map(date::format_date).unwrap_or_default(),
@@ -268,6 +274,7 @@ pub fn assess(
             title: "maintainer list unavailable".to_string(),
             detail: "the registry did not return an owner list, so publisher and maintainer agreement could not be checked"
                 .to_string(),
+            allowed: false,
             evidence: vec![Evidence {
                 label: "registry metadata".to_string(),
                 value: meta.name.clone(),
@@ -296,6 +303,7 @@ pub fn assess(
                 "this version was published by '{publisher}', who is not in the current maintainer list [{}]",
                 meta.maintainers.join(", ")
             ),
+            allowed: false,
             evidence: vec![Evidence {
                 label: "maintainers".to_string(),
                 value: meta.maintainers.join(", "),
@@ -337,6 +345,7 @@ pub fn assess(
                 "install-time scripts are legitimate for native builds, but they are also how malicious packages run code before you review anything"
                     .to_string()
             },
+            allowed: false,
             evidence,
         });
     }
@@ -348,6 +357,7 @@ pub fn assess(
             title: "installs by building from source".to_string(),
             detail: "no wheel is published for this version, so pip runs the project's build backend, which executes code with your permissions during install"
                 .to_string(),
+            allowed: false,
             evidence: vec![
                 Evidence {
                     label: "files for this version".to_string(),
@@ -371,6 +381,7 @@ pub fn assess(
             severity: Severity::Warn,
             title: "version is deprecated".to_string(),
             detail: message.clone(),
+            allowed: false,
             evidence: vec![Evidence {
                 label: "registry deprecation notice".to_string(),
                 value: message.clone(),
@@ -386,6 +397,7 @@ pub fn assess(
             title: "no repository on record".to_string(),
             detail: "the publisher did not declare a source repository, so the tarball cannot be traced to source"
                 .to_string(),
+            allowed: false,
             evidence: vec![Evidence {
                 label: "package metadata".to_string(),
                 value: meta.name.clone(),

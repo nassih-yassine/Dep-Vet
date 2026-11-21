@@ -87,13 +87,19 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
         ));
 
         for finding in &report.findings {
+            let label = if finding.allowed {
+                "[ALLOWED]".to_string()
+            } else {
+                format!("[{}]", finding.severity.label())
+            };
+            let label_color = if finding.allowed {
+                verdict_color(Severity::Info)
+            } else {
+                verdict_color(finding.severity)
+            };
             out.push_str(&format!(
                 "  {}  {}\n",
-                paint(
-                    &format!("[{}]", finding.severity.label()),
-                    verdict_color(finding.severity),
-                    color
-                ),
+                paint(&label, label_color, color),
                 finding.title
             ));
             for line in wrap(&finding.detail, 92) {
@@ -215,11 +221,10 @@ fn render_tree(view: TreeView<'_>) -> String {
                 paint(severity.label(), verdict_color(severity), view.color)
             ));
         }
-        for package in view
-            .packages
-            .iter()
-            .filter(|package| package.verdict() > Severity::Info)
-        {
+        for package in view.packages.iter().filter(|package| {
+            package.verdict() > Severity::Info
+                || package.findings.iter().any(|finding| finding.allowed)
+        }) {
             out.push('\n');
             out.push_str(&render_human(package, view.color));
         }
@@ -345,6 +350,7 @@ mod tests {
             severity,
             title: "runs code during npm install".to_string(),
             detail: "install-time scripts are legitimate for native builds, but they are also how malicious packages run code".to_string(),
+            allowed: false,
             evidence: vec![Evidence {
                 label: "postinstall".to_string(),
                 value: "node setup.js".to_string(),

@@ -26,6 +26,10 @@ pub struct Cli {
     /// Ignore the nearest package-lock.json when checking one package
     #[arg(long, global = true)]
     pub no_local: bool,
+
+    /// Path to a .depvet.toml allowlist (default: nearest, walking up)
+    #[arg(long, global = true, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -225,6 +229,12 @@ mod tests {
         let cli = Cli::try_parse_from(["dep-vet", "npm", "express", "--no-local"]).unwrap();
         assert!(cli.no_local);
         assert!(!cli.no_cache);
+    }
+
+    #[test]
+    fn config_path_is_global() {
+        let cli = Cli::try_parse_from(["dep-vet", "npm", "express", "--config", "x.toml"]).unwrap();
+        assert_eq!(cli.config, Some(std::path::PathBuf::from("x.toml")));
     }
 
     #[test]

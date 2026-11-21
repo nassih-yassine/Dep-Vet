@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod allowlist;
 pub mod branding;
 pub mod cache;
 pub mod cli;
