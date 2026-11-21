@@ -10,7 +10,7 @@
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
 <img alt="no runtime" src="https://img.shields.io/badge/runtime-none%20(linux%20musl%3A%20static)-success.svg">
 <img alt="no telemetry" src="https://img.shields.io/badge/telemetry-none-success.svg">
-<img alt="ecosystem npm" src="https://img.shields.io/badge/ecosystem-npm-cb3837.svg">
+<img alt="9 ecosystems" src="https://img.shields.io/badge/ecosystems-9-success.svg">
 </p>
 
 <code>dep-vet npm express@5.3.0</code>
@@ -48,7 +48,8 @@ npm/crossenv@0.0.2-security
         -> https://www.npmjs.com/package/cross-env
 ```
 
-No account, no API key, no telemetry, no score out of 100. One binary.
+No account, no API key, no telemetry, no score out of 100. One binary for the
+CLI, agent hooks, and MCP.
 
 ## Why before install
 
@@ -744,6 +745,15 @@ clean.
 - **Archive inspection never executes a package.** It downloads, verifies,
   extracts in memory, and reads text. No install hooks run, no script is
   sourced, and no file is written outside the process.
+- **Agent hooks are advisory against a hostile agent.** They vet the direct
+  packages named in a command. Transitive dependencies, bare installs, URLs,
+  `$(...)`, `eval`, nested shells, and absolute paths are outside what the
+  parser can guarantee, and a hostile agent can bypass it. `--strict` closes the
+  fail-open path; `strict` never turns a miss into a detection.
+- **MCP inputs are untrusted.** Ecosystems and specs are validated, commands are
+  capped, lockfiles must resolve under the server's working directory, and
+  output is capped. Tool errors are `isError` results; protocol errors stay
+  JSON-RPC.
 - **Advice is a pointer, not a guarantee.** `fixed in` is what OSV publishes for
   that advisory; `newest` is the highest published version and may be a breaking
   major or still vulnerable. dep-vet never upgrades, rewrites, or tests anything.
