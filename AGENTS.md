@@ -61,6 +61,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 
 - **Exit code 3** means the check could not run. Never fold it into 0/1/2;
   CI depends on the difference (`main.rs`, README).
+- **Never call `Cli::parse()`.** clap exits `2` on usage errors, which means
+  "high risk" here. `main.rs` uses `try_parse()` and remaps to 3, keeping
+  `--help`/`--version` at 0.
 - **Tests must not touch the network.** `tests/cli.rs` starts a `TcpListener`
   and overrides `DEPVET_REGISTRY_BASE` / `DEPVET_DOWNLOADS_BASE`. A test that
   reaches npmjs.org is a bug.

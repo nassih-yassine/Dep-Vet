@@ -413,3 +413,52 @@ fn force_color_produces_ansi() {
     let text = String::from_utf8_lossy(&output);
     assert!(text.contains('\u{1b}'), "expected ANSI escapes");
 }
+
+fn binary() -> Command {
+    Command::cargo_bin("dep-vet").unwrap()
+}
+
+#[test]
+fn unknown_subcommand_is_a_tool_error_not_a_verdict() {
+    binary()
+        .args(["pypi", "requests"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("usage error"))
+        .stderr(predicate::str::contains("not a verdict"));
+}
+
+#[test]
+fn missing_subcommand_is_a_tool_error() {
+    binary()
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("usage error"));
+}
+
+#[test]
+fn unknown_flag_is_a_tool_error() {
+    binary()
+        .args(["npm", "express", "--pretty"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("unexpected argument"));
+}
+
+#[test]
+fn help_exits_zero() {
+    binary()
+        .arg("--help")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("Usage: dep-vet"));
+}
+
+#[test]
+fn version_exits_zero() {
+    binary()
+        .arg("--version")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}

@@ -14,7 +14,10 @@ use dep_vet::signals;
 const TOOL_ERROR: u8 = 3;
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => return usage_exit(error),
+    };
     match execute(&cli) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
@@ -24,6 +27,25 @@ fn main() -> ExitCode {
             );
             ExitCode::from(TOOL_ERROR)
         }
+    }
+}
+
+/// clap exits with 2 on usage errors, but 2 is reserved for "high risk".
+/// Remap parse failures to the tool-error code; `--help` and `--version`
+/// stay successful output.
+fn usage_exit(error: clap::Error) -> ExitCode {
+    let informational = matches!(
+        error.kind(),
+        clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+    );
+    let _ = error.print();
+    if informational {
+        ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "dep-vet: usage error; nothing was checked (this is not a verdict, exit {TOOL_ERROR})."
+        );
+        ExitCode::from(TOOL_ERROR)
     }
 }
 
