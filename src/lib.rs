@@ -18,6 +18,7 @@ pub mod model;
 pub mod nuget;
 pub mod osv;
 pub mod progress;
+pub mod provenance;
 pub mod pypi;
 pub mod registry;
 pub mod report;

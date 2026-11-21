@@ -38,12 +38,16 @@ pub struct Prepared {
     pub integrity: Integrity,
     pub extracted: Extracted,
     pub bytes: usize,
+    /// Sigstore verification of the npm attestation, when one was published.
+    pub provenance: Option<crate::provenance::ProvenanceReport>,
 }
 
 struct ArchiveRef {
     url: String,
     kind: ArchiveKind,
     checksum: Option<Checksum>,
+    /// npm's attestation endpoint, when the version publishes one.
+    provenance_url: Option<String>,
 }
 
 /// Downloaded archives are kept only when their checksum is known, so a cached
@@ -89,12 +93,18 @@ pub fn inspect_archive(
     };
     let extracted = extract(source.kind, &bytes, limits)
         .map_err(|error| InspectError::Archive(error.to_string()))?;
+    let provenance = source
+        .provenance_url
+        .as_deref()
+        .and_then(|url| http.get(url).ok())
+        .map(|body| crate::provenance::verify(&body, &bytes));
     Ok(Prepared {
         url: source.url,
         kind: source.kind,
         integrity,
         extracted,
         bytes: bytes.len(),
+        provenance,
     })
 }
 
@@ -263,6 +273,12 @@ fn resolve_npm(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveRe
         url: url.to_string(),
         kind: ArchiveKind::TarGz,
         checksum,
+        provenance_url: dist
+            .get("attestations")
+            .and_then(|attestations| attestations.get("url"))
+            .and_then(|url| url.as_str())
+            .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+            .map(str::to_string),
     })
 }
 
@@ -291,6 +307,7 @@ fn resolve_pypi(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveR
             ArchiveKind::TarGz
         },
         checksum: sha,
+        provenance_url: None,
     })
 }
 
@@ -308,6 +325,7 @@ fn resolve_crates(
         url: format!("{base}/api/v1/crates/{name}/{version}/download"),
         kind: ArchiveKind::TarGz,
         checksum,
+        provenance_url: None,
     })
 }
 
@@ -332,6 +350,7 @@ fn resolve_go(name: &str, version: &str) -> ArchiveRef {
         url: format!("{base}/{}/@v/{version}.zip", escape_go(name)),
         kind: ArchiveKind::Zip,
         checksum: None,
+        provenance_url: None,
     }
 }
 
@@ -351,6 +370,7 @@ fn resolve_gem(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveRe
         url: format!("{base}/gems/{name}-{version}.gem"),
         kind: ArchiveKind::Gem,
         checksum,
+        provenance_url: None,
     })
 }
 
@@ -361,6 +381,7 @@ fn resolve_nuget(name: &str, version: &str) -> ArchiveRef {
         url: format!("{base}/v3-flatcontainer/{id}/{version}/{id}.{version}.nupkg"),
         kind: ArchiveKind::Zip,
         checksum: None,
+        provenance_url: None,
     }
 }
 
@@ -386,6 +407,7 @@ fn resolve_maven(name: &str, version: &str) -> Result<ArchiveRef, InspectError> 
         ),
         kind: ArchiveKind::Zip,
         checksum: None,
+        provenance_url: None,
     })
 }
 
@@ -418,6 +440,7 @@ fn resolve_composer(
         url: url.to_string(),
         kind: ArchiveKind::Zip,
         checksum,
+        provenance_url: None,
     })
 }
 
@@ -449,6 +472,7 @@ mod tests {
                 ..Extracted::default()
             },
             bytes: 0,
+            provenance: None,
         }
     }
 
@@ -584,6 +608,9 @@ pub struct InspectionReport {
     /// signature is never verified, and absence is not reported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package_signature: Option<&'static str>,
+    /// Cryptographic verification of the npm attestation, when published.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::provenance::ProvenanceReport>,
     pub findings: Vec<crate::rules::RuleFinding>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_checked: Vec<String>,
@@ -655,6 +682,7 @@ pub fn build_report(
         files_scanned: prepared.extracted.files.len(),
         files_skipped: prepared.extracted.skipped_binary + prepared.extracted.skipped_unsafe,
         package_signature: prepared.extracted.signature_file.then_some("present"),
+        provenance: prepared.provenance,
         findings,
         not_checked,
     }

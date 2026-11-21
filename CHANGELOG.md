@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Offline Sigstore verification.** `inspect npm` now verifies provenanced
+  releases against the embedded Sigstore trust root: DSSE signature, Fulcio
+  chain, SCT, Rekor inclusion, and artifact binding. Reports show the signer
+  identity and issuer, or why verification was not possible. No network beyond
+  the registry.
 - **NuGet signature presence.** `inspect nuget` reports a `.signature.p7s` entry
   as present-and-unverified; absence stays silent.
 - **Attestations are checked against the artifact.** For npm, dep-vet reads the

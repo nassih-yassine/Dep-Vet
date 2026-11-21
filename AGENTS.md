@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 479 unit + 122 end-to-end tests
+cargo test --locked                      # 483 unit + 123 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -312,9 +312,19 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   (`attestation-subject-mismatch`), unreadable stays `None`. The SLSA v1
   predicate supplies claimed builder/source/commit/workflow (`AttestationClaims`),
   rendered with `(claimed)`; a claimed source repository differing from the
-  package repository is INFO `attestation-source-mismatch`. Never describe any
-  of this as verification. Cryptographic Sigstore/SLSA checks are not
-  implemented.
+  package repository is INFO `attestation-source-mismatch`. Audits never claim
+  cryptographic verification.
+- **Sigstore verification is offline and inspect-only.** `src/provenance.rs`
+  verifies npm bundles with `sigstore-verify` against the embedded PublicGood
+  root (`TrustedRoot::from_embedded`); no TUF, no network beyond the registry's
+  attestation response, no tokio. Keep `sigstore-trust-root` on
+  `default-features = false`, or the TUF feature pulls tokio back in. Status is
+  exactly `verified` or `unverified`; managed-key bundles have no Fulcio
+  certificate and must stay unverified with a reason. Tests use a real signed
+  fixture (`tests/fixtures/semver-7.8.6.*`), because verification cannot be
+  faked; one test flips a tarball byte and expects a rejection. A failed
+  verification is never a finding, since format or root changes are not the
+  package's fault.
 - **Release-transition signals are history-based and gated.** `HISTORY_WINDOW_DAYS`
   (30) bounds them: PyPI and crates.io fetch two extra documents only for a
   version inside it. `previous_release` picks by timestamp, never list order.

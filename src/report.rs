@@ -277,6 +277,24 @@ pub fn render_inspection_human(report: &crate::inspect::InspectionReport, color:
             report.files_scanned, report.files_skipped
         ),
     );
+    if let Some(provenance) = &report.provenance {
+        if provenance.verified() {
+            push_field(
+                &mut out,
+                "provenance",
+                "signature verified (Fulcio certificate, SCT, Rekor)",
+            );
+            if let Some(identity) = &provenance.identity {
+                push_field(&mut out, "identity", identity);
+            }
+            if let Some(issuer) = &provenance.issuer {
+                push_field(&mut out, "issuer", issuer);
+            }
+        } else {
+            let reason = provenance.reason.as_deref().unwrap_or("unknown reason");
+            push_field(&mut out, "provenance", &format!("not verified: {reason}"));
+        }
+    }
     if report.package_signature.is_some() {
         push_field(&mut out, "signature", "file present (not verified)");
     }

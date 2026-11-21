@@ -2505,6 +2505,50 @@ fn inspect_notes_a_nuget_signature_file_without_verifying_it() {
 }
 
 #[test]
+fn inspect_verifies_npm_provenance_offline() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let tarball = include_bytes!("fixtures/semver-7.8.6.tgz");
+    let attestation = include_str!("fixtures/semver-7.8.6-attestation.json");
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(tarball));
+    let registry = MockRegistry::start_with(move |base| {
+        let doc = format!(
+            r#"{{"name":"semver","version":"7.8.6","dist":{{"tarball":"{base}/semver.tgz","integrity":"sha512-{digest}","attestations":{{"url":"{base}/attestation"}}}}}}"#
+        );
+        let mut routes = HashMap::new();
+        routes.insert("/semver/7.8.6".to_string(), (200, doc.into_bytes()));
+        routes.insert("/semver.tgz".to_string(), (200, tarball.to_vec()));
+        routes.insert(
+            "/attestation".to_string(),
+            (200, attestation.as_bytes().to_vec()),
+        );
+        routes
+    });
+
+    let output = registry
+        .command()
+        .args(["inspect", "npm", "semver@7.8.6", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["provenance"]["status"], "verified", "{value}");
+    assert_eq!(value["provenance"]["certificate"], true);
+    assert_eq!(value["provenance"]["sct"], true);
+    assert_eq!(value["provenance"]["tlog"], true);
+    assert!(
+        value["provenance"]["identity"]
+            .as_str()
+            .unwrap()
+            .contains("node-semver"),
+        "{value}"
+    );
+}
+
+#[test]
 fn inspect_reports_a_checksum_mismatch_as_high() {
     use base64::Engine as _;
     let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
