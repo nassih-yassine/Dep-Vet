@@ -283,7 +283,11 @@ pub fn assess(
         });
     }
 
+    // Team owners (crates.io `github:org:team`) hide their members, so a
+    // publisher outside the user list cannot be judged.
+    let team_owned = meta.maintainers.iter().any(|name| name.contains(':'));
     let publisher_mismatch = profile.maintainers
+        && !team_owned
         && match (&meta.publisher, meta.maintainers.is_empty()) {
             (Some(publisher), false) => {
                 !is_automation_publisher(publisher)
@@ -297,7 +301,13 @@ pub fn assess(
     if let (true, Some(publisher)) = (publisher_mismatch, &meta.publisher) {
         findings.push(Finding {
             id: "publisher-not-maintainer",
-            severity: Severity::Warn,
+            // crates.io owners are users, not org members, so an org-published
+            // crate looks mismatched even when nothing changed.
+            severity: if ecosystem == Ecosystem::CratesIo {
+                Severity::Info
+            } else {
+                Severity::Warn
+            },
             title: "published by a user who is not a maintainer".to_string(),
             detail: format!(
                 "this version was published by '{publisher}', who is not in the current maintainer list [{}]",
@@ -674,6 +684,27 @@ mod tests {
                 .detail
                 .contains("mallory")
         );
+    }
+
+    #[test]
+    fn crates_publisher_mismatch_is_information_only() {
+        let mut meta = meta();
+        meta.maintainers = vec!["rust-lang-owner".to_string()];
+        meta.publisher = Some("BurntSushi".to_string());
+        let findings = assess(&meta, Ecosystem::CratesIo, &[], &Profile::CRATES, NOW);
+        let finding = finding(&findings, "publisher-not-maintainer");
+        assert_eq!(finding.severity, Severity::Info);
+    }
+
+    #[test]
+    fn team_owned_packages_do_not_judge_the_publisher() {
+        let mut meta = meta();
+        meta.maintainers = vec![
+            "Manishearth".to_string(),
+            "github:unicode-org:icu4x-release".to_string(),
+        ];
+        meta.publisher = Some("robertbastian".to_string());
+        assert!(assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW).is_empty());
     }
 
     #[test]
