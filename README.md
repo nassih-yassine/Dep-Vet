@@ -76,7 +76,7 @@ From source:
 cargo install --git https://github.com/nassih-yassine/Dep-Vet.git
 ```
 
-Prebuilt binaries and the GitHub Action are on the roadmap.
+Prebuilt binaries are on the roadmap. The GitHub Action is documented below.
 
 ## Usage
 
