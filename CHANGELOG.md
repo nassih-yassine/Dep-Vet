@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Progress while auditing.** `audit` and `lock` print `auditing N/M packages…`
+  on stderr when it is a terminal, then clear the line before the report.
+  Pipes, CI logs, and `--json` are unchanged.
+
 ## 0.8.0 — 2026-11-21
 
 - **Upgrade advice.** Reports end with what to do: the version OSV says fixes the
