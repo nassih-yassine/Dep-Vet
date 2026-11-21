@@ -808,6 +808,33 @@ fn lock_json_lists_the_new_packages() {
 }
 
 #[test]
+fn lock_rejects_invalid_package_names_without_requesting_them() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("express", "5.1.0")]));
+    repo.commit("base");
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("express", "5.1.0"), ("evil?x=1", "1.0.0")]),
+    );
+
+    let registry = registry_with(&[], None);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "package-lock.json", "--base", "HEAD"])
+        .assert()
+        .code(3)
+        .stdout(predicate::str::contains("evil?x=1@1.0.0"))
+        .stdout(predicate::str::contains("characters npm does not allow"));
+
+    assert!(
+        !registry.requests().iter().any(|path| path.contains("evil")),
+        "an invalid name must not reach the registry: {:?}",
+        registry.requests()
+    );
+}
+
+#[test]
 fn lock_rejects_version_one_lockfiles() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -861,4 +888,31 @@ fn lock_flags_an_unfetchable_package_as_incomplete() {
         .code(3)
         .stdout(predicate::str::contains("ghost-pkg@1.0.0"))
         .stdout(predicate::str::contains("incomplete"));
+}
+
+#[test]
+fn advisory_cap_is_disclosed_and_bounded() {
+    let package = PackageFixture::clean("many-advisories-pkg");
+    let vulns: Vec<String> = (0..26)
+        .map(|index| format!(r#"{{"id":"GHSA-cap-{index:02}"}}"#))
+        .collect();
+    let batch = format!(r#"{{"results":[{{"vulns":[{}]}}]}}"#, vulns.join(","));
+    let registry = registry_and_osv(&[package], None, 200, &batch, None);
+
+    registry
+        .command()
+        .args(["npm", "many-advisories-pkg"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("more advisories not shown"))
+        .stdout(predicate::str::contains(
+            "1 additional advisory was not fetched",
+        ));
+
+    let detail_requests = registry
+        .requests()
+        .iter()
+        .filter(|path| path.starts_with("/v1/vulns/"))
+        .count();
+    assert_eq!(detail_requests, 25, "the cap must bound detail fetches");
 }

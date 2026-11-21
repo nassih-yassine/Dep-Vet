@@ -93,10 +93,19 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             let mut new_packages = Vec::new();
             let mut errors = Vec::new();
             for package in added {
-                let spec = PackageSpec {
-                    name: package.name.clone(),
-                    version: Some(package.version.clone()),
-                };
+                // Lockfile contents are still input: validate before they
+                // become a registry URL.
+                let spec =
+                    match PackageSpec::new(package.name.clone(), Some(package.version.clone())) {
+                        Ok(spec) => spec,
+                        Err(error) => {
+                            errors.push(LockFetchError {
+                                package: package.spec(),
+                                message: error.to_string(),
+                            });
+                            continue;
+                        }
+                    };
                 match auditor.audit(&spec, now) {
                     Ok(report) => new_packages.push(report),
                     // One unpublished dependency must not hide the rest.
@@ -142,7 +151,7 @@ impl Auditor {
         // Advisories are best effort: a failure is reported as an INFO
         // finding, never as "no known vulnerabilities".
         let advisories = self.osv.query(&meta.name, &meta.version).ok();
-        Ok(signals::report(meta, downloads, advisories.as_deref(), now))
+        Ok(signals::report(meta, downloads, advisories.as_ref(), now))
     }
 }
 

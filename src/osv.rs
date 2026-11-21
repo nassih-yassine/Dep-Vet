@@ -17,6 +17,14 @@ const OSV_VULN_URL: &str = "https://osv.dev/vulnerability";
 /// Bound the number of detail requests for packages with a long advisory list.
 pub const MAX_ADVISORIES: usize = 25;
 
+/// What one query produced: the advisories we could read, and how many were
+/// skipped once the cap was reached.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdvisoryList {
+    pub advisories: Vec<Advisory>,
+    pub hidden: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Advisory {
     pub id: String,
@@ -70,7 +78,7 @@ impl OsvClient {
         }
     }
 
-    pub fn query(&self, name: &str, version: &str) -> Result<Vec<Advisory>, OsvError> {
+    pub fn query(&self, name: &str, version: &str) -> Result<AdvisoryList, OsvError> {
         let url = format!("{}/v1/querybatch", self.base.trim_end_matches('/'));
         let body = serde_json::json!({
             "queries": [{
@@ -79,12 +87,11 @@ impl OsvClient {
             }]
         });
         let response = self.http.post_json(&url, &body)?;
-        let ids = parse_advisory_ids(&response)?;
-        Ok(ids
-            .into_iter()
-            .take(MAX_ADVISORIES)
-            .map(|id| self.advisory(&id))
-            .collect())
+        let (ids, hidden) = take_capped(parse_advisory_ids(&response)?);
+        Ok(AdvisoryList {
+            advisories: ids.into_iter().map(|id| self.advisory(&id)).collect(),
+            hidden,
+        })
     }
 
     fn advisory(&self, id: &str) -> Advisory {
@@ -114,6 +121,17 @@ fn parse_advisory_ids(body: &str) -> Result<Vec<String>, OsvError> {
         }
     }
     Ok(ids)
+}
+
+/// Keeps the first `MAX_ADVISORIES` ids and reports how many were dropped, so
+/// the report can say it is partial.
+fn take_capped(mut ids: Vec<String>) -> (Vec<String>, usize) {
+    if ids.len() <= MAX_ADVISORIES {
+        return (ids, 0);
+    }
+    let hidden = ids.len() - MAX_ADVISORIES;
+    ids.truncate(MAX_ADVISORIES);
+    (ids, hidden)
 }
 
 fn parse_advisory(body: &str) -> Result<Advisory, OsvError> {
@@ -281,6 +299,22 @@ mod tests {
     fn missing_summary_gets_a_placeholder() {
         let advisory = parse_advisory(r#"{ "id": "X", "summary": "  " }"#).unwrap();
         assert_eq!(advisory.summary, "advisory without a summary");
+    }
+
+    #[test]
+    fn the_cap_reports_what_it_dropped() {
+        let many: Vec<String> = (0..30).map(|index| format!("GHSA-{index}")).collect();
+        let (kept, hidden) = take_capped(many);
+        assert_eq!(kept.len(), MAX_ADVISORIES);
+        assert_eq!(hidden, 5);
+    }
+
+    #[test]
+    fn lists_within_the_cap_hide_nothing() {
+        let some: Vec<String> = (0..3).map(|index| format!("GHSA-{index}")).collect();
+        let (kept, hidden) = take_capped(some);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(hidden, 0);
     }
 
     #[test]

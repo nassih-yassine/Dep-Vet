@@ -52,7 +52,9 @@ impl Cache {
             )
             .optional()?;
         Ok(entry
-            .filter(|(_, fetched_at)| now.saturating_sub(*fetched_at) < self.ttl_seconds)
+            // A timestamp in the future means the clock moved backwards; do
+            // not treat that entry as fresh forever.
+            .filter(|(_, fetched_at)| *fetched_at <= now && now - *fetched_at < self.ttl_seconds)
             .map(|(body, _)| body))
     }
 
@@ -161,6 +163,14 @@ mod tests {
         }
         let cache = Cache::open(&path, 60).unwrap();
         assert_eq!(cache.fresh("k", 1000).unwrap().as_deref(), Some("body"));
+    }
+
+    #[test]
+    fn future_timestamps_are_not_fresh() {
+        let (_directory, cache) = cache();
+        cache.put("k", "body", 2000).unwrap();
+        assert_eq!(cache.fresh("k", 1000).unwrap(), None);
+        assert_eq!(cache.stale("k").unwrap().as_deref(), Some("body"));
     }
 
     #[test]

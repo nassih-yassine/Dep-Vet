@@ -25,7 +25,8 @@ impl HttpError {
     fn is_transient(&self) -> bool {
         match self {
             Self::Network { .. } => true,
-            Self::Status { status, .. } => *status >= 500,
+            // 429 is a rate limit: a stale entry beats failing the check.
+            Self::Status { status, .. } => *status == 429 || *status >= 500,
         }
     }
 }
@@ -194,6 +195,23 @@ mod tests {
             .cached("k", || {
                 Err(HttpError::Status {
                     status: 503,
+                    url: "https://example.test/x".to_string(),
+                })
+            })
+            .unwrap();
+        assert_eq!(body, "stale");
+    }
+
+    #[test]
+    fn rate_limited_falls_back_to_stale_cache() {
+        let (_directory, cache) = cache(60);
+        cache.put("k", "stale", now_seconds() - 3600).unwrap();
+        let http = HttpClient::with_cache(Some(cache));
+
+        let body = http
+            .cached("k", || {
+                Err(HttpError::Status {
+                    status: 429,
                     url: "https://example.test/x".to_string(),
                 })
             })

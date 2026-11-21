@@ -26,6 +26,17 @@ pub enum SpecError {
 }
 
 impl PackageSpec {
+    /// For callers that already hold a name and version (lockfiles) and must
+    /// still get the same validation as user input.
+    pub fn new(name: impl Into<String>, version: Option<String>) -> Result<Self, SpecError> {
+        let name = name.into();
+        validate_name(&name)?;
+        let version = version
+            .map(|version| validate_version(&version))
+            .transpose()?;
+        Ok(Self { name, version })
+    }
+
     pub fn parse(input: &str) -> Result<Self, SpecError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
@@ -201,6 +212,8 @@ pub struct PackageReport {
     pub repository: Option<String>,
     pub deprecated: Option<String>,
     pub advisories: Vec<Advisory>,
+    /// Advisories skipped after the per-run cap.
+    pub hidden_advisories: usize,
     pub registry_url: String,
     pub findings: Vec<Finding>,
 }
@@ -336,6 +349,20 @@ mod tests {
     }
 
     #[test]
+    fn new_validates_like_input_parsing() {
+        assert_eq!(
+            PackageSpec::new("express", Some("5.1.0".to_string())).unwrap(),
+            spec("express", Some("5.1.0"))
+        );
+        assert_eq!(
+            PackageSpec::new("@scope/pkg", None).unwrap(),
+            spec("@scope/pkg", None)
+        );
+        assert!(PackageSpec::new("evil?x=1", None).is_err());
+        assert!(PackageSpec::new("express", Some("../x".to_string())).is_err());
+    }
+
+    #[test]
     fn severity_drives_exit_codes() {
         assert_eq!(Severity::Info.exit_code(), 0);
         assert_eq!(Severity::Warn.exit_code(), 1);
@@ -356,6 +383,7 @@ mod tests {
             repository: None,
             deprecated: None,
             advisories: Vec::new(),
+            hidden_advisories: 0,
             registry_url: String::new(),
             findings,
         }

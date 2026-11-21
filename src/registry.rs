@@ -41,6 +41,14 @@ pub enum RegistryError {
         "'{version}' of '{package}' was not found on npm; dep-vet takes an exact version or dist-tag, not a range"
     )]
     VersionNotFound { package: String, version: String },
+    #[error(
+        "'{version}' of '{package}' was not found on npm; registry version keys omit build metadata, try '{suggestion}'"
+    )]
+    BuildMetadataVersion {
+        package: String,
+        version: String,
+        suggestion: String,
+    },
     #[error("npm registry request failed: {0}")]
     Http(String),
     #[error("npm registry sent a response dep-vet could not read: {0}")]
@@ -179,12 +187,7 @@ fn parse_packument(
         Some(requested) if packument.versions.contains_key(requested) => requested.clone(),
         Some(requested) => match packument.dist_tags.get(requested) {
             Some(tagged) => tagged.clone(),
-            None => {
-                return Err(RegistryError::VersionNotFound {
-                    package: spec.name.clone(),
-                    version: requested.clone(),
-                });
-            }
+            None => return Err(version_not_found(&spec.name, requested)),
         },
         None => packument.dist_tags.get("latest").cloned().ok_or_else(|| {
             RegistryError::VersionNotFound {
@@ -239,6 +242,20 @@ fn parse_packument(
         deprecated: normalize_deprecated(doc.deprecated.clone()),
         registry_url: url.to_string(),
     })
+}
+
+fn version_not_found(package: &str, requested: &str) -> RegistryError {
+    match requested.split_once('+') {
+        Some((base, _)) => RegistryError::BuildMetadataVersion {
+            package: package.to_string(),
+            version: requested.to_string(),
+            suggestion: base.to_string(),
+        },
+        None => RegistryError::VersionNotFound {
+            package: package.to_string(),
+            version: requested.to_string(),
+        },
+    }
 }
 
 fn repo_url(field: &RepoField) -> Option<String> {
@@ -363,6 +380,17 @@ mod tests {
     fn range_like_version_is_rejected_with_guidance() {
         let error = fetch(PACKUMENT, Some("^1.0.0")).unwrap_err();
         assert!(error.to_string().contains("exact version or dist-tag"));
+    }
+
+    #[test]
+    fn build_metadata_version_gets_specific_guidance() {
+        let error = fetch(PACKUMENT, Some("1.0.0+build.5")).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("omit build metadata"),
+            "unhelpful message: {message}"
+        );
+        assert!(message.contains("1.0.0"));
     }
 
     #[test]
