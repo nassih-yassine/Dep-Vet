@@ -2781,3 +2781,54 @@ fn unknown_composer_package_is_a_tool_error() {
         .code(3)
         .stderr(predicate::str::contains("was not found on Packagist"));
 }
+
+#[test]
+fn audit_reads_gradle_lockfile() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("gradle.lockfile"),
+        "# This is a Gradle generated file for dependency locking.\n\
+         org.slf4j:slf4j-api:1.7.36=compileClasspath, runtimeClasspath\n\
+         empty=annotationProcessor\n",
+    )
+    .unwrap();
+
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/solrsearch/select?q=g:%22org.slf4j%22+AND+a:%22slf4j-api%22&core=gav&rows=200&wt=json"
+            .to_string(),
+        (
+            200,
+            r#"{
+                "response": {
+                    "docs": [
+                        { "v": "2.0.17", "timestamp": 1740501794416 },
+                        { "v": "1.7.36", "timestamp": 1635900000000 }
+                    ]
+                }
+            }"#
+            .to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "gradle.lockfile", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(value["packages"][0]["name"], "org.slf4j:slf4j-api");
+    assert_eq!(value["packages"][0]["version"], "1.7.36");
+    assert_eq!(value["errors"].as_array().unwrap().len(), 0);
+}
