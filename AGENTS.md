@@ -88,6 +88,9 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
   "advisory without a summary" for every real advisory.
 - **Advisory failure is an INFO finding**, not silence and not exit 3. "We
   could not check" must never read as "nothing found".
+- **Lockfile audits run 4 packages at a time.** `MAX_CONCURRENT_AUDITS` in
+  `main.rs` bounds the burst; output order still follows the sorted diff, and
+  per-package failures stay in `errors`.
 - **Advisory details are fetched 8 at a time.** `MAX_CONCURRENT_FETCHES` caps
   in-flight OSV requests; 25 at once invited 429s, and a 429 mid-list turns
   every remaining advisory into "details unavailable".

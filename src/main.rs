@@ -15,6 +15,10 @@ use dep_vet::registry::{RegistryClient, RegistryError};
 use dep_vet::report::{render_human, render_json, render_lock_human, render_lock_json};
 use dep_vet::signals;
 
+/// Packages audited at once. Each one can fan out to a few OSV detail
+/// requests, so keep the burst small.
+const MAX_CONCURRENT_AUDITS: usize = 4;
+
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -92,27 +96,56 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             let now = now_seconds();
             let mut new_packages = Vec::new();
             let mut errors = Vec::new();
-            for package in added {
-                // Lockfile contents are still input: validate before they
-                // become a registry URL.
-                let spec =
-                    match PackageSpec::new(package.name.clone(), Some(package.version.clone())) {
-                        Ok(spec) => spec,
-                        Err(error) => {
-                            errors.push(LockFetchError {
-                                package: package.spec(),
-                                message: error.to_string(),
-                            });
-                            continue;
-                        }
-                    };
-                match auditor.audit(&spec, now) {
-                    Ok(report) => new_packages.push(report),
-                    // One unpublished dependency must not hide the rest.
-                    Err(error) => errors.push(LockFetchError {
-                        package: package.spec(),
-                        message: error.to_string(),
-                    }),
+
+            // Borrow for the worker closures; `move` then captures a Copy reference.
+            let auditor = &auditor;
+            for batch in added.chunks(MAX_CONCURRENT_AUDITS) {
+                let outcomes: Vec<Result<PackageReport, LockFetchError>> =
+                    std::thread::scope(|scope| {
+                        let handles: Vec<_> = batch
+                            .iter()
+                            .map(|package| {
+                                (
+                                    package,
+                                    scope.spawn(move || {
+                                        // Lockfile contents are still input:
+                                        // validate before they become a URL.
+                                        let spec = PackageSpec::new(
+                                            package.name.clone(),
+                                            Some(package.version.clone()),
+                                        )
+                                        .map_err(|error| LockFetchError {
+                                            package: package.spec(),
+                                            message: error.to_string(),
+                                        })?;
+                                        auditor.audit(&spec, now).map_err(|error| LockFetchError {
+                                            package: package.spec(),
+                                            message: error.to_string(),
+                                        })
+                                    }),
+                                )
+                            })
+                            .collect();
+
+                        handles
+                            .into_iter()
+                            .map(|(package, handle)| {
+                                handle.join().unwrap_or_else(|_| {
+                                    Err(LockFetchError {
+                                        package: package.spec(),
+                                        message: "audit worker panicked".to_string(),
+                                    })
+                                })
+                            })
+                            .collect()
+                    });
+
+                for outcome in outcomes {
+                    match outcome {
+                        Ok(report) => new_packages.push(report),
+                        // One unpublished dependency must not hide the rest.
+                        Err(error) => errors.push(error),
+                    }
                 }
             }
 

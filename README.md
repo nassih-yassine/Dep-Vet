@@ -294,7 +294,7 @@ raw source does not ship.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
 - One batch query plus one request per advisory on a cold cache, at most 8 in
   flight; bounded at 25 advisories per run, and the report says how many were
-  skipped.
+  skipped. Lockfile audits run 4 packages at a time.
 - The popular-name list is a curated seed, not a download ranking.
 
 ## Development
@@ -347,9 +347,8 @@ did.
 ## Roadmap
 
 1. Popular-name list built from download counts instead of a seed.
-2. Parallel fetches across packages in a lockfile audit.
-3. PyPI, crates.io, and Go. The design is kept locally (`docs/`), not published.
-4. Advisory lookups for the whole installed tree, not one package.
+2. PyPI, crates.io, and Go. The design is kept locally (`docs/`), not published.
+3. Advisory lookups for the whole installed tree, not one package.
 
 ## License
 
