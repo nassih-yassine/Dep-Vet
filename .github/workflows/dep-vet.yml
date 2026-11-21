@@ -1,0 +1,81 @@
+name: dep-vet
+
+# Reusable workflow. Call it from a repository that adds npm dependencies:
+#
+#   jobs:
+#     dep-vet:
+#       uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@main
+#       permissions:
+#         contents: read
+#         pull-requests: write
+#
+# It installs dep-vet from source (no release binaries yet), vets every package
+# the lockfile change adds against the PR base, and keeps one sticky comment.
+
+on:
+  workflow_call:
+    inputs:
+      lockfile:
+        description: Path to the npm lockfile
+        type: string
+        default: package-lock.json
+      base:
+        description: Git revision to diff against; defaults to the pull request base branch
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  vet:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `dep-vet lock` reads the base revision with `git show`.
+          fetch-depth: 0
+
+      - name: Install dep-vet
+        run: cargo install --git https://github.com/nassih-yassine/Dep-Vet.git --locked
+
+      - name: Vet new dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          dep-vet lock "${{ inputs.lockfile }}" \
+            --base "origin/${{ inputs.base || github.base_ref }}" > dep-vet-report.txt 2>&1
+          status=$?
+          set -e
+
+          {
+            echo "<!-- dep-vet -->"
+            echo "### dep-vet: new dependency review"
+            echo
+            echo '```'
+            cat dep-vet-report.txt
+            echo '```'
+            echo
+            echo "exit code: \`$status\` (0 clean, 1 warnings, 2 high risk, 3 could not check)"
+          } > dep-vet-comment.md
+
+          existing=$(gh api \
+            "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments?per_page=100" \
+            --jq 'map(select(.body | startswith("<!-- dep-vet -->"))) | first | .id // empty')
+
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" \
+              -F body=@dep-vet-comment.md > /dev/null
+          else
+            gh api -X POST \
+              "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+              -F body=@dep-vet-comment.md > /dev/null
+          fi
+
+          # Warnings pass; high risk and incomplete audits fail the job.
+          if [ "$status" -ge 2 ]; then
+            exit "$status"
+          fi

@@ -13,6 +13,7 @@
 **Check a package's risk before it enters your lockfile.**
 
 <p>
+<img alt="ci" src="https://github.com/nassih-yassine/Dep-Vet/actions/workflows/ci.yml/badge.svg">
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
 <img alt="single static binary" src="https://img.shields.io/badge/binary-static%2C%20no%20runtime-success.svg">
 <img alt="no telemetry" src="https://img.shields.io/badge/telemetry-none-success.svg">
@@ -201,6 +202,29 @@ run.
 | `DEPVET_CACHE_TTL_SECONDS` | Entry lifetime, default `86400` |
 | `DEPVET_NO_CACHE` | Disable the cache entirely |
 
+### GitHub Action
+
+A reusable workflow reviews the lockfile change on every pull request and keeps
+one comment updated with the report:
+
+```yaml
+name: dependency review
+on: pull_request
+
+jobs:
+  dep-vet:
+    uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+```
+
+It diffs the lockfile against `origin/<base>`, comments the report, and fails
+the job on high risk (exit 2) or an incomplete audit (exit 3). Warnings (exit 1)
+pass with the findings visible in the comment. Because there are no release
+binaries yet, the action builds dep-vet from source — expect roughly a minute
+and a half per run.
+
 ### Color
 
 Color is enabled only on a terminal. `--no-color` and `NO_COLOR` turn it off,
@@ -297,7 +321,8 @@ did.
 
 ## Roadmap
 
-1. GitHub Action wrapping `lock` with a sticky PR comment.
+1. Prebuilt binaries via `cargo-dist`, so the GitHub Action stops compiling
+   from source and users stop needing a Rust toolchain.
 2. Popular-name list built from download counts instead of a seed.
 3. PyPI, crates.io, and Go — see
    [`docs/superpowers/specs/2026-11-21-multi-ecosystem-design.md`](docs/superpowers/specs/2026-11-21-multi-ecosystem-design.md).
