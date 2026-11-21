@@ -278,8 +278,8 @@ raw source does not ship.
   lockfiles are not parsed yet.
 - Not an SBOM generator or a Dependabot replacement.
 - No LLM in the verdict, no risk score, no hosted service, no accounts.
-- One batch query plus one request per advisory on a cold cache, fetched in
-  parallel; bounded at 25 advisories per run, and the report says how many were
+- One batch query plus one request per advisory on a cold cache, at most 8 in
+  flight; bounded at 25 advisories per run, and the report says how many were
   skipped.
 - The popular-name list is a curated seed, not a download ranking.
 

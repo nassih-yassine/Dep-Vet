@@ -16,6 +16,8 @@ const DEFAULT_OSV_BASE: &str = "https://api.osv.dev";
 const OSV_VULN_URL: &str = "https://osv.dev/vulnerability";
 /// Bound the number of detail requests for packages with a long advisory list.
 pub const MAX_ADVISORIES: usize = 25;
+/// At most this many detail requests in flight. 25 at once invited 429s.
+const MAX_CONCURRENT_FETCHES: usize = 8;
 
 /// What one query produced: the advisories we could read, and how many were
 /// skipped once the cap was reached.
@@ -136,6 +138,10 @@ fn parse_advisory_ids(body: &str) -> Result<Vec<String>, OsvError> {
         }
     }
     Ok(ids)
+}
+
+fn advisory_batches(ids: &[String]) -> impl Iterator<Item = &[String]> {
+    ids.chunks(MAX_CONCURRENT_FETCHES)
 }
 
 /// Keeps the first `MAX_ADVISORIES` ids and reports how many were dropped, so
@@ -330,6 +336,14 @@ mod tests {
         let (kept, hidden) = take_capped(some);
         assert_eq!(kept.len(), 3);
         assert_eq!(hidden, 0);
+    }
+
+    #[test]
+    fn detail_fetches_are_batched_to_cap_concurrency() {
+        let ids: Vec<String> = (0..MAX_ADVISORIES).map(|index| index.to_string()).collect();
+        let sizes: Vec<usize> = advisory_batches(&ids).map(<[String]>::len).collect();
+        assert_eq!(sizes, vec![8, 8, 8, 1]);
+        assert_eq!(sizes.iter().max(), Some(&MAX_CONCURRENT_FETCHES));
     }
 
     #[test]
