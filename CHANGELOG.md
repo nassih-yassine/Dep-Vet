@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-11-21
 
 - **One retry for flaky networks.** A timeout or dropped connection is retried
   once before dep-vet falls back to stale cache or reports "could not check".
