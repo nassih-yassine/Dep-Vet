@@ -142,6 +142,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         repository,
         deprecated,
         registry_url: url.to_string(),
+        review_url: None,
     })
 }
 

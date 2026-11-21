@@ -11,6 +11,9 @@ use crate::model::PackageSpec;
 use crate::registry::PackageMeta;
 
 const DEFAULT_MAVEN_BASE: &str = "https://search.maven.org";
+/// Google publishes AndroidX, AGP, Firebase, and Play libraries here, not on
+/// Maven Central. It has no search API: versions come from maven-metadata.xml.
+const DEFAULT_GOOGLE_BASE: &str = "https://dl.google.com/dl/android/maven2";
 
 #[derive(Debug, thiserror::Error)]
 pub enum MavenError {
@@ -18,6 +21,8 @@ pub enum MavenError {
     PackageNotFound(String),
     #[error("'{version}' of '{package}' was not found on Maven Central; pass an exact version")]
     VersionNotFound { package: String, version: String },
+    #[error("Maven Central rate-limited this client (HTTP 403); retry in a few minutes")]
+    Throttled,
     #[error("Maven Central request failed: {0}")]
     Http(String),
     #[error("Maven Central sent a response dep-vet could not read: {0}")]
@@ -27,20 +32,56 @@ pub enum MavenError {
 pub struct MavenClient {
     http: Arc<HttpClient>,
     base: String,
+    google: String,
 }
 
 impl MavenClient {
     pub fn from_env(http: Arc<HttpClient>) -> Self {
         let base =
             std::env::var("DEPVET_MAVEN_BASE").unwrap_or_else(|_| DEFAULT_MAVEN_BASE.to_string());
-        Self::with_base(http, base)
+        let google = std::env::var("DEPVET_GOOGLE_MAVEN_BASE")
+            .unwrap_or_else(|_| DEFAULT_GOOGLE_BASE.to_string());
+        Self::with_bases(http, base, google)
     }
 
     pub fn with_base(http: Arc<HttpClient>, base: impl Into<String>) -> Self {
+        Self::with_bases(http, base, DEFAULT_GOOGLE_BASE)
+    }
+
+    pub fn with_bases(
+        http: Arc<HttpClient>,
+        base: impl Into<String>,
+        google: impl Into<String>,
+    ) -> Self {
         Self {
             http,
             base: base.into(),
+            google: google.into(),
         }
+    }
+
+    /// Version list from Google Maven, or `None` when the group is not hosted
+    /// there or the artifact does not exist.
+    fn google_versions(&self, name: &str) -> Result<Option<(Vec<String>, String)>, MavenError> {
+        let (group, artifact) = match name.split_once(':') {
+            Some(parts) => parts,
+            None => return Ok(None),
+        };
+        let url = format!(
+            "{}/{}/{artifact}/maven-metadata.xml",
+            self.google.trim_end_matches('/'),
+            group.replace('.', "/")
+        );
+        let body = match self.http.get(&url) {
+            Ok(body) => body,
+            Err(HttpError::Status { status: 404, .. }) => return Ok(None),
+            Err(error) => return Err(MavenError::Http(error.to_string())),
+        };
+        let versions = parse_metadata_versions(&body);
+        if versions.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some((versions, url)))
     }
 
     /// Search URL. An exact version is part of the query, because Solr returns
@@ -67,6 +108,26 @@ impl MavenClient {
     }
 
     pub fn fetch(&self, spec: &PackageSpec) -> Result<PackageMeta, MavenError> {
+        if is_google_group(&spec.name) {
+            match self.google_versions(&spec.name) {
+                Ok(Some((versions, url))) => return google_meta(spec, &versions, &url),
+                Ok(None) => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        let result = self.fetch_central(spec);
+        // AndroidX and friends are absent from Central, but a Central-hosted
+        // artifact can still be named under a Google-looking group.
+        let missing = matches!(result, Err(MavenError::PackageNotFound(_)))
+            || matches!(result, Err(MavenError::VersionNotFound { .. }));
+        if missing && let Ok(Some((versions, url))) = self.google_versions(&spec.name) {
+            return google_meta(spec, &versions, &url);
+        }
+        result
+    }
+
+    fn fetch_central(&self, spec: &PackageSpec) -> Result<PackageMeta, MavenError> {
         let url = self
             .search_url(&spec.name, spec.version.as_deref())
             .ok_or_else(|| MavenError::PackageNotFound(spec.name.clone()))?;
@@ -75,6 +136,8 @@ impl MavenClient {
             Err(HttpError::Status { status: 404, .. }) => {
                 return Err(MavenError::PackageNotFound(spec.name.clone()));
             }
+            // Sonatype answers 403 when a client bursts the search API.
+            Err(HttpError::Status { status: 403, .. }) => return Err(MavenError::Throttled),
             Err(error) => return Err(MavenError::Http(error.to_string())),
         };
         let response: SearchResponse =
@@ -157,7 +220,84 @@ fn parse_search(
         repository: None,
         deprecated: None,
         registry_url: url.to_string(),
+        review_url: None,
     })
+}
+
+/// Groups that publish to Google Maven instead of (or as well as) Central.
+fn is_google_group(name: &str) -> bool {
+    let group = name.split_once(':').map(|(group, _)| group).unwrap_or(name);
+    [
+        "androidx.",
+        "com.android.",
+        "com.google.android.",
+        "com.google.firebase",
+        "com.google.mlkit",
+        "com.google.ar.",
+    ]
+    .iter()
+    .any(|prefix| group.starts_with(prefix))
+}
+
+fn google_meta(
+    spec: &PackageSpec,
+    versions: &[String],
+    url: &str,
+) -> Result<PackageMeta, MavenError> {
+    let version = match &spec.version {
+        Some(requested) => versions
+            .iter()
+            .find(|version| *version == requested)
+            .cloned()
+            .ok_or_else(|| MavenError::VersionNotFound {
+                package: spec.name.clone(),
+                version: requested.clone(),
+            })?,
+        None => versions
+            .iter()
+            .rfind(|version| !is_prerelease(version))
+            .or_else(|| versions.last())
+            .cloned()
+            .unwrap_or_default(),
+    };
+
+    let (group, artifact) = spec.name.split_once(':').unwrap_or((&spec.name, ""));
+    Ok(PackageMeta {
+        name: spec.name.clone(),
+        version: version.clone(),
+        // Google's metadata carries no publish times.
+        first_published_at: None,
+        published_at: None,
+        maintainers: Vec::new(),
+        publisher: None,
+        maintainers_known: false,
+        install_scripts: Vec::new(),
+        build_from_source: false,
+        repository: None,
+        deprecated: None,
+        registry_url: url.to_string(),
+        review_url: Some(format!(
+            "https://maven.google.com/web/index.html#{group}:{artifact}:{version}"
+        )),
+    })
+}
+
+/// Reads `<version>` elements from `maven-metadata.xml`, in file order.
+fn parse_metadata_versions(xml: &str) -> Vec<String> {
+    let mut versions = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<version>") {
+        let after = &rest[start + "<version>".len()..];
+        let Some(end) = after.find("</version>") else {
+            break;
+        };
+        let version = after[..end].trim();
+        if !version.is_empty() {
+            versions.push(version.to_string());
+        }
+        rest = &after[end + "</version>".len()..];
+    }
+    versions
 }
 
 /// Maven has no stable flag; milestones, release candidates, and snapshots
@@ -333,6 +473,97 @@ mod tests {
     #[test]
     fn malformed_json_is_a_decode_error() {
         assert!(serde_json::from_str::<SearchResponse>("{ nope").is_err());
+    }
+
+    const GOOGLE_METADATA: &str = r#"<?xml version='1.0' encoding='UTF-8'?>
+<metadata>
+  <groupId>androidx.core</groupId>
+  <artifactId>core-ktx</artifactId>
+  <versioning>
+    <latest>1.14.0-alpha01</latest>
+    <release>1.14.0-alpha01</release>
+    <versions>
+      <version>1.12.0</version>
+      <version>1.13.0</version>
+      <version>1.13.1</version>
+      <version>1.14.0-alpha01</version>
+    </versions>
+  </versioning>
+</metadata>"#;
+
+    #[test]
+    fn google_metadata_lists_versions_in_order() {
+        assert_eq!(
+            parse_metadata_versions(GOOGLE_METADATA),
+            vec!["1.12.0", "1.13.0", "1.13.1", "1.14.0-alpha01"]
+        );
+    }
+
+    #[test]
+    fn google_latest_skips_alphas() {
+        let versions = parse_metadata_versions(GOOGLE_METADATA);
+        let meta = google_meta(
+            &spec("androidx.core:core-ktx", None),
+            &versions,
+            "https://maven.test/meta.xml",
+        )
+        .unwrap();
+        assert_eq!(meta.version, "1.13.1");
+        assert_eq!(meta.published_at, None);
+        assert_eq!(
+            meta.review_url.as_deref(),
+            Some("https://maven.google.com/web/index.html#androidx.core:core-ktx:1.13.1")
+        );
+    }
+
+    #[test]
+    fn google_resolves_an_exact_version() {
+        let versions = parse_metadata_versions(GOOGLE_METADATA);
+        let meta = google_meta(
+            &spec("androidx.core:core-ktx", Some("1.13.0")),
+            &versions,
+            "u",
+        )
+        .unwrap();
+        assert_eq!(meta.version, "1.13.0");
+    }
+
+    #[test]
+    fn google_missing_version_is_an_error() {
+        let versions = parse_metadata_versions(GOOGLE_METADATA);
+        assert!(matches!(
+            google_meta(
+                &spec("androidx.core:core-ktx", Some("9.9.9")),
+                &versions,
+                "u"
+            ),
+            Err(MavenError::VersionNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn google_groups_are_recognised() {
+        for name in [
+            "androidx.core:core-ktx",
+            "com.android.tools.build:gradle",
+            "com.google.android.material:material",
+            "com.google.firebase:firebase-messaging",
+        ] {
+            assert!(is_google_group(name), "{name}");
+        }
+        for name in [
+            "org.slf4j:slf4j-api",
+            "com.google.guava:guava",
+            "junit:junit",
+        ] {
+            assert!(!is_google_group(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn google_fetch_falls_back_to_central() {
+        let versions = parse_metadata_versions(GOOGLE_METADATA);
+        assert!(google_meta(&spec("x:y", None), &versions, "u").is_ok());
     }
 
     #[test]

@@ -34,6 +34,13 @@ pub fn report(
     }
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
 
+    // A registry that reports no publish date cannot support the freshness
+    // rules; say so instead of letting silence read as "freshness checked".
+    let mut not_checked = profile.not_checked();
+    if profile.freshness && meta.published_at.is_none() && !not_checked.contains(&"freshness") {
+        not_checked.push("freshness");
+    }
+
     PackageReport {
         ecosystem,
         name: meta.name,
@@ -50,8 +57,9 @@ pub fn report(
             .map(|list| list.advisories.clone())
             .unwrap_or_default(),
         hidden_advisories: advisories.map(|list| list.hidden).unwrap_or(0),
-        not_checked: profile.not_checked(),
+        not_checked,
         registry_url: meta.registry_url,
+        review_url: meta.review_url,
         findings,
     }
 }
@@ -464,6 +472,7 @@ mod tests {
             repository: Some("https://github.com/alice/some-package".to_string()),
             deprecated: None,
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
+            review_url: None,
         }
     }
 

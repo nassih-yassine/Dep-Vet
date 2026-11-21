@@ -32,6 +32,10 @@ use dep_vet::signals;
 /// requests, so keep the burst small.
 const MAX_CONCURRENT_AUDITS: usize = 4;
 
+/// Maven Central answers 403 when it sees a burst of search requests, so tree
+/// audits go one coordinate at a time. Google Maven is unaffected.
+const MAVEN_CONCURRENCY: usize = 1;
+
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -502,7 +506,12 @@ fn audit_packages(
     let mut reports = Vec::new();
     let mut errors = Vec::new();
 
-    for batch in packages.chunks(MAX_CONCURRENT_AUDITS) {
+    let concurrency = if ecosystem == Ecosystem::Maven {
+        MAVEN_CONCURRENCY
+    } else {
+        MAX_CONCURRENT_AUDITS
+    };
+    for batch in packages.chunks(concurrency) {
         let outcomes: Vec<Result<PackageReport, LockFetchError>> = std::thread::scope(|scope| {
             let handles: Vec<_> = batch
                 .iter()
