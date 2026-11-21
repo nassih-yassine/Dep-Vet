@@ -61,6 +61,8 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 | `src/date.rs` | hand-rolled RFC 3339 → epoch (deliberately no date crate) |
 | `src/main.rs` | wiring, color decision, exit codes |
 | `tests/cli.rs` | real binary against a local fake registry |
+| `.github/workflows/ci.yml` | fmt, clippy, tests on push and PR |
+| `.github/workflows/dep-vet.yml` | reusable PR workflow: run `lock`, update one sticky comment |
 
 ## Traps
 
@@ -87,6 +89,10 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 - **`lock` diffs `name@version` pairs**, so a version bump is "new" and gets
   audited. It reads `package-lock.json` v2/v3 only; v1 is rejected instead of
   approximated.
+- **Workflow YAML is not covered by `cargo test`.** Validate it with
+  `ruby -ryaml -e 'YAML.load_file(...)'`, and exercise the embedded shell with a
+  stubbed `gh` and `dep-vet` before pushing. Third-party actions are avoided on
+  purpose: this repo should not add supply-chain surface to a supply-chain tool.
 - **`lockfile::at_ref` must run git in the lockfile's directory.** A bare
   filename has `parent() == Some("")`, which git rejects; the empty-parent case
   falls back to `.` and has a regression test.
@@ -107,6 +113,6 @@ Do not push with `--no-verify` to get past a failure; fix the failure.
 
 ## Not built yet
 
-The GitHub Action, PyPI/crates.io, tree-wide advisory lookups, and non-npm
+Release binaries, PyPI/crates.io, tree-wide advisory lookups, and non-npm
 lockfiles (yarn, pnpm, bun). Roadmap only: do not describe these as existing in
 code, README, or help text.
