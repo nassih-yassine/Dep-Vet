@@ -4,3 +4,6 @@
 
 # local-only notes and design docs
 docs/
+
+# scratch projects for manual ecosystem checks
+/test-projects
