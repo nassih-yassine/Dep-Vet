@@ -91,6 +91,7 @@ pub fn report(
         install_scripts: meta.install_scripts,
         repository: meta.repository,
         deprecated: meta.deprecated,
+        provenance: meta.provenance,
         advisories: advisories
             .map(|list| list.advisories.clone())
             .unwrap_or_default(),
@@ -793,6 +794,7 @@ mod tests {
             maintainers_known: true,
             repository: Some("https://github.com/alice/some-package".to_string()),
             deprecated: None,
+            provenance: crate::model::Provenance::Unavailable,
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
             review_url: None,
             latest_version: None,

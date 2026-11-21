@@ -34,6 +34,8 @@ pub struct PackageMeta {
     pub build_from_source: bool,
     pub repository: Option<String>,
     pub deprecated: Option<String>,
+    /// Presence of a provenance attestation, never a verification result.
+    pub provenance: crate::model::Provenance,
     pub registry_url: String,
     /// Where a human should look this version up. `None` uses the
     /// ecosystem's default page.
@@ -275,7 +277,25 @@ fn install_scripts(doc: &VersionDoc) -> Vec<InstallScript> {
 }
 
 #[derive(Debug, Deserialize)]
+struct Dist {
+    #[serde(default)]
+    attestations: Option<Attestations>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Attestations {
+    /// Attestation endpoint, e.g. `.../attestations/vite@8.3.8`.
+    #[serde(default)]
+    url: Option<String>,
+    /// SLSA predicate metadata; present only when the publisher used provenance.
+    #[serde(default)]
+    provenance: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
 struct VersionDoc {
+    #[serde(default)]
+    dist: Option<Dist>,
     #[serde(default)]
     scripts: BTreeMap<String, String>,
     #[serde(default)]
@@ -330,6 +350,22 @@ fn parse_packument(
         RegistryError::Decode(format!("{url}: dist-tag '{version}' has no version entry"))
     })?;
 
+    let provenance = match doc
+        .dist
+        .as_ref()
+        .and_then(|dist| dist.attestations.as_ref())
+    {
+        Some(attestations)
+            if attestations.provenance.is_some()
+                || attestations
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| !url.is_empty()) =>
+        {
+            crate::model::Provenance::Present
+        }
+        _ => crate::model::Provenance::Missing,
+    };
     let hooks = install_scripts(doc);
 
     let repository = doc
@@ -379,6 +415,7 @@ fn parse_packument(
         build_from_source: false,
         repository,
         deprecated: normalize_deprecated(doc.deprecated.clone()),
+        provenance,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
@@ -564,6 +601,29 @@ mod tests {
             }
         }
     }"#;
+
+    #[test]
+    fn provenance_is_present_only_when_an_attestation_url_is_published() {
+        let meta = fetch(PACKUMENT, None).unwrap();
+        assert_eq!(meta.provenance, crate::model::Provenance::Missing);
+
+        let attested = r#"{
+            "name": "x",
+            "dist-tags": { "latest": "1.0.0" },
+            "versions": {
+                "1.0.0": {
+                    "dist": {
+                        "attestations": {
+                            "url": "https://registry.npmjs.org/-/npm/v1/attestations/x@1.0.0",
+                            "provenance": { "predicateType": "https://slsa.dev/provenance/v1" }
+                        }
+                    }
+                }
+            }
+        }"#;
+        let meta = fetch(attested, None).unwrap();
+        assert_eq!(meta.provenance, crate::model::Provenance::Present);
+    }
 
     #[test]
     fn a_previous_version_without_a_document_is_unknown_history() {

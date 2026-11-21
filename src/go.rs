@@ -188,6 +188,7 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         build_from_source: false,
         repository: None,
         deprecated,
+        provenance: crate::model::Provenance::Unavailable,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,

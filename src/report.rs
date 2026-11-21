@@ -93,6 +93,15 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
     if !report.not_checked.is_empty() {
         push_field(&mut out, "not checked", &report.not_checked.join(", "));
     }
+    match report.provenance {
+        crate::model::Provenance::Present => {
+            push_field(&mut out, "provenance", "attestation present (not verified)");
+        }
+        crate::model::Provenance::Missing => {
+            push_field(&mut out, "provenance", "not published");
+        }
+        crate::model::Provenance::Unavailable => {}
+    }
     if let Some(publisher) = &report.publisher {
         let is_maintainer = report
             .maintainers
@@ -686,6 +695,7 @@ mod tests {
             }],
             repository: Some("https://github.com/alice/evil-pkg".to_string()),
             deprecated: None,
+            provenance: crate::model::Provenance::Unavailable,
             advisories: Vec::new(),
             hidden_advisories: 0,
             not_checked: Vec::new(),

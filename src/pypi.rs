@@ -59,6 +59,19 @@ impl PypiClient {
         };
         let mut meta = parse_project(spec, &body, &url)?;
         self.enrich_history(&mut meta);
+        if let Some(filename) = provenance_filename(&body) {
+            let provenance = format!(
+                "{}/integrity/{}/{}/{filename}/provenance",
+                self.base.trim_end_matches('/'),
+                meta.name,
+                meta.version
+            );
+            meta.provenance = match self.http.head(&provenance) {
+                Ok(true) => crate::model::Provenance::Present,
+                Ok(false) => crate::model::Provenance::Missing,
+                Err(_) => crate::model::Provenance::Unavailable,
+            };
+        }
         Ok(meta)
     }
 
@@ -198,6 +211,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         build_from_source: has_sdist && !has_wheel,
         repository,
         deprecated,
+        provenance: crate::model::Provenance::Unavailable,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
@@ -224,6 +238,18 @@ struct Project {
     urls: Vec<File>,
     #[serde(default)]
     releases: BTreeMap<String, Vec<File>>,
+}
+
+/// The first published file for this release, preferring the sdist. Provenance
+/// is attached per file, and PyPI serves it from the Integrity API.
+fn provenance_filename(body: &str) -> Option<String> {
+    let project: Project = serde_json::from_str(body).ok()?;
+    project
+        .urls
+        .iter()
+        .find(|file| file.packagetype.as_deref() == Some("sdist"))
+        .or_else(|| project.urls.first())
+        .and_then(|file| file.filename.clone())
 }
 
 /// PEP 508 strings to bare names: drop markers, extras, and version operators.
@@ -261,6 +287,8 @@ struct Info {
 
 #[derive(Debug, Clone, Deserialize)]
 struct File {
+    #[serde(default)]
+    filename: Option<String>,
     #[serde(default)]
     packagetype: Option<String>,
     #[serde(default)]
@@ -303,8 +331,8 @@ mod tests {
             }
         },
         "urls": [
-            { "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00Z" },
-            { "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00Z" }
+            { "filename": "requests-2.31.0-py3-none-any.whl", "packagetype": "bdist_wheel", "upload_time": "2023-05-22T12:00:00Z" },
+            { "filename": "requests-2.31.0.tar.gz", "packagetype": "sdist", "upload_time": "2023-05-22T12:00:00Z" }
         ],
         "releases": {
             "2.30.0": [{ "packagetype": "sdist", "upload_time": "2023-05-01T00:00:00Z" }],
@@ -323,6 +351,15 @@ mod tests {
         assert!(!meta.build_from_source, "a wheel exists");
         assert!(meta.maintainers.is_empty());
         assert_eq!(meta.publisher, None);
+    }
+
+    #[test]
+    fn provenance_prefers_the_sdist_filename() {
+        assert_eq!(
+            provenance_filename(WHEEL_AND_SDIST).as_deref(),
+            Some("requests-2.31.0.tar.gz")
+        );
+        assert!(provenance_filename("{}").is_none());
     }
 
     #[test]

@@ -175,6 +175,7 @@ fn parse_versions(
         // NuGet metadata exposes no source repository in these endpoints.
         repository: None,
         deprecated,
+        provenance: crate::model::Provenance::Unavailable,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,

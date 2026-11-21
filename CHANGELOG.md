@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Provenance presence.** Reports say whether a release publishes provenance:
+  npm attestations and PyPI via the Integrity API. `present` is explicitly not
+  a verification, `missing` is not suspicious, and other ecosystems report
+  `unavailable`.
+
 - **Archive inspection.** `dep-vet inspect <ecosystem> <pkg>[@version]`
   downloads the release, verifies its checksum when published, extracts it in
   memory under hard caps, and scans source text for suspicious behavior (JS,

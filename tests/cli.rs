@@ -1346,8 +1346,8 @@ const PYPI_WHEEL: &str = r#"{
         "project_urls": { "Source": "https://github.com/pallets/flask" }
     },
     "urls": [
-        { "packagetype": "bdist_wheel", "upload_time": "2025-01-15T00:00:00" },
-        { "packagetype": "sdist", "upload_time": "2025-01-15T00:00:00" }
+        { "filename": "flask-3.1.0-py3-none-any.whl", "packagetype": "bdist_wheel", "upload_time": "2025-01-15T00:00:00" },
+        { "filename": "flask-3.1.0.tar.gz", "packagetype": "sdist", "upload_time": "2025-01-15T00:00:00" }
     ],
     "releases": {
         "3.1.0": [
@@ -1933,6 +1933,57 @@ fn crates_history_is_fetched_only_for_recent_releases() {
         "history fetched for an old release: {:?}",
         registry.requests()
     );
+}
+
+#[test]
+fn pypi_reports_present_provenance() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/pypi/flask/json".to_string(),
+        (200, PYPI_WHEEL.to_string()),
+    );
+    routes.insert(
+        "/integrity/flask/3.1.0/flask-3.1.0.tar.gz/provenance".to_string(),
+        (200, "{}".to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["pypi", "flask", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["provenance"], "present");
+
+    // Without the endpoint the answer is "missing", never "verified".
+    let mut plain = HashMap::new();
+    plain.insert(
+        "/pypi/flask/json".to_string(),
+        (200, PYPI_WHEEL.to_string()),
+    );
+    plain.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(plain);
+    let output = registry
+        .command()
+        .args(["pypi", "flask", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["provenance"], "missing");
 }
 
 #[test]

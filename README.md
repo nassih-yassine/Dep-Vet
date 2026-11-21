@@ -276,6 +276,22 @@ releases are covered by advisories and cost no extra requests. This still
 cannot read the new version's code: a same-publisher release with no new
 scripts or dependencies passes until an advisory exists.
 
+### Provenance
+
+Reports say whether a release publishes provenance, never that it is verified:
+
+- **npm** — an attestation is present when the version publishes a provenance
+  attestation (`dist.attestations`).
+- **PyPI** — present when the Integrity API serves provenance for the release's
+  first file (a HEAD request).
+- **Everything else** — `unavailable`; these registries publish no provenance
+  this tool can read.
+
+`present` means the attestation exists, **not** that its signature, builder, or
+source commit was verified. `missing` is not suspicious on its own: most
+packages do not publish provenance. Cryptographic Sigstore/SLSA verification is
+not implemented yet.
+
 ### Watch mode
 
 ```sh
@@ -612,6 +628,10 @@ clean.
   scripts, added dependencies, and publisher changes come from the registry;
   dep-vet never unpacks a release. History is requested only for versions from
   the last 30 days.
+- **Provenance is presence, not verification.** `present` in a report means the
+  registry publishes an attestation, not that dep-vet checked its signature or
+  builder. `missing` is never a finding, and `unavailable` means the ecosystem
+  has no provenance dep-vet can read.
 - **Release diffs are text-based.** `diff` compares extracted files by content
   and rule hits by (rule, file). It does not decompile compiled artifacts, and
   a minified rewrite can produce a large but harmless diff.

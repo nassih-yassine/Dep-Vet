@@ -233,6 +233,7 @@ fn parse_search(
         build_from_source: false,
         repository: None,
         deprecated: None,
+        provenance: crate::model::Provenance::Unavailable,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
@@ -296,6 +297,7 @@ fn google_meta(
         build_from_source: false,
         repository: None,
         deprecated: None,
+        provenance: crate::model::Provenance::Unavailable,
         registry_url: url.to_string(),
         review_url: Some(format!(
             "https://maven.google.com/web/index.html#{group}:{artifact}:{version}"

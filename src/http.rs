@@ -110,6 +110,15 @@ impl HttpClient {
         }
     }
 
+    /// True when the URL answers 2xx. Used for cheap existence checks
+    /// (provenance endpoints) where the body is irrelevant.
+    pub fn head(&self, url: &str) -> Result<bool, HttpError> {
+        match self.agent.head(url).call() {
+            Ok(response) => Ok((200..300).contains(&response.status().as_u16())),
+            Err(error) => Err(network_error(error, url)),
+        }
+    }
+
     pub fn post_json(&self, url: &str, body: &serde_json::Value) -> Result<String, HttpError> {
         let key = format!("POST {url}\n{body}");
         self.cached(&key, || self.fetch_post(url, body))

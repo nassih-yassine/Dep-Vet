@@ -246,6 +246,7 @@ mod tests {
             install_scripts: Vec::new(),
             repository: None,
             deprecated: None,
+            provenance: crate::model::Provenance::Unavailable,
             advisories: Vec::new(),
             hidden_advisories: 0,
             not_checked: Vec::new(),

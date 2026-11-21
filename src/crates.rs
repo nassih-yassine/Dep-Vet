@@ -212,6 +212,7 @@ fn parse_crate(
             .repository
             .filter(|url| !url.trim().is_empty()),
         deprecated,
+        provenance: crate::model::Provenance::Unavailable,
         registry_url: url.to_string(),
         review_url: None,
         latest_version,

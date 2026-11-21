@@ -718,6 +718,8 @@ pub struct PackageReport {
     pub install_scripts: Vec<InstallScript>,
     pub repository: Option<String>,
     pub deprecated: Option<String>,
+    /// Provenance presence, never a cryptographic verdict.
+    pub provenance: Provenance,
     pub advisories: Vec<Advisory>,
     /// Advisories skipped after the per-run cap.
     pub hidden_advisories: usize,
@@ -734,6 +736,17 @@ pub struct PackageReport {
     pub upgrades: Vec<Upgrade>,
     #[serde(serialize_with = "crate::report::serialize_findings")]
     pub findings: Vec<Finding>,
+}
+
+/// Whether a release publishes provenance, and whether we could read it.
+/// `present` never means cryptographically verified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provenance {
+    Present,
+    Missing,
+    #[default]
+    Unavailable,
 }
 
 /// How sure the rule is, separate from how bad the finding would be.
@@ -1203,6 +1216,7 @@ mod tests {
             install_scripts: vec![],
             repository: None,
             deprecated: None,
+            provenance: crate::model::Provenance::Unavailable,
             advisories: Vec::new(),
             hidden_advisories: 0,
             not_checked: Vec::new(),
