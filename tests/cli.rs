@@ -299,6 +299,117 @@ fn registry_and_osv(
 }
 
 #[test]
+fn guard_audits_named_packages() {
+    let package = PackageFixture::clean("guard-clean");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--json", "--", "npm i guard-clean"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"guard-clean\""))
+        .stdout(predicate::str::contains("\"verdict\":\"info\""));
+}
+
+#[test]
+fn guard_blocks_typosquats() {
+    let package = PackageFixture::clean("expresss");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--json", "--", "npm i expresss"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("typosquat"));
+}
+
+#[test]
+fn guard_warns_for_install_scripts() {
+    let package = PackageFixture {
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        ..PackageFixture::clean("scripty")
+    };
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--", "npm i scripty"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("install-scripts"));
+}
+
+#[test]
+fn guard_audits_every_named_package() {
+    let one = PackageFixture::clean("guard-one");
+    let two = PackageFixture::clean("guard-two");
+    let registry = registry_with(&[one, two], None);
+
+    registry
+        .command()
+        .args([
+            "guard",
+            "--check",
+            "--json",
+            "--",
+            "npm i -D guard-one guard-two",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("guard-one"))
+        .stdout(predicate::str::contains("guard-two"));
+}
+
+#[test]
+fn guard_says_when_nothing_was_vetted() {
+    let registry = registry_with(&[], None);
+    for command in [
+        "npm install",
+        "npm i https://example.test/thing.tgz",
+        "deno add npm:express",
+    ] {
+        registry
+            .command()
+            .args(["guard", "--check", "--", command])
+            .assert()
+            .code(3)
+            .stdout(predicate::str::contains("not checked"));
+    }
+}
+
+#[test]
+fn guard_is_incomplete_when_one_audit_fails() {
+    let package = PackageFixture::clean("guard-ok");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--", "npm i guard-ok guard-missing"])
+        .assert()
+        .code(3);
+}
+
+#[test]
+fn guard_ignores_commands_after_a_separator() {
+    let package = PackageFixture::clean("guard-safe");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["guard", "--check", "--", "npm i guard-safe; rm -rf /"])
+        .assert()
+        .code(0);
+
+    assert!(
+        !registry.requests().iter().any(|path| path.contains("rm")),
+        "{:?}",
+        registry.requests()
+    );
+}
+
+#[test]
 fn clean_package_exits_zero() {
     let package = PackageFixture::clean("clean-pkg");
     let registry = registry_with(&[package], Some(500_000));

@@ -74,6 +74,21 @@ pub enum Command {
         json: bool,
     },
 
+    /// Vet the packages an install command would fetch
+    Guard {
+        /// Audit the packages (otherwise only parse the command)
+        #[arg(long)]
+        check: bool,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+
+        /// The command to inspect, after `--`
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+
     /// Audit every package installed by a lockfile
     Audit {
         /// Path to package-lock.json

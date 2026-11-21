@@ -601,16 +601,20 @@ fn handle_segment(segment: &str, depth: u8, outcome: &mut ParseOutcome) {
             ),
             _ => {}
         },
-        "bun" => match rest.first().map(String::as_str) {
-            Some("install" | "add") => npm_like(
-                outcome,
-                segment,
-                &rest[1..],
-                IntentKind::Install,
-                "bun.lock",
-            ),
-            _ => {}
-        },
+        "bun" => {
+            if rest
+                .first()
+                .is_some_and(|verb| matches!(verb.as_str(), "install" | "add"))
+            {
+                npm_like(
+                    outcome,
+                    segment,
+                    &rest[1..],
+                    IntentKind::Install,
+                    "bun.lock",
+                );
+            }
+        }
         "bunx" => ephemeral(outcome, segment, rest, Ecosystem::Npm),
         "npx" => ephemeral(outcome, segment, rest, Ecosystem::Npm),
         "pip" | "pip3" => {

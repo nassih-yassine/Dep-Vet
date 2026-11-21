@@ -86,6 +86,12 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
 
     match &cli.command {
+        Command::Guard {
+            check,
+            json,
+            command,
+        } => run_guard(&auditor, &allowlist, *check, *json, &command.join(" ")),
+
         Command::Npm { package, json } => {
             let spec = PackageSpec::parse(package)?;
             // A lockfile in the current project is the same trusted-name list
@@ -638,6 +644,111 @@ impl Auditor {
             now,
         ))
     }
+}
+
+fn audit_intent(
+    auditor: &Auditor,
+    ecosystem: Ecosystem,
+    spec: &PackageSpec,
+    now: i64,
+) -> Result<PackageReport, String> {
+    let result: Result<PackageReport, String> = match ecosystem {
+        Ecosystem::Npm => auditor
+            .audit_npm(spec, &[], now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Pypi => auditor
+            .audit_pypi(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::CratesIo => auditor
+            .audit_crates(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Go => auditor
+            .audit_go(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Jsr => auditor
+            .audit_jsr(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::RubyGems => auditor
+            .audit_gem(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::NuGet => auditor
+            .audit_nuget(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Maven => auditor
+            .audit_maven(spec, now, None)
+            .map_err(|error| error.to_string()),
+        Ecosystem::Composer => auditor
+            .audit_composer(spec, now, None)
+            .map_err(|error| error.to_string()),
+    };
+    result
+}
+
+fn run_guard(
+    auditor: &Auditor,
+    allowlist: &dep_vet::allowlist::Allowlist,
+    check: bool,
+    json: bool,
+    command: &str,
+) -> anyhow::Result<u8> {
+    let parsed = dep_vet::intent::parse(command);
+    let specs: Vec<(Ecosystem, PackageSpec)> = parsed
+        .intents
+        .iter()
+        .flat_map(|intent| {
+            intent
+                .specs
+                .iter()
+                .cloned()
+                .map(move |spec| (intent.ecosystem, spec))
+        })
+        .collect();
+
+    let mut packages = Vec::new();
+    let mut errors = Vec::new();
+    if check {
+        let now = now_seconds();
+        for batch in specs.chunks(MAX_CONCURRENT_AUDITS) {
+            let outcomes: Vec<Result<PackageReport, String>> = std::thread::scope(|scope| {
+                let handles: Vec<_> = batch
+                    .iter()
+                    .map(|(ecosystem, spec)| {
+                        scope.spawn(move || audit_intent(auditor, *ecosystem, spec, now))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|_| Err("audit thread panicked".to_string()))
+                    })
+                    .collect()
+            });
+            for outcome in outcomes {
+                match outcome {
+                    Ok(report) => packages.push(report),
+                    Err(error) => errors.push(error),
+                }
+            }
+        }
+        for report in &mut packages {
+            allowlist.apply(report);
+        }
+    }
+
+    let report = dep_vet::guard::GuardReport {
+        command: command.to_string(),
+        parse: parsed,
+        packages,
+        errors,
+    };
+    let output = if json {
+        report.to_json()
+    } else {
+        report.to_human()
+    };
+    emit(&output, report.exit_code())
 }
 
 fn run_audit(
