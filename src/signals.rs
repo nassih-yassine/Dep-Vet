@@ -107,9 +107,13 @@ fn upgrade_advice(
     let current = leading_number(&meta.version);
     fixed.sort_by_key(|version| (leading_number(version) != current) as u8);
 
+    // The newest hint exists only to act on an advisory; on its own it would
+    // turn every report into an "out of date" nag.
+    let has_advisory = advisories.is_some_and(|list| !list.advisories.is_empty());
     let newest = meta
         .latest_version
         .clone()
+        .filter(|_| has_advisory)
         .filter(|version| *version != meta.version && !fixed.contains(version));
     let replace_with = suspect.map(|suspect| suspect.candidate.to_string());
 
@@ -676,6 +680,7 @@ mod tests {
     #[test]
     fn install_scripts_alone_produce_no_advice() {
         let mut meta = meta();
+        meta.latest_version = Some("9.9.9".to_string());
         meta.install_scripts.push(InstallScript {
             name: "postinstall".to_string(),
             command: "node setup.js".to_string(),
