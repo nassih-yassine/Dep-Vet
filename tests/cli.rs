@@ -2002,6 +2002,53 @@ fn a_failed_osv_batch_marks_every_package_incomplete() {
 }
 
 #[test]
+fn a_lookalike_more_popular_than_its_target_is_clean() {
+    let crossenv = PackageFixture::clean("crossenv");
+    let mut routes = HashMap::new();
+    routes.insert(crossenv.route(), (200, crossenv.to_json()));
+    routes.insert(
+        "/downloads/last-week/crossenv".to_string(),
+        (200, r#"{"downloads":3000000}"#.to_string()),
+    );
+    routes.insert(
+        "/downloads/last-week/cross-env".to_string(),
+        (200, r#"{"downloads":2000000}"#.to_string()),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["npm", "crossenv", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|finding| finding["id"] != "typosquat"),
+        "{}",
+        value["findings"]
+    );
+    assert!(
+        registry
+            .requests()
+            .iter()
+            .any(|path| path == "/downloads/last-week/cross-env"),
+        "the candidate's popularity was not checked: {:?}",
+        registry.requests()
+    );
+}
+
+#[test]
 fn a_deeply_popular_package_is_not_a_typosquat() {
     let package = PackageFixture::clean("next");
     let registry = registry_and_osv(&[package], Some(98_000_000), 200, "{}", None);

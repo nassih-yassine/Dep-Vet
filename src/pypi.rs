@@ -196,6 +196,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
+        candidate_weekly_downloads: None,
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
             previous_published_at: previous.map(|(_, time)| time),

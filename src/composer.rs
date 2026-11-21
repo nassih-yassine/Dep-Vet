@@ -162,6 +162,7 @@ fn parse_metadata(
         name: spec.name.clone(),
         version: release.version.clone(),
         latest_version: Some(latest(&releases).version.clone()),
+        candidate_weekly_downloads: None,
         release: crate::registry::ReleaseHistory {
             previous_version: previous.as_ref().map(|(previous, _)| previous.clone()),
             previous_published_at: previous.as_ref().map(|(_, time)| *time),

@@ -40,6 +40,9 @@ pub struct PackageMeta {
     pub review_url: Option<String>,
     /// Highest published stable version, when the client can tell.
     pub latest_version: Option<String>,
+    /// Weekly downloads of the popular name this package resembles, when npm
+    /// was asked. Lets the verdict compare the two instead of trusting a seed.
+    pub candidate_weekly_downloads: Option<u64>,
     /// The release before the audited one, when the client could tell.
     pub release: ReleaseHistory,
 }
@@ -381,6 +384,7 @@ fn parse_packument(
         registry_url: url.to_string(),
         review_url: None,
         latest_version,
+        candidate_weekly_downloads: None,
         release: ReleaseHistory {
             previous_version,
             previous_published_at: previous_time,

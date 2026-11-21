@@ -22,6 +22,9 @@ pub const DORMANCY_DAYS: i64 = 365;
 /// and always has holes (`next` was missing once), and the alternative is
 /// telling people to replace a framework with an unrelated test runner.
 pub const ESTABLISHED_WEEKLY_DOWNLOADS: u64 = 1_000_000;
+/// A misleading name this old is not the accidental-typo attack this signal
+/// exists for, in any ecosystem.
+pub const ESTABLISHED_AGE_DAYS: i64 = 5 * 365;
 
 pub fn report(
     meta: PackageMeta,
@@ -32,7 +35,15 @@ pub fn report(
     profile: Profile,
     now: i64,
 ) -> PackageReport {
-    let established = weekly_downloads.is_some_and(|count| count >= ESTABLISHED_WEEKLY_DOWNLOADS);
+    let outmatched = match (weekly_downloads, meta.candidate_weekly_downloads) {
+        (Some(own), Some(candidate)) => own >= candidate,
+        (Some(own), None) => own >= ESTABLISHED_WEEKLY_DOWNLOADS,
+        _ => false,
+    };
+    let aged = meta
+        .first_published_at
+        .is_some_and(|first| now - first >= ESTABLISHED_AGE_DAYS * date::SECONDS_PER_DAY);
+    let established = outmatched || aged;
     let mut findings = assess(&meta, ecosystem, local, &profile, now);
     if established {
         findings.retain(|finding| finding.id != "typosquat");
@@ -294,16 +305,15 @@ pub fn advisory_check_unavailable() -> Finding {
 
 /// The nearest popular name, when typosquatting is enabled. Called by `assess`
 /// for the finding and by `report` for the replacement advice.
-fn suspect_for<'a>(
-    meta: &PackageMeta,
-    ecosystem: Ecosystem,
-    local: &'a [String],
-    profile: &Profile,
-) -> Option<typosquat::Suspect<'a>> {
-    if !profile.typosquat {
-        return None;
-    }
-    let seed = match ecosystem {
+/// The popular name this package resembles, if any. Public so a client can ask
+/// npm how popular that name is before the verdict is rendered.
+pub fn typosquat_candidate(name: &str, ecosystem: Ecosystem, local: &[String]) -> Option<String> {
+    typosquat::closest(name, seed_for(ecosystem), local)
+        .map(|suspect| suspect.candidate.to_string())
+}
+
+fn seed_for(ecosystem: Ecosystem) -> &'static [&'static str] {
+    match ecosystem {
         Ecosystem::Npm => typosquat::popular_npm(),
         Ecosystem::Pypi => typosquat::POPULAR_PYPI,
         Ecosystem::CratesIo => typosquat::POPULAR_CRATES,
@@ -313,8 +323,19 @@ fn suspect_for<'a>(
         Ecosystem::NuGet => typosquat::POPULAR_NUGET,
         Ecosystem::Maven => typosquat::POPULAR_MAVEN,
         Ecosystem::Composer => typosquat::POPULAR_COMPOSER,
-    };
-    typosquat::closest(&meta.name, seed, local)
+    }
+}
+
+fn suspect_for<'a>(
+    meta: &PackageMeta,
+    ecosystem: Ecosystem,
+    local: &'a [String],
+    profile: &Profile,
+) -> Option<typosquat::Suspect<'a>> {
+    if !profile.typosquat {
+        return None;
+    }
+    typosquat::closest(&meta.name, seed_for(ecosystem), local)
 }
 
 pub fn assess(
@@ -766,6 +787,7 @@ mod tests {
             registry_url: "https://registry.npmjs.org/some-package".to_string(),
             review_url: None,
             latest_version: None,
+            candidate_weekly_downloads: None,
             release: crate::registry::ReleaseHistory::default(),
         }
     }
@@ -1021,6 +1043,93 @@ mod tests {
                 NOW
             ))
             .contains(&"release-after-dormancy")
+        );
+    }
+
+    #[test]
+    fn a_lookalike_more_popular_than_its_target_is_not_a_typo() {
+        let mut meta = meta();
+        meta.name = "next".to_string();
+        meta.candidate_weekly_downloads = Some(30_000_000);
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(98_000_000),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.id != "typosquat")
+        );
+    }
+
+    #[test]
+    fn a_quiet_lookalike_is_still_flagged() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+        meta.candidate_weekly_downloads = Some(30_000_000);
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(20_000),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "typosquat")
+        );
+    }
+
+    #[test]
+    fn unknown_counts_fall_back_to_the_absolute_guard() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+        let report = super::report(
+            meta,
+            Ecosystem::Npm,
+            Some(2_000_000),
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.id != "typosquat")
+        );
+    }
+
+    #[test]
+    fn a_six_year_old_name_is_not_an_accidental_typo() {
+        let mut meta = meta();
+        meta.name = "crossenv".to_string();
+        meta.first_published_at = Some(NOW - 6 * 365 * date::SECONDS_PER_DAY);
+        let report = super::report(
+            meta,
+            Ecosystem::Pypi,
+            None,
+            Some(&AdvisoryList::default()),
+            &[],
+            Profile::PYPI,
+            NOW,
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.id != "typosquat")
         );
     }
 
