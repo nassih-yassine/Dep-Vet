@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Batched audit lookups.** A tree audit sends one OSV `querybatch` per 500
+  packages (across ecosystems) and one npm downloads request per 128 names,
+  instead of one of each per package. A shared advisory is hydrated once, and
+  each package still gets its own fixed-version filtering. On a 122-package npm
+  tree this is 20.2 s → 4.9 s cold and 3.2–4.2 s → 0.07 s cached. A failed
+  batch marks its packages "advisory check unavailable", never clean. npm's
+  bulk downloads endpoint rejects scoped packages, so those stay one at a time.
+
 - **Progress bar.** The stderr progress line for `audit`/`lock` now fills a
   20-cell bar as packages finish, next to the count.
 

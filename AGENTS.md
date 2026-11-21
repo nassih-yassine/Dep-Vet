@@ -47,7 +47,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 380 unit + 103 end-to-end tests
+cargo test --locked                      # 386 unit + 106 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -254,6 +254,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   from the workflow), and the job has `actions: write`. If auto-merge is off,
   the PR waits for a human.
   Do not commit generated data by hand outside the script.
+- **Tree audits batch, single packages do not.** `advisories_for` sends one
+  `querybatch` per 500 packages (JSR excluded); `downloads_for` sends one npm
+  request per 128 unscoped names, with scoped names fetched singly because the
+  bulk endpoint rejects them. Names are validated before either becomes a URL.
+  A failed batch is `None` for its packages (unavailable, never clean). Keep the
+  per-package `Pre` path so `dep-vet npm foo` stays unchanged.
 - **Upgrade advice is evidence-shaped.** `Upgrade.fixed` comes only from OSV's
   `affected[].ranges[].events[].fixed`, filtered to the audited package's name;
   `newest` is a hint and never a fix. Never derive a fix from `latest_version`,

@@ -18,7 +18,7 @@ use dep_vet::model::{
     TOOL_ERROR_EXIT_CODE as TOOL_ERROR,
 };
 use dep_vet::nuget::{NugetClient, NugetError};
-use dep_vet::osv::OsvClient;
+use dep_vet::osv::{AdvisoryList, OsvClient, OsvQuery};
 use dep_vet::pypi::{PypiClient, PypiError};
 use dep_vet::registry::{RegistryClient, RegistryError};
 use dep_vet::report::{
@@ -27,6 +27,14 @@ use dep_vet::report::{
 };
 use dep_vet::rubygems::{GemClient, GemError};
 use dep_vet::signals;
+
+/// Lookups an audit already performed for a batch. `None` means fetch now,
+/// which is how single-package commands keep working unchanged.
+#[derive(Clone, Copy)]
+struct Pre<'a> {
+    downloads: Option<u64>,
+    advisories: Option<&'a AdvisoryList>,
+}
 
 /// Packages audited at once. Each one can fan out to a few OSV detail
 /// requests, so keep the burst small.
@@ -83,56 +91,56 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             // A lockfile in the current project is the same trusted-name list
             // the lock command uses; without one, the seed list stands alone.
             let local = local_candidates(cli);
-            let mut report = auditor.audit_npm(&spec, &local, now_seconds())?;
+            let mut report = auditor.audit_npm(&spec, &local, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Composer { package, json } => {
             let spec = PackageSpec::parse_composer(package)?;
-            let mut report = auditor.audit_composer(&spec, now_seconds())?;
+            let mut report = auditor.audit_composer(&spec, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Maven { package, json } => {
             let spec = PackageSpec::parse_maven(package)?;
-            let mut report = auditor.audit_maven(&spec, now_seconds())?;
+            let mut report = auditor.audit_maven(&spec, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Nuget { package, json } => {
             let spec = PackageSpec::parse_nuget(package)?;
-            let mut report = auditor.audit_nuget(&spec, now_seconds())?;
+            let mut report = auditor.audit_nuget(&spec, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Gem { package, json } => {
             let spec = PackageSpec::parse_gem(package)?;
-            let mut report = auditor.audit_gem(&spec, now_seconds())?;
+            let mut report = auditor.audit_gem(&spec, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Jsr { package, json } => {
             let spec = PackageSpec::parse_jsr(package)?;
-            let mut report = auditor.audit_jsr(&spec, now_seconds())?;
+            let mut report = auditor.audit_jsr(&spec, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Go { package, json } => {
             let spec = PackageSpec::parse_go(package)?;
-            let mut report = auditor.audit_go(&spec, now_seconds())?;
+            let mut report = auditor.audit_go(&spec, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
 
         Command::Crates { package, json } => {
             let spec = PackageSpec::parse_crates(package)?;
-            let mut report = auditor.audit_crates(&spec, now_seconds())?;
+            let mut report = auditor.audit_crates(&spec, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
@@ -140,7 +148,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         Command::Pypi { package, json } => {
             let spec = PackageSpec::parse_pypi(package)?;
             // PyPI has no lockfile parser yet, so only the seed list applies.
-            let mut report = auditor.audit_pypi(&spec, now_seconds())?;
+            let mut report = auditor.audit_pypi(&spec, now_seconds(), None)?;
             allowlist.apply(&mut report);
             emit_package(cli, *json, &report)
         }
@@ -278,15 +286,20 @@ impl Auditor {
         spec: &PackageSpec,
         local: &[String],
         now: i64,
+        pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, RegistryError> {
         let meta = self.registry.fetch(spec)?;
-        let downloads = self.registry.weekly_downloads(&meta.name);
-        // Advisories are best effort: a failure is reported as an INFO
-        // finding, never as "no known vulnerabilities".
-        let advisories = self
-            .osv
-            .query(Ecosystem::Npm, &meta.name, &meta.version)
-            .ok();
+        let (downloads, advisories) = match pre {
+            Some(pre) => (pre.downloads, pre.advisories.cloned()),
+            // Advisories are best effort: a failure is reported as an INFO
+            // finding, never as "no known vulnerabilities".
+            None => (
+                self.registry.weekly_downloads(&meta.name),
+                self.osv
+                    .query(Ecosystem::Npm, &meta.name, &meta.version)
+                    .ok(),
+            ),
+        };
         Ok(signals::report(
             meta,
             Ecosystem::Npm,
@@ -298,12 +311,64 @@ impl Auditor {
         ))
     }
 
-    fn audit_composer(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, ComposerError> {
+    /// Advisory lists for a whole tree, in package order. JSR has no advisory
+    /// source; a failed batch yields `None` for every package in it.
+    fn advisories_for(
+        &self,
+        ecosystem: Ecosystem,
+        packages: &[lockfile::LockedPackage],
+    ) -> Vec<Option<AdvisoryList>> {
+        if ecosystem == Ecosystem::Jsr || packages.is_empty() {
+            return vec![None; packages.len()];
+        }
+        let queries: Vec<OsvQuery> = packages
+            .iter()
+            .map(|package| OsvQuery {
+                ecosystem,
+                name: package.name.clone(),
+                version: package.version.clone(),
+            })
+            .collect();
+        match self.osv.query_batch(&queries) {
+            Ok(mut lists) => {
+                lists.resize(queries.len(), AdvisoryList::default());
+                lists.into_iter().map(Some).collect()
+            }
+            Err(_) => vec![None; packages.len()],
+        }
+    }
+
+    /// Weekly downloads for a tree, in package order. npm only.
+    fn downloads_for(
+        &self,
+        ecosystem: Ecosystem,
+        packages: &[lockfile::LockedPackage],
+    ) -> Vec<Option<u64>> {
+        if ecosystem != Ecosystem::Npm || packages.is_empty() {
+            return vec![None; packages.len()];
+        }
+        let names: Vec<String> = packages
+            .iter()
+            .map(|package| package.name.clone())
+            .collect();
+        let counts = self.registry.weekly_downloads_many(&names);
+        names.iter().map(|name| counts.get(name).copied()).collect()
+    }
+
+    fn audit_composer(
+        &self,
+        spec: &PackageSpec,
+        now: i64,
+        pre: Option<Pre<'_>>,
+    ) -> Result<PackageReport, ComposerError> {
         let meta = self.composer.fetch(spec)?;
-        let advisories = self
-            .osv
-            .query(Ecosystem::Composer, &meta.name, &meta.version)
-            .ok();
+        let advisories = match pre {
+            Some(pre) => pre.advisories.cloned(),
+            None => self
+                .osv
+                .query(Ecosystem::Composer, &meta.name, &meta.version)
+                .ok(),
+        };
         Ok(signals::report(
             meta,
             Ecosystem::Composer,
@@ -315,15 +380,23 @@ impl Auditor {
         ))
     }
 
-    fn audit_maven(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, MavenError> {
+    fn audit_maven(
+        &self,
+        spec: &PackageSpec,
+        now: i64,
+        pre: Option<Pre<'_>>,
+    ) -> Result<PackageReport, MavenError> {
         let meta = self.maven.fetch(spec)?;
         // A review override means the package came from Google Maven, which
         // OSV's Maven index does not cover.
         let google_maven = meta.review_url.is_some();
-        let advisories = self
-            .osv
-            .query(Ecosystem::Maven, &meta.name, &meta.version)
-            .ok();
+        let advisories = match pre {
+            Some(pre) => pre.advisories.cloned(),
+            None => self
+                .osv
+                .query(Ecosystem::Maven, &meta.name, &meta.version)
+                .ok(),
+        };
         let mut report = signals::report(
             meta,
             Ecosystem::Maven,
@@ -339,12 +412,20 @@ impl Auditor {
         Ok(report)
     }
 
-    fn audit_nuget(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, NugetError> {
+    fn audit_nuget(
+        &self,
+        spec: &PackageSpec,
+        now: i64,
+        pre: Option<Pre<'_>>,
+    ) -> Result<PackageReport, NugetError> {
         let meta = self.nuget.fetch(spec)?;
-        let advisories = self
-            .osv
-            .query(Ecosystem::NuGet, &meta.name, &meta.version)
-            .ok();
+        let advisories = match pre {
+            Some(pre) => pre.advisories.cloned(),
+            None => self
+                .osv
+                .query(Ecosystem::NuGet, &meta.name, &meta.version)
+                .ok(),
+        };
         Ok(signals::report(
             meta,
             Ecosystem::NuGet,
@@ -356,12 +437,20 @@ impl Auditor {
         ))
     }
 
-    fn audit_gem(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, GemError> {
+    fn audit_gem(
+        &self,
+        spec: &PackageSpec,
+        now: i64,
+        pre: Option<Pre<'_>>,
+    ) -> Result<PackageReport, GemError> {
         let meta = self.gems.fetch(spec)?;
-        let advisories = self
-            .osv
-            .query(Ecosystem::RubyGems, &meta.name, &meta.version)
-            .ok();
+        let advisories = match pre {
+            Some(pre) => pre.advisories.cloned(),
+            None => self
+                .osv
+                .query(Ecosystem::RubyGems, &meta.name, &meta.version)
+                .ok(),
+        };
         Ok(signals::report(
             meta,
             Ecosystem::RubyGems,
@@ -373,7 +462,12 @@ impl Auditor {
         ))
     }
 
-    fn audit_jsr(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, JsrError> {
+    fn audit_jsr(
+        &self,
+        spec: &PackageSpec,
+        now: i64,
+        _pre: Option<Pre<'_>>,
+    ) -> Result<PackageReport, JsrError> {
         let meta = self.jsr.fetch(spec)?;
         Ok(signals::report(
             meta,
@@ -386,12 +480,20 @@ impl Auditor {
         ))
     }
 
-    fn audit_go(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, GoError> {
+    fn audit_go(
+        &self,
+        spec: &PackageSpec,
+        now: i64,
+        pre: Option<Pre<'_>>,
+    ) -> Result<PackageReport, GoError> {
         let meta = self.go.fetch(spec)?;
-        let advisories = self
-            .osv
-            .query(Ecosystem::Go, &meta.name, &meta.version)
-            .ok();
+        let advisories = match pre {
+            Some(pre) => pre.advisories.cloned(),
+            None => self
+                .osv
+                .query(Ecosystem::Go, &meta.name, &meta.version)
+                .ok(),
+        };
         Ok(signals::report(
             meta,
             Ecosystem::Go,
@@ -403,12 +505,20 @@ impl Auditor {
         ))
     }
 
-    fn audit_crates(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, CratesError> {
+    fn audit_crates(
+        &self,
+        spec: &PackageSpec,
+        now: i64,
+        pre: Option<Pre<'_>>,
+    ) -> Result<PackageReport, CratesError> {
         let meta = self.crates.fetch(spec)?;
-        let advisories = self
-            .osv
-            .query(Ecosystem::CratesIo, &meta.name, &meta.version)
-            .ok();
+        let advisories = match pre {
+            Some(pre) => pre.advisories.cloned(),
+            None => self
+                .osv
+                .query(Ecosystem::CratesIo, &meta.name, &meta.version)
+                .ok(),
+        };
         Ok(signals::report(
             meta,
             Ecosystem::CratesIo,
@@ -420,12 +530,20 @@ impl Auditor {
         ))
     }
 
-    fn audit_pypi(&self, spec: &PackageSpec, now: i64) -> Result<PackageReport, PypiError> {
+    fn audit_pypi(
+        &self,
+        spec: &PackageSpec,
+        now: i64,
+        pre: Option<Pre<'_>>,
+    ) -> Result<PackageReport, PypiError> {
         let meta = self.pypi.fetch(spec)?;
-        let advisories = self
-            .osv
-            .query(Ecosystem::Pypi, &meta.name, &meta.version)
-            .ok();
+        let advisories = match pre {
+            Some(pre) => pre.advisories.cloned(),
+            None => self
+                .osv
+                .query(Ecosystem::Pypi, &meta.name, &meta.version)
+                .ok(),
+        };
         Ok(signals::report(
             meta,
             Ecosystem::Pypi,
@@ -503,6 +621,17 @@ fn spec_for(
     }
 }
 
+/// Index of a package inside the slice the pre-pass used. Lockfiles can repeat
+/// a name at different versions, so match both.
+fn package_index(
+    packages: &[lockfile::LockedPackage],
+    package: &lockfile::LockedPackage,
+) -> Option<usize> {
+    packages.iter().position(|candidate| {
+        candidate.name == package.name && candidate.version == package.version
+    })
+}
+
 fn audit_packages(
     auditor: &Auditor,
     ecosystem: Ecosystem,
@@ -521,6 +650,29 @@ fn audit_packages(
     );
     let mut progress = dep_vet::progress::Progress::new(packages.len(), draw);
 
+    // One OSV batch and one downloads batch for the whole tree. Only names
+    // that pass the same validation as the per-package path may become URLs.
+    let mut validated: Vec<(usize, lockfile::LockedPackage)> = Vec::new();
+    for (index, package) in packages.iter().enumerate() {
+        if spec_for(ecosystem, &package.name, &package.version).is_ok() {
+            validated.push((index, package.clone()));
+        }
+    }
+    let valid_packages: Vec<lockfile::LockedPackage> = validated
+        .iter()
+        .map(|(_, package)| package.clone())
+        .collect();
+    let lists = auditor.advisories_for(ecosystem, &valid_packages);
+    let counts = auditor.downloads_for(ecosystem, &valid_packages);
+    let mut advisories = vec![None; packages.len()];
+    let mut downloads = vec![None; packages.len()];
+    for ((index, _), list) in validated.iter().zip(lists) {
+        advisories[*index] = list;
+    }
+    for ((index, _), count) in validated.iter().zip(counts) {
+        downloads[*index] = count;
+    }
+
     let concurrency = if ecosystem == Ecosystem::Maven {
         MAVEN_CONCURRENCY
     } else {
@@ -530,7 +682,13 @@ fn audit_packages(
         let outcomes: Vec<Result<PackageReport, LockFetchError>> = std::thread::scope(|scope| {
             let handles: Vec<_> = batch
                 .iter()
-                .map(|package| {
+                .enumerate()
+                .map(|(offset, package)| {
+                    let index = package_index(packages, package).unwrap_or(offset);
+                    let pre = Pre {
+                        downloads: downloads.get(index).copied().flatten(),
+                        advisories: advisories.get(index).and_then(Option::as_ref),
+                    };
                     (
                         package,
                         scope.spawn(move || {
@@ -543,31 +701,31 @@ fn audit_packages(
                                 })?;
                             let audited = match ecosystem {
                                 Ecosystem::Npm => auditor
-                                    .audit_npm(&spec, local, now)
+                                    .audit_npm(&spec, local, now, Some(pre))
                                     .map_err(|e| e.to_string()),
-                                Ecosystem::Pypi => {
-                                    auditor.audit_pypi(&spec, now).map_err(|e| e.to_string())
-                                }
-                                Ecosystem::CratesIo => {
-                                    auditor.audit_crates(&spec, now).map_err(|e| e.to_string())
-                                }
-                                Ecosystem::Go => {
-                                    auditor.audit_go(&spec, now).map_err(|e| e.to_string())
-                                }
-                                Ecosystem::Jsr => {
-                                    auditor.audit_jsr(&spec, now).map_err(|e| e.to_string())
-                                }
-                                Ecosystem::RubyGems => {
-                                    auditor.audit_gem(&spec, now).map_err(|e| e.to_string())
-                                }
-                                Ecosystem::NuGet => {
-                                    auditor.audit_nuget(&spec, now).map_err(|e| e.to_string())
-                                }
-                                Ecosystem::Maven => {
-                                    auditor.audit_maven(&spec, now).map_err(|e| e.to_string())
-                                }
+                                Ecosystem::Pypi => auditor
+                                    .audit_pypi(&spec, now, Some(pre))
+                                    .map_err(|e| e.to_string()),
+                                Ecosystem::CratesIo => auditor
+                                    .audit_crates(&spec, now, Some(pre))
+                                    .map_err(|e| e.to_string()),
+                                Ecosystem::Go => auditor
+                                    .audit_go(&spec, now, Some(pre))
+                                    .map_err(|e| e.to_string()),
+                                Ecosystem::Jsr => auditor
+                                    .audit_jsr(&spec, now, Some(pre))
+                                    .map_err(|e| e.to_string()),
+                                Ecosystem::RubyGems => auditor
+                                    .audit_gem(&spec, now, Some(pre))
+                                    .map_err(|e| e.to_string()),
+                                Ecosystem::NuGet => auditor
+                                    .audit_nuget(&spec, now, Some(pre))
+                                    .map_err(|e| e.to_string()),
+                                Ecosystem::Maven => auditor
+                                    .audit_maven(&spec, now, Some(pre))
+                                    .map_err(|e| e.to_string()),
                                 Ecosystem::Composer => auditor
-                                    .audit_composer(&spec, now)
+                                    .audit_composer(&spec, now, Some(pre))
                                     .map_err(|e| e.to_string()),
                             };
                             audited.map_err(|message| LockFetchError {

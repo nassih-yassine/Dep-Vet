@@ -115,25 +115,89 @@ impl RegistryClient {
 
     /// Best effort: download counts are a nice-to-have, never a reason to fail.
     pub fn weekly_downloads(&self, name: &str) -> Option<u64> {
-        let url = format!(
-            "{}/last-week/{}",
-            self.downloads_base.trim_end_matches('/'),
-            encode_name(name)
-        );
-        let body = self.http.get(&url).ok()?;
-        #[derive(Deserialize)]
-        struct Downloads {
-            downloads: u64,
+        let names = [name.to_string()];
+        self.weekly_downloads_many(&names).remove(name)
+    }
+
+    /// Weekly downloads for many packages. The endpoint takes up to 128
+    /// comma-separated names; names absent from a response are absent here.
+    pub fn weekly_downloads_many(
+        &self,
+        names: &[String],
+    ) -> std::collections::HashMap<String, u64> {
+        let mut downloads = std::collections::HashMap::new();
+        // npm's bulk endpoint rejects scoped packages ("not currently
+        // supported in bulk lookups"), so those go one at a time.
+        let bulk: Vec<String> = names
+            .iter()
+            .filter(|name| !is_scoped(name))
+            .cloned()
+            .collect();
+        for chunk in bulk.chunks(MAX_DOWNLOAD_NAMES) {
+            downloads.extend(self.download_chunk(chunk));
         }
-        serde_json::from_str::<Downloads>(&body)
-            .ok()
-            .map(|downloads| downloads.downloads)
+        for name in names.iter().filter(|name| is_scoped(name)) {
+            downloads.extend(self.download_chunk(std::slice::from_ref(name)));
+        }
+        downloads
+    }
+
+    fn download_chunk(&self, names: &[String]) -> std::collections::HashMap<String, u64> {
+        let url = format!(
+            "{}/{}",
+            self.downloads_base.trim_end_matches('/'),
+            downloads_path(names)
+        );
+        match self.http.get(&url) {
+            Ok(body) => parse_downloads(&body, names),
+            Err(_) => std::collections::HashMap::new(),
+        }
     }
 }
 
 /// Scoped names travel as one path segment: `@scope%2Fname`.
 fn encode_name(name: &str) -> String {
     name.replace('/', "%2F")
+}
+
+/// The npm downloads API accepts at most 128 names per request, and none of
+/// them may be scoped.
+pub const MAX_DOWNLOAD_NAMES: usize = 128;
+
+fn is_scoped(name: &str) -> bool {
+    name.starts_with('@')
+}
+
+/// npm answers a bare `{downloads}` object for one name and a map keyed by
+/// package for several; accept both.
+fn parse_downloads(body: &str, requested: &[String]) -> std::collections::HashMap<String, u64> {
+    let mut downloads = std::collections::HashMap::new();
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return downloads;
+    };
+    if let Some(count) = value.get("downloads").and_then(serde_json::Value::as_u64) {
+        if let Some(name) = requested.first() {
+            downloads.insert(name.clone(), count);
+        }
+        return downloads;
+    }
+    if let Some(rows) = value.as_object() {
+        for (name, row) in rows {
+            if let Some(count) = row.get("downloads").and_then(serde_json::Value::as_u64) {
+                downloads.insert(name.clone(), count);
+            }
+        }
+    }
+    downloads
+}
+
+fn downloads_path(names: &[String]) -> String {
+    let joined = names
+        .iter()
+        .map(|name| encode_name(name))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("last-week/{joined}")
 }
 
 pub fn package_page_url(name: &str, version: &str) -> String {
@@ -346,6 +410,41 @@ mod tests {
             }
         }
     }"#;
+
+    #[test]
+    fn scoped_names_are_not_sent_to_the_bulk_endpoint() {
+        assert!(is_scoped("@types/node"));
+        assert!(!is_scoped("chalk"));
+    }
+
+    #[test]
+    fn downloads_parse_both_response_shapes() {
+        // One name: npm answers a bare object.
+        let single = parse_downloads(
+            r#"{"downloads":42,"package":"chalk"}"#,
+            &["chalk".to_string()],
+        );
+        assert_eq!(single.get("chalk"), Some(&42));
+
+        // Several names: npm answers an object keyed by package.
+        let many = parse_downloads(
+            r#"{"chalk":{"downloads":7},"express":{"downloads":9}}"#,
+            &["chalk".to_string(), "express".to_string()],
+        );
+        assert_eq!(many.get("chalk"), Some(&7));
+        assert_eq!(many.get("express"), Some(&9));
+
+        assert!(parse_downloads("{}", &["chalk".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn download_batches_join_encoded_names() {
+        assert_eq!(
+            downloads_path(&["chalk".to_string(), "@types/node".to_string()]),
+            "last-week/chalk,@types%2Fnode"
+        );
+        assert_eq!(MAX_DOWNLOAD_NAMES, 128);
+    }
 
     #[test]
     fn reports_the_latest_tag_as_latest_version() {

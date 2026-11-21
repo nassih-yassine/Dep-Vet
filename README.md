@@ -541,6 +541,10 @@ clean.
   against the base lockfile; `dep-vet npm` uses the nearest `package-lock.json`
   when one exists, and `--no-local` turns that off. Either way the seed list is
   also consulted.
+- **Tree audits batch their lookups.** One OSV query per 500 packages and one
+  npm downloads request per 128 names; a failed batch makes those packages
+  "could not check" rather than clean. Single-package commands still fetch
+  their own.
 - **Advisories describe this version, not your tree.** `dep-vet npm` answers for
   the package you named, `dep-vet lock` for the `name@version` pairs a change
   adds, and `dep-vet audit` for every installed package — never for the
