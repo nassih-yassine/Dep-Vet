@@ -1663,11 +1663,112 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 #[test]
 fn audit_rejects_unknown_lockfile_formats() {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("poetry.lock"), "").unwrap();
+    std::fs::write(directory.path().join("yarn.lock"), "").unwrap();
     binary()
         .current_dir(directory.path())
-        .args(["audit", "poetry.lock"])
+        .args(["audit", "yarn.lock"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("unsupported lockfile"));
+}
+
+#[test]
+fn audit_reads_poetry_lock() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("poetry.lock"),
+        r#"
+[[package]]
+name = "flask"
+version = "3.1.0"
+description = "A simple framework"
+optional = false
+python-versions = ">=3.9"
+"#,
+    )
+    .unwrap();
+
+    let registry = pypi_registry("flask", PYPI_WHEEL);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "poetry.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"][0]["name"], "flask");
+    assert_eq!(value["packages"][0]["ecosystem"], "pypi");
+}
+
+#[test]
+fn audit_reads_uv_lock_and_ignores_the_local_project() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("uv.lock"),
+        r#"
+version = 1
+
+[[package]]
+name = "flask"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "my-project"
+version = "0.1.0"
+source = { editable = "." }
+"#,
+    )
+    .unwrap();
+
+    let registry = pypi_registry("flask", PYPI_WHEEL);
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "uv.lock", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(value["packages"][0]["name"], "flask");
+}
+
+#[test]
+fn lock_diffs_a_poetry_lock_against_a_ref() {
+    let repo = Repo::new();
+    repo.write(
+        "poetry.lock",
+        r#"
+[[package]]
+name = "flask"
+version = "3.0.0"
+"#,
+    );
+    repo.commit("base");
+    repo.write(
+        "poetry.lock",
+        r#"
+[[package]]
+name = "flask"
+version = "3.1.0"
+"#,
+    );
+
+    let registry = pypi_registry("flask", PYPI_WHEEL);
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["lock", "poetry.lock", "--base", "HEAD"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("1 new package"))
+        .stdout(predicate::str::contains("flask@3.1.0"));
 }

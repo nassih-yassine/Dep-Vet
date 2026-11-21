@@ -118,6 +118,8 @@ dep-vet audit package-lock.json      # npm
 dep-vet audit requirements.txt       # PyPI, exact pins only
 dep-vet audit Cargo.lock             # crates.io
 dep-vet audit go.mod                 # Go
+dep-vet audit poetry.lock            # PyPI via Poetry
+dep-vet audit uv.lock                # PyPI via uv
 ```
 
 Vets **every** package the lockfile installs, not just the diff, and reports the
@@ -132,6 +134,8 @@ What each format contributes, and what it cannot:
 | `requirements*.txt` | `name==version` pins, extras stripped | unpinned lines, URLs, `-r`/`-e` options |
 | `Cargo.lock` | registry packages | git dependencies (not on crates.io) |
 | `go.mod` | `require` entries, blocks and single lines | unreadable require lines; `replace` is ignored |
+| `poetry.lock` | PyPI packages | git/path/URL sources |
+| `uv.lock` | PyPI packages, editable/virtual entries ignored | git/URL sources |
 
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
@@ -359,8 +363,7 @@ clean.
 - **npm, PyPI, crates.io, and Go**, for both `audit` and `lock`. Bun, pnpm, and
   yarn install from the same npm registry, so npm vetting is accurate for them,
   but their own lockfile formats (`bun.lock`, `pnpm-lock.yaml`, `yarn.lock`) are
-  not parsed. Poetry and uv lockfiles are not parsed either; point `audit` at a
-  `requirements.txt` export instead.
+  not parsed yet.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the
@@ -437,7 +440,7 @@ did.
 
 1. Download-ranked seed for `dep-vet npm`; lockfile checks already compare
    against your own dependencies.
-2. Lockfile parsing for `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, Poetry, uv.
+2. Lockfile parsing for `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`.
 
 ## License
 
