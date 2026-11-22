@@ -640,6 +640,24 @@ Licenses, download locations, and provenance are not in a lockfile, so they are
 omitted or marked `NOASSERTION`; dep-vet does not fetch them for an SBOM. Both
 outputs are validated against the official CycloneDX 1.5 and SPDX 2.3 schemas.
 
+### Outbound URLs
+
+Archive and provenance URLs come from registry JSON, so they are treated as
+untrusted. dep-vet only fetches `https` URLs from the ecosystem's known hosts
+(npm's `registry.npmjs.org`, PyPI's `files.pythonhosted.org`, and so on),
+refuses credentials, non-default ports, private/loopback/link-local IP
+literals, and cloud metadata addresses, and returns exit `3` with the host named
+when a URL is refused. Redirects are followed manually, at most three, with the
+same checks on every hop and no `https`-to-`http` downgrade. DNS answers are
+filtered before connecting, so a hostname that suddenly resolves to a private
+address is refused rather than reached.
+
+`DEPVET_*_BASE` overrides are dev-only: they require
+`DEPVET_ALLOW_INSECURE_BASES=1` or `--dev-registry`, and then apply only to that
+exact host and port. Reports are marked `unofficial_registry: true` and a
+warning goes to stderr. The full allowlist and rules are in
+[SECURITY.md](SECURITY.md#outbound-url-policy).
+
 ### Exit codes
 
 | Code | Meaning |

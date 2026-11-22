@@ -55,12 +55,13 @@ impl MockRegistry {
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                let Some((path, body)) = read_request(&mut stream) else {
+                let Some((path, body, headers)) = read_request(&mut stream) else {
                     continue;
                 };
                 recorded.lock().unwrap().push(RecordedRequest {
                     path: path.clone(),
                     body,
+                    headers,
                 });
                 let (status, body) = {
                     let mut state = state.lock().unwrap();
@@ -93,6 +94,52 @@ impl MockRegistry {
         Self { base, requests }
     }
 
+    fn start_replies(build: impl FnOnce(&str) -> HashMap<String, Reply>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
+        let port = listener.local_addr().unwrap().port();
+        let base = format!("http://127.0.0.1:{port}");
+        let routes = build(&base);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&requests);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let Some((path, body, headers)) = read_request(&mut stream) else {
+                    continue;
+                };
+                recorded.lock().unwrap().push(RecordedRequest {
+                    path: path.clone(),
+                    body,
+                    headers,
+                });
+                let reply = routes.get(&path).cloned().unwrap_or(Reply {
+                    status: 404,
+                    body: b"{\"error\":\"Not found\"}".to_vec(),
+                    headers: Vec::new(),
+                });
+                let reason = match reply.status {
+                    200 => "OK",
+                    302 => "Found",
+                    _ => "Error",
+                };
+                let extra = reply
+                    .headers
+                    .iter()
+                    .map(|(name, value)| format!("{name}: {value}\r\n"))
+                    .collect::<String>();
+                let header = format!(
+                    "HTTP/1.1 {} {reason}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n",
+                    reply.status,
+                    reply.body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&reply.body);
+                let _ = stream.flush();
+            }
+        });
+        Self { base, requests }
+    }
+
     fn start_binary(routes: HashMap<String, (u16, Vec<u8>)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
         let port = listener.local_addr().unwrap().port();
@@ -106,12 +153,13 @@ impl MockRegistry {
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
-                let Some((path, body)) = read_request(&mut stream) else {
+                let Some((path, body, headers)) = read_request(&mut stream) else {
                     continue;
                 };
                 recorded.lock().unwrap().push(RecordedRequest {
                     path: path.clone(),
                     body,
+                    headers,
                 });
                 let (status, body) = routes
                     .get(&path)
@@ -137,8 +185,13 @@ impl MockRegistry {
     }
 
     fn command(&self) -> Command {
+        self.command_with(&[])
+    }
+
+    fn command_with(&self, extra: &[(&str, &str)]) -> Command {
         let mut command = Command::cargo_bin("dep-vet").unwrap();
         command
+            .env("DEPVET_ALLOW_INSECURE_BASES", "1")
             .env("DEPVET_REGISTRY_BASE", &self.base)
             .env("DEPVET_DOWNLOADS_BASE", format!("{}/downloads", self.base))
             .env("DEPVET_OSV_BASE", &self.base)
@@ -155,6 +208,9 @@ impl MockRegistry {
             .env("DEPVET_NO_CACHE", "1")
             .env("DEPVET_HOOK_TEST_BASE", &self.base)
             .env("NO_COLOR", "1");
+        for (key, value) in extra {
+            command.env(key, value);
+        }
         command
     }
 
@@ -181,9 +237,19 @@ impl MockRegistry {
 struct RecordedRequest {
     path: String,
     body: String,
+    headers: Vec<(String, String)>,
 }
 
-fn read_request(stream: &mut TcpStream) -> Option<(String, String)> {
+#[derive(Clone)]
+struct Reply {
+    status: u16,
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+}
+
+type RequestParts = (String, String, Vec<(String, String)>);
+
+fn read_request(stream: &mut TcpStream) -> Option<RequestParts> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 1024];
     let header_end = loop {
@@ -221,7 +287,15 @@ fn read_request(stream: &mut TcpStream) -> Option<(String, String)> {
     let body =
         String::from_utf8_lossy(&buffer[header_end..(header_end + length).min(buffer.len())])
             .to_string();
-    Some((path, body))
+    let headers = head
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_ascii_lowercase(), value.trim().to_string()))
+        })
+        .collect();
+    Some((path, body, headers))
 }
 
 fn days_ago(days: i64) -> String {
@@ -797,6 +871,7 @@ fn hook_ignores_agent_registry_overrides() {
     let registry = registry_with(&[package], None);
     let output = registry
         .command()
+        .env("DEPVET_ALLOW_INSECURE_BASES", "1")
         .env("DEPVET_REGISTRY_BASE", "http://127.0.0.1:9")
         .env("DEPVET_OSV_BASE", "http://127.0.0.1:9")
         .env("DEPVET_DOWNLOADS_BASE", "http://127.0.0.1:9")
@@ -841,6 +916,7 @@ fn hook_times_out_and_allows() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     let mut command = Command::cargo_bin("dep-vet").unwrap();
     command
+        .env("DEPVET_ALLOW_INSECURE_BASES", "1")
         .env("DEPVET_REGISTRY_BASE", &base)
         .env("DEPVET_DOWNLOADS_BASE", format!("{base}/downloads"))
         .env("DEPVET_OSV_BASE", &base)
@@ -861,6 +937,7 @@ fn hook_times_out_and_allows() {
 
     let mut strict = Command::cargo_bin("dep-vet").unwrap();
     strict
+        .env("DEPVET_ALLOW_INSECURE_BASES", "1")
         .env("DEPVET_REGISTRY_BASE", &base)
         .env("DEPVET_DOWNLOADS_BASE", format!("{base}/downloads"))
         .env("DEPVET_OSV_BASE", &base)
@@ -914,6 +991,7 @@ fn mcp_session_in(
     let mut child = Process::new(assert_cmd::cargo::cargo_bin("dep-vet"));
     child
         .arg("mcp")
+        .env("DEPVET_ALLOW_INSECURE_BASES", "1")
         .env("DEPVET_REGISTRY_BASE", &registry.base)
         .env(
             "DEPVET_DOWNLOADS_BASE",
@@ -4704,6 +4782,423 @@ fn inspect_rejects_a_zip_that_expands_past_the_configured_cap() {
     );
 }
 
+fn npm_policy_document(
+    name: &str,
+    version: &str,
+    tarball: &str,
+    archive: &[u8],
+    attestation: Option<&str>,
+) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(archive));
+    let attestations = attestation
+        .map(|url| format!(r#","attestations":{{"url":"{url}"}}"#))
+        .unwrap_or_default();
+    format!(
+        r#"{{"name":"{name}","version":"{version}","dist":{{"tarball":"{tarball}","integrity":"sha512-{digest}"{attestations}}}}}"#
+    )
+}
+
+#[test]
+fn inspect_refuses_private_and_loopback_archive_urls() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    for (url, host) in [
+        ("http://169.254.169.254/pkg.tgz", "169.254.169.254"),
+        ("http://127.0.0.1/pkg.tgz", "127.0.0.1"),
+        ("http://[::1]/pkg.tgz", "[::1]"),
+        ("http://10.0.0.1/pkg.tgz", "10.0.0.1"),
+        ("http://[::ffff:10.0.0.1]/pkg.tgz", "::ffff:10.0.0.1"),
+    ] {
+        let document = npm_policy_document("pkg", "1.0.0", url, &archive, None);
+        let registry = MockRegistry::start_with(move |_base| {
+            HashMap::from([("/pkg/1.0.0".to_string(), (200, document.into_bytes()))])
+        });
+        registry
+            .command()
+            .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+            .assert()
+            .code(3)
+            .stderr(predicate::str::contains(host));
+    }
+}
+
+#[test]
+fn inspect_refuses_an_untrusted_archive_host() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let document = npm_policy_document(
+        "pkg",
+        "1.0.0",
+        "https://evil.example/pkg.tgz",
+        &archive,
+        None,
+    );
+    let registry = MockRegistry::start_with(move |_base| {
+        HashMap::from([("/pkg/1.0.0".to_string(), (200, document.into_bytes()))])
+    });
+    registry
+        .command()
+        .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("archive host not trusted for npm"));
+}
+
+#[test]
+fn inspect_refuses_private_and_http_attestation_urls() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    for (attestation, host) in [
+        ("http://169.254.169.254/attest", "169.254.169.254"),
+        ("http://127.0.0.1/attest", "127.0.0.1"),
+        ("https://evil.example/attest", "evil.example"),
+    ] {
+        let archive = archive.clone();
+        let registry = MockRegistry::start_with(move |base| {
+            let document = npm_policy_document(
+                "pkg",
+                "1.0.0",
+                &format!("{base}/pkg.tgz"),
+                &archive,
+                Some(attestation),
+            );
+            HashMap::from([
+                ("/pkg/1.0.0".to_string(), (200, document.into_bytes())),
+                ("/pkg.tgz".to_string(), (200, archive.clone())),
+            ])
+        });
+        registry
+            .command()
+            .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+            .assert()
+            .code(3)
+            .stderr(predicate::str::contains(host));
+    }
+}
+
+#[test]
+fn inspect_follows_a_relative_redirect_but_not_more_than_three() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_replies({
+        let archive = archive.clone();
+        move |base| {
+            let document =
+                npm_policy_document("pkg", "1.0.0", &format!("{base}/start"), &archive, None);
+            HashMap::from([
+                (
+                    "/pkg/1.0.0".to_string(),
+                    Reply {
+                        status: 200,
+                        body: document.into_bytes(),
+                        headers: Vec::new(),
+                    },
+                ),
+                (
+                    "/start".to_string(),
+                    Reply {
+                        status: 302,
+                        body: Vec::new(),
+                        headers: vec![("Location".to_string(), "/final".to_string())],
+                    },
+                ),
+                (
+                    "/final".to_string(),
+                    Reply {
+                        status: 200,
+                        body: archive,
+                        headers: Vec::new(),
+                    },
+                ),
+            ])
+        }
+    });
+    registry
+        .command()
+        .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(0);
+
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_replies({
+        let archive = archive.clone();
+        move |base| {
+            let document =
+                npm_policy_document("pkg", "1.0.0", &format!("{base}/start"), &archive, None);
+            HashMap::from([
+                (
+                    "/pkg/1.0.0".to_string(),
+                    Reply {
+                        status: 200,
+                        body: document.into_bytes(),
+                        headers: Vec::new(),
+                    },
+                ),
+                (
+                    "/start".to_string(),
+                    Reply {
+                        status: 302,
+                        body: Vec::new(),
+                        headers: vec![("Location".to_string(), "/r1".to_string())],
+                    },
+                ),
+                (
+                    "/r1".to_string(),
+                    Reply {
+                        status: 302,
+                        body: Vec::new(),
+                        headers: vec![("Location".to_string(), "/r2".to_string())],
+                    },
+                ),
+                (
+                    "/r2".to_string(),
+                    Reply {
+                        status: 302,
+                        body: Vec::new(),
+                        headers: vec![("Location".to_string(), "/r3".to_string())],
+                    },
+                ),
+                (
+                    "/r3".to_string(),
+                    Reply {
+                        status: 302,
+                        body: Vec::new(),
+                        headers: vec![("Location".to_string(), "/final".to_string())],
+                    },
+                ),
+                (
+                    "/final".to_string(),
+                    Reply {
+                        status: 200,
+                        body: archive,
+                        headers: Vec::new(),
+                    },
+                ),
+            ])
+        }
+    });
+    registry
+        .command()
+        .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("more than 3 redirects"));
+}
+
+#[test]
+fn inspect_stops_a_redirect_loop() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_replies(move |base| {
+        let document =
+            npm_policy_document("pkg", "1.0.0", &format!("{base}/start"), &archive, None);
+        HashMap::from([
+            (
+                "/pkg/1.0.0".to_string(),
+                Reply {
+                    status: 200,
+                    body: document.into_bytes(),
+                    headers: Vec::new(),
+                },
+            ),
+            (
+                "/start".to_string(),
+                Reply {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![("Location".to_string(), "/start".to_string())],
+                },
+            ),
+        ])
+    });
+    registry
+        .command()
+        .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("more than 3 redirects"));
+}
+
+#[test]
+fn inspect_refuses_a_redirect_to_a_private_address() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_replies(move |base| {
+        let document =
+            npm_policy_document("pkg", "1.0.0", &format!("{base}/start"), &archive, None);
+        HashMap::from([
+            (
+                "/pkg/1.0.0".to_string(),
+                Reply {
+                    status: 200,
+                    body: document.into_bytes(),
+                    headers: Vec::new(),
+                },
+            ),
+            (
+                "/start".to_string(),
+                Reply {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![(
+                        "Location".to_string(),
+                        "http://169.254.169.254/".to_string(),
+                    )],
+                },
+            ),
+        ])
+    });
+    registry
+        .command()
+        .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("169.254.169.254"));
+}
+
+#[test]
+fn a_cross_host_redirect_does_not_forward_credentials() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let target_archive = archive.clone();
+    let target = MockRegistry::start_replies(move |_base| {
+        HashMap::from([(
+            "/final".to_string(),
+            Reply {
+                status: 200,
+                body: target_archive,
+                headers: Vec::new(),
+            },
+        )])
+    });
+    let source = MockRegistry::start_replies({
+        let archive = archive.clone();
+        let target = target.base.clone();
+        move |base| {
+            let document =
+                npm_policy_document("pkg", "1.0.0", &format!("{base}/start"), &archive, None);
+            HashMap::from([
+                (
+                    "/pkg/1.0.0".to_string(),
+                    Reply {
+                        status: 200,
+                        body: document.into_bytes(),
+                        headers: Vec::new(),
+                    },
+                ),
+                (
+                    "/start".to_string(),
+                    Reply {
+                        status: 302,
+                        body: Vec::new(),
+                        headers: vec![("Location".to_string(), format!("{target}/final"))],
+                    },
+                ),
+            ])
+        }
+    });
+    source
+        .command_with(&[("DEPVET_PYPI_BASE", target.base.as_str())])
+        .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(0);
+    let headers = &target.requests.lock().unwrap()[0].headers;
+    assert!(
+        !headers.iter().any(|(name, _)| name == "authorization"),
+        "{headers:?}"
+    );
+}
+
+#[test]
+fn a_redirected_attestation_url_is_checked_too() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_replies(move |base| {
+        let document = npm_policy_document(
+            "pkg",
+            "1.0.0",
+            &format!("{base}/pkg.tgz"),
+            &archive,
+            Some(&format!("{base}/attest")),
+        );
+        HashMap::from([
+            (
+                "/pkg/1.0.0".to_string(),
+                Reply {
+                    status: 200,
+                    body: document.into_bytes(),
+                    headers: Vec::new(),
+                },
+            ),
+            (
+                "/pkg.tgz".to_string(),
+                Reply {
+                    status: 200,
+                    body: archive,
+                    headers: Vec::new(),
+                },
+            ),
+            (
+                "/attest".to_string(),
+                Reply {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![("Location".to_string(), "http://10.0.0.1/x".to_string())],
+                },
+            ),
+        ])
+    });
+    registry
+        .command()
+        .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("10.0.0.1"));
+}
+
+#[test]
+fn dev_overrides_require_the_gate_and_are_marked_in_reports() {
+    let registry = MockRegistry::start(HashMap::new());
+    registry
+        .command()
+        .env_remove("DEPVET_ALLOW_INSECURE_BASES")
+        .args(["npm", "pkg-a"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("DEPVET_ALLOW_INSECURE_BASES"));
+
+    let package = PackageFixture::clean("pkg-a");
+    let registry =
+        MockRegistry::start(HashMap::from([(package.route(), (200, package.to_json()))]));
+    let output = registry
+        .command()
+        .env_remove("DEPVET_ALLOW_INSECURE_BASES")
+        .args(["--dev-registry", "npm", "pkg-a", "--json"])
+        .assert()
+        .code(0)
+        .stderr(predicate::str::contains("unofficial registry"))
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["unofficial_registry"], true);
+    let stderr = String::from_utf8(
+        registry
+            .command()
+            .env_remove("DEPVET_ALLOW_INSECURE_BASES")
+            .args(["--dev-registry", "npm", "pkg-a"])
+            .assert()
+            .code(0)
+            .get_output()
+            .stderr
+            .clone(),
+    )
+    .unwrap();
+    assert_eq!(stderr.matches("unofficial registry").count(), 1, "{stderr}");
+
+    registry
+        .command()
+        .env_remove("DEPVET_ALLOW_INSECURE_BASES")
+        .args(["--dev-registry", "npm", "pkg-a"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("UNOFFICIAL REGISTRY"));
+}
+
 fn inspect_npm_routes(
     base: &str,
     archive: &[u8],
@@ -5793,6 +6288,7 @@ fn watch_reruns_after_the_lockfile_changes() {
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_dep-vet"))
         .current_dir(directory.path())
         .args(["watch", "package-lock.json"])
+        .env("DEPVET_ALLOW_INSECURE_BASES", "1")
         .env("DEPVET_REGISTRY_BASE", &registry.base)
         .env(
             "DEPVET_DOWNLOADS_BASE",

@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 574 unit + 183 end-to-end tests
+cargo test --locked                      # 581 unit + 192 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -426,6 +426,17 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **`lock` exits 3 when any added package could not be checked**, even if the
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.
+- **Outbound URLs are policy-checked.** `src/netpolicy.rs` validates archive and
+  provenance URLs: https, no userinfo, default ports, ASCII/punycode hosts, an
+  ecosystem allowlist, and public-only IP literals. Composer allows Packagist's
+  known dist code hosts. `HttpClient` uses a custom `PublicOnlyResolver` that
+  filters DNS answers before connect; archive requests use a separate agent with
+  `max_redirects(0)` and manual validation of at most three hops (relative
+  locations resolved, downgrade refused). `DEPVET_*_BASE` requires
+  `DEPVET_ALLOW_INSECURE_BASES=1` or `--dev-registry`, is limited to the exact
+  host:port, warns once, and marks JSON/SARIF/human reports `unofficial_registry`.
+  Policy failures are exit 3 with the host named. Tests use the mock servers'
+  gate; never weaken the gate in a release path.
 - **`diff` now compares trust, not only bytes.** `Prepared.publisher` comes from
   npm's `_npmUser`; provenance comparison uses the already-verified npm bundle
   and never claims PyPI/other identities. Declared dependencies come from

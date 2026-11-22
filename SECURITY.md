@@ -36,6 +36,54 @@ require executing untrusted package code, which dep-vet deliberately never does.
 - It does not verify Sigstore signatures during an audit; `inspect npm` verifies
   them offline, and its report says exactly what was checked.
 
+## Outbound URL policy
+
+Registry JSON is untrusted input. Before dep-vet fetches an archive or a
+provenance document, the URL must pass `src/netpolicy.rs`:
+
+- `https` only. Userinfo, non-default ports, and non-ASCII hosts are rejected.
+- The host must be on the ecosystem allowlist below, matched exactly or as a
+  subdomain suffix:
+
+  | Ecosystem | Allowed hosts |
+  |---|---|
+  | npm | `registry.npmjs.org` |
+  | PyPI | `files.pythonhosted.org`, `pypi.org` |
+  | crates.io | `static.crates.io`, `crates.io` |
+  | Go | `proxy.golang.org` |
+  | RubyGems | `rubygems.org` |
+  | NuGet | `api.nuget.org`, `globalcdn.nuget.org` |
+  | Maven | `repo.maven.apache.org`, `dl.google.com` |
+  | Composer | `repo.packagist.org`, `dist.packagist.org`, `api.github.com`, `codeload.github.com`, `gitlab.com`, `bitbucket.org` |
+  | JSR | no archive URL is supported |
+
+- IP-literal hosts must be globally routable. Loopback, RFC 1918, link-local
+  (`169.254.0.0/16`, `fe80::/10`), CGNAT (`100.64.0.0/10`), ULA (`fc00::/7`),
+  unspecified, multicast, broadcast, documentation, reserved, and IPv4-mapped
+  IPv6 forms of all of these are refused. This blocks the cloud metadata
+  address (`169.254.169.254`) and local services.
+- Archive fetches do not follow redirects automatically. dep-vet follows at
+  most three, resolves relative `Location` values, revalidates every hop, and
+  refuses an `https` to `http` downgrade. It never attaches an `Authorization`
+  header.
+- DNS is resolved once through a custom ureq resolver. Every non-public answer
+  is discarded before the connection is made, and a hostname with no public
+  answer fails with a clear error instead of falling back. This closes the
+  resolve-then-rebind window.
+
+### Development overrides
+
+`DEPVET_REGISTRY_BASE`, `DEPVET_OSV_BASE`, and the other `DEPVET_*_BASE`
+variables are for local mirrors and tests. They are rejected unless
+`DEPVET_ALLOW_INSECURE_BASES=1` or `--dev-registry` is passed. The gate allows
+`http` and the exact configured host and port only; it does not add that host to
+the production allowlist. An active override prints one stderr warning and adds
+`unofficial_registry: true` to JSON reports.
+
+Any refusal is a tool error (exit `3`) with the offending host named; it is
+never a clean result. The reusable GitHub Action does not set or forward these
+variables.
+
 ## Supported versions
 
 The latest release receives fixes. Older releases are not patched; upgrade

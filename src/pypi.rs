@@ -66,7 +66,10 @@ impl PypiClient {
                 meta.name,
                 meta.version
             );
-            meta.provenance = match self.http.head(&provenance) {
+            meta.provenance = match self
+                .http
+                .head_trusted(crate::model::Ecosystem::Pypi, &provenance)
+            {
                 Ok(true) => crate::model::Provenance::Present,
                 Ok(false) => crate::model::Provenance::Missing,
                 Err(_) => crate::model::Provenance::Unavailable,

@@ -72,6 +72,15 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          # This reusable workflow never opts into registry overrides. Drop any
+          # DEPVET_*_BASE inherited from the calling job so a mirror cannot
+          # change the verdict this check reports.
+          unset DEPVET_ALLOW_INSECURE_BASES
+          while IFS='=' read -r name _; do
+            case "$name" in
+              DEPVET_*_BASE) unset "$name" ;;
+            esac
+          done < <(env)
           base="${BASE_INPUT:-origin/$PR_BASE}"
           set +e
           dep-vet lock "$LOCKFILE" --base "$base" > dep-vet-report.txt 2>&1

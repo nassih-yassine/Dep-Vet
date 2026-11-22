@@ -8,6 +8,9 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
+
 use crate::cache::{Cache, now_seconds};
 
 /// ureq's default is 10 MB, which is smaller than some real npm packuments.
@@ -23,6 +26,8 @@ pub enum HttpError {
     },
     #[error("network error fetching {url}: {message}")]
     Network { url: String, message: String },
+    #[error("outbound URL refused for {url}: {message}")]
+    Policy { url: String, message: String },
 }
 
 /// Where a response came from. `Stale` is only produced after a transient
@@ -52,7 +57,7 @@ impl HttpError {
     pub(crate) fn retry_after(&self) -> Option<u64> {
         match self {
             Self::Status { retry_after, .. } => *retry_after,
-            Self::Network { .. } => None,
+            Self::Network { .. } | Self::Policy { .. } => None,
         }
     }
 
@@ -63,14 +68,19 @@ impl HttpError {
             Self::Network { .. } => true,
             // 429 is a rate limit: a stale entry beats failing the check.
             Self::Status { status, .. } => *status == 429 || *status >= 500,
+            Self::Policy { .. } => false,
         }
     }
 }
 
 pub struct HttpClient {
     agent: ureq::Agent,
+    /// Archives use a separate agent with automatic redirects disabled.
+    archive_agent: ureq::Agent,
     /// Mutex so the client stays `Send + Sync` for future parallel fetches.
     cache: Option<Mutex<Cache>>,
+    /// Set when a `DEPVET_*_BASE` override is present without the gate.
+    policy_error: Option<String>,
     /// Configured OSV base, so tests and self-hosted mirrors get the advisory
     /// TTL and stale cap instead of the literal api.osv.dev.
     advisory_base: String,
@@ -98,10 +108,36 @@ impl HttpClient {
             .http_status_as_error(false)
             .user_agent(concat!("dep-vet/", env!("CARGO_PKG_VERSION")))
             .build();
+        let archive_config = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(20)))
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .user_agent(concat!("dep-vet/", env!("CARGO_PKG_VERSION")))
+            .build();
+        // Both agents use a resolver that filters every DNS answer before the
+        // connector sees it, closing the resolve-then-rebind window.
+        let agent = ureq::Agent::with_parts(config, DefaultConnector::new(), PublicOnlyResolver);
+        let archive_agent =
+            ureq::Agent::with_parts(archive_config, DefaultConnector::new(), PublicOnlyResolver);
+        let policy_error = crate::netpolicy::check_overrides_env()
+            .err()
+            .map(|error| error.to_string());
         Self {
-            agent: ureq::Agent::new_with_config(config),
+            agent,
+            archive_agent,
             cache: cache.map(Mutex::new),
+            policy_error,
             advisory_base,
+        }
+    }
+
+    fn guard(&self) -> Result<(), HttpError> {
+        match &self.policy_error {
+            Some(message) => Err(HttpError::Policy {
+                url: "(configuration)".to_string(),
+                message: message.clone(),
+            }),
+            None => Ok(()),
         }
     }
 
@@ -109,40 +145,103 @@ impl HttpClient {
         self.get_with_source(url).map(|(body, _)| body)
     }
 
+    /// Validate and fetch a URL that registry data selected (archives,
+    /// provenance), following at most three redirects with validation on
+    /// every hop.
+    pub fn get_trusted(
+        &self,
+        ecosystem: crate::model::Ecosystem,
+        url: &str,
+    ) -> Result<String, HttpError> {
+        self.guard()?;
+        let mut response = self.get_raw(ecosystem, url)?;
+        read_body(&mut response, url)
+    }
+
+    pub fn head_trusted(
+        &self,
+        ecosystem: crate::model::Ecosystem,
+        url: &str,
+    ) -> Result<bool, HttpError> {
+        self.guard()?;
+        let url =
+            crate::netpolicy::validate_url(ecosystem, url).map_err(|error| HttpError::Policy {
+                url: url.to_string(),
+                message: error.to_string(),
+            })?;
+        match self.archive_agent.head(url.as_str()).call() {
+            Ok(response) => Ok((200..300).contains(&response.status().as_u16())),
+            Err(error) => Err(network_error(error, url.as_str())),
+        }
+    }
+
     /// Advisory detail fetches also need the source, so stale bodies can be
     /// disclosed rather than silently blended with fresh ones.
     pub fn get_with_source(&self, url: &str) -> Result<(String, Source), HttpError> {
+        self.guard()?;
         self.cached(url, || self.fetch_get(url))
     }
 
     /// Raw response for callers that must stream a body (archives). Statuses
     /// are checked here, so a caller still sees `HttpError::Status` on 404.
-    pub fn get_raw(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>, HttpError> {
-        match self.agent.get(url).call() {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                if (200..300).contains(&status) {
-                    Ok(response)
-                } else {
-                    let retry_after = response
-                        .headers()
-                        .get("retry-after")
-                        .and_then(|value| value.to_str().ok())
-                        .and_then(parse_retry_after);
-                    Err(HttpError::Status {
-                        status,
-                        url: url.to_string(),
-                        retry_after,
-                    })
+    pub fn get_raw(
+        &self,
+        ecosystem: crate::model::Ecosystem,
+        url: &str,
+    ) -> Result<ureq::http::Response<ureq::Body>, HttpError> {
+        self.guard()?;
+        let mut current =
+            crate::netpolicy::validate_url(ecosystem, url).map_err(|error| HttpError::Policy {
+                url: url.to_string(),
+                message: error.to_string(),
+            })?;
+        let mut redirects = 0;
+        loop {
+            let response = match self.archive_agent.get(current.as_str()).call() {
+                Ok(response) => response,
+                Err(error) => return Err(network_error(error, current.as_str())),
+            };
+            let status = response.status().as_u16();
+            if (300..400).contains(&status) {
+                if redirects >= 3 {
+                    return Err(HttpError::Policy {
+                        url: current.to_string(),
+                        message: "more than 3 redirects".to_string(),
+                    });
                 }
+                let Some(location) = response
+                    .headers()
+                    .get("location")
+                    .and_then(|value| value.to_str().ok())
+                else {
+                    return Err(status_error(response, current.as_str()));
+                };
+                let next =
+                    redirect_target(&current, location).map_err(|message| HttpError::Policy {
+                        url: current.to_string(),
+                        message,
+                    })?;
+                current =
+                    crate::netpolicy::validate_url(ecosystem, next.as_str()).map_err(|error| {
+                        HttpError::Policy {
+                            url: next.to_string(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                redirects += 1;
+                continue;
             }
-            Err(error) => Err(network_error(error, url)),
+            if (200..300).contains(&status) {
+                return Ok(response);
+            }
+            return Err(status_error(response, current.as_str()));
         }
     }
 
     /// True when the URL answers 2xx. Used for cheap existence checks
     /// (provenance endpoints) where the body is irrelevant.
     pub fn head(&self, url: &str) -> Result<bool, HttpError> {
+        self.guard()?;
         match self.agent.head(url).call() {
             Ok(response) => Ok((200..300).contains(&response.status().as_u16())),
             Err(error) => Err(network_error(error, url)),
@@ -159,6 +258,7 @@ impl HttpClient {
         url: &str,
         body: &serde_json::Value,
     ) -> Result<(String, Source), HttpError> {
+        self.guard()?;
         let key = format!("POST {url}\n{body}");
         self.cached(&key, || self.fetch_post(url, body))
     }
@@ -232,6 +332,74 @@ impl HttpClient {
             Ok(response) => read_response(response, url),
             Err(error) => Err(network_error(error, url)),
         }
+    }
+}
+
+/// Resolve a redirect target and enforce the no-downgrade rule before the
+/// URL policy sees it. Relative locations are resolved against the current URL.
+pub(crate) fn redirect_target(current: &url::Url, location: &str) -> Result<url::Url, String> {
+    let next = current
+        .join(location)
+        .map_err(|error| format!("invalid redirect location: {error}"))?;
+    if current.scheme() == "https" && next.scheme() != "https" {
+        return Err("redirect would downgrade https to http".to_string());
+    }
+    Ok(next)
+}
+
+fn status_error(response: ureq::http::Response<ureq::Body>, url: &str) -> HttpError {
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_retry_after);
+    HttpError::Status {
+        status,
+        url: url.to_string(),
+        retry_after,
+    }
+}
+
+#[derive(Debug)]
+struct PublicOnlyResolver;
+
+impl Resolver for PublicOnlyResolver {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let addresses = DefaultResolver::default().resolve(uri, config, timeout)?;
+        let host = uri
+            .host()
+            .ok_or_else(|| ureq::Error::BadUri("URL has no host".to_string()))?;
+        let port = uri
+            .port_u16()
+            .or_else(|| match uri.scheme_str() {
+                Some("https") => Some(443),
+                Some("http") => Some(80),
+                _ => None,
+            })
+            .ok_or_else(|| ureq::Error::BadUri("URL has no port".to_string()))?;
+        let filtered = crate::netpolicy::filter_resolved_addresses(
+            host,
+            port,
+            addresses.iter().map(|address| address.ip()),
+            &crate::netpolicy::Overrides::from_env(),
+        )
+        .map_err(|error| {
+            ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                error.to_string(),
+            ))
+        })?;
+        let mut out = self.empty();
+        for address in filtered {
+            out.push(address);
+        }
+        Ok(out)
     }
 }
 
@@ -329,6 +497,20 @@ mod tests {
             url: "https://example.test/x".to_string(),
             message: "offline".to_string(),
         }
+    }
+
+    #[test]
+    fn redirects_cannot_downgrade_https_or_escape_relative_locations() {
+        let current = url::Url::parse("https://registry.npmjs.org/lib.tgz").unwrap();
+        assert!(redirect_target(&current, "http://registry.npmjs.org/lib.tgz").is_err());
+        assert_eq!(
+            redirect_target(&current, "/other.tgz").unwrap().as_str(),
+            "https://registry.npmjs.org/other.tgz"
+        );
+        assert_eq!(
+            redirect_target(&current, "../x.tgz").unwrap().as_str(),
+            "https://registry.npmjs.org/x.tgz"
+        );
     }
 
     #[test]
