@@ -118,12 +118,53 @@ pub fn handle(
     request: &Value,
     call_tool: &mut impl FnMut(&str, &Value) -> ToolResult,
 ) -> Option<Value> {
-    let id = request.get("id").cloned();
-    let method = request.get("method").and_then(Value::as_str);
-    let Some(method) = method else {
-        return id.map(|id| error_response(id, -32600, "missing method"));
+    if request.is_array() {
+        return Some(error_response(
+            Value::Null,
+            -32600,
+            "batch requests are not supported",
+        ));
+    }
+    let Some(object) = request.as_object() else {
+        return Some(error_response(
+            Value::Null,
+            -32600,
+            "request must be an object",
+        ));
     };
-    let is_notification = request.get("id").is_none();
+    let has_id = object.contains_key("id");
+    let id = object.get("id").cloned();
+    let is_notification = !has_id;
+    let valid_id = id
+        .as_ref()
+        .is_none_or(|value| value.is_string() || value.is_number() || value.is_null());
+    if !valid_id {
+        return Some(error_response(
+            Value::Null,
+            -32600,
+            "id must be a string, number, or null",
+        ));
+    }
+    // A notification is a request without an id. Malformed notifications get
+    // no response, but they never reach a tool.
+    let invalid = |message: &str| {
+        if is_notification {
+            None
+        } else {
+            Some(error_response(
+                id.clone().unwrap_or(Value::Null),
+                -32600,
+                message,
+            ))
+        }
+    };
+    if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return invalid("jsonrpc must be \"2.0\"");
+    }
+    let Some(method) = request.get("method").and_then(Value::as_str) else {
+        return invalid("method must be a string");
+    };
+
     let result: Result<Value, (i64, String)> = match method {
         "initialize" => {
             let requested = request["params"]["protocolVersion"]
@@ -150,7 +191,11 @@ pub fn handle(
             let name = match request["params"]["name"].as_str() {
                 Some(name) => name,
                 None => {
-                    return id.map(|id| error_response(id, -32602, "missing tool name"));
+                    return if is_notification {
+                        None
+                    } else {
+                        id.map(|id| error_response(id, -32602, "missing tool name"))
+                    };
                 }
             };
             let arguments = request["params"]["arguments"].clone();
@@ -245,6 +290,80 @@ mod tests {
 
     fn no_tools(_: &str, _: &Value) -> ToolResult {
         Err((-32601, "no tools in this test".to_string()))
+    }
+
+    #[test]
+    fn jsonrpc_version_and_id_validation_precede_tool_calls() {
+        let called = std::cell::Cell::new(false);
+        let mut tool = |_: &str, _: &Value| {
+            called.set(true);
+            Ok(json!({"unexpected": true}))
+        };
+
+        for request in [
+            json!({"id": 1, "method": "ping"}),
+            json!({"jsonrpc": "1.0", "id": 1, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": true, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": 1}),
+            json!({"jsonrpc": "2.0", "id": 1, "method": 4}),
+        ] {
+            let response = handle(&request, &mut tool).expect("request gets an error");
+            assert_eq!(response["error"]["code"], -32600, "{response}");
+        }
+        assert!(!called.get());
+
+        assert!(handle(&json!({"jsonrpc": "2.0", "method": "ping"}), &mut tool).is_none());
+        assert!(
+            handle(
+                &json!({"method": "tools/call", "params": {"name": "x"}}),
+                &mut tool
+            )
+            .is_none()
+        );
+        assert!(!called.get());
+
+        let response = handle(
+            &json!({"jsonrpc": "2.0", "id": null, "method": "ping"}),
+            &mut tool,
+        )
+        .expect("null id is a request");
+        assert_eq!(response["id"], Value::Null);
+
+        let response = handle(
+            &json!({"jsonrpc": "2.0", "id": "abc", "method": "ping"}),
+            &mut tool,
+        )
+        .unwrap();
+        assert_eq!(response["id"], "abc");
+
+        let response = handle(
+            &json!({"jsonrpc": "2.0", "id": 7, "method": "ping"}),
+            &mut tool,
+        )
+        .unwrap();
+        assert_eq!(response["id"], 7);
+
+        let response = handle(&json!([]), &mut tool).expect("batch is rejected");
+        assert_eq!(response["error"]["code"], -32600);
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn invalid_messages_never_call_a_tool() {
+        let called = std::cell::Cell::new(false);
+        let mut tool = |_: &str, _: &Value| {
+            called.set(true);
+            Ok(json!({}))
+        };
+        for request in [
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call"}),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"arguments": {}}}),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": 4}}),
+            json!({"id": 1, "method": "tools/call", "params": {"name": "x"}}),
+        ] {
+            let _ = handle(&request, &mut tool);
+        }
+        assert!(!called.get());
     }
 
     #[test]

@@ -445,45 +445,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             base,
             json,
         } => {
-            let format = lockfile::detect(path)?;
-            let ecosystem = format.ecosystem();
-            let current = lockfile::read(path)?;
-            let base_contents = lockfile::at_ref(path, base)?;
-            let added = lockfile::added(&current.packages, &base_contents.packages);
-            // What the user already trusts: typosquats of these names matter
-            // more than distance to a seed list. Only npm names are in a shape
-            // the comparison can use.
-            let local: Vec<String> = if ecosystem == Ecosystem::Npm {
-                base_contents
-                    .packages
-                    .iter()
-                    .map(|package| package.name.to_ascii_lowercase())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-
-            let now = now_seconds();
-            let (mut new_packages, mut errors) =
-                audit_packages(&auditor, ecosystem, &added, &local, now);
-            let added_jsr = lockfile::added(&current.jsr, &base_contents.jsr);
-            let (jsr_reports, jsr_errors) =
-                audit_packages(&auditor, Ecosystem::Jsr, &added_jsr, &[], now);
-            new_packages.extend(jsr_reports);
-            errors.extend(jsr_errors);
-            attach_dependency_paths(format, path, &mut new_packages);
-            errors.extend(skipped_errors(&current));
-            for report in &mut new_packages {
-                allowlist.apply(report);
-            }
-
-            let report = LockReport {
-                lockfile: path.display().to_string(),
-                base: base.clone(),
-                new_packages,
-                errors,
-                notes: current.notes,
-            };
+            let report = diff_lockfile(&auditor, &allowlist, path, base, true)?;
             let output = if *json {
                 render_lock_json(&report)?
             } else {
@@ -1297,49 +1259,45 @@ fn run_mcp_lockfile(
     base: &str,
 ) -> dep_vet::mcp::ToolResult {
     let path = mcp_lockfile_path(lockfile).map_err(|error| (-32602, error))?;
-    let format = lockfile::detect(&path).map_err(|error| (-32603, error.to_string()))?;
-    let working = lockfile::read(&path).map_err(|error| (-32603, error.to_string()))?;
-    let previous = lockfile::at_ref(&path, base).map_err(|error| (-32603, error.to_string()))?;
-    let before: std::collections::HashSet<(String, String)> = previous
-        .packages
+    let report = diff_lockfile(auditor, allowlist, &path, base, false)
+        .map_err(|error| (-32603, error.to_string()))?;
+    let intents: Vec<serde_json::Value> = report
+        .new_packages
         .iter()
-        .map(|package| (package.name.clone(), package.version.clone()))
-        .collect();
-    let mut added = Vec::new();
-    for package in &working.packages {
-        if !before.contains(&(package.name.clone(), package.version.clone())) {
-            added.push(package.clone());
-        }
-    }
-    let parsed = dep_vet::intent::ParseOutcome::default();
-    let _ = parsed;
-    let raw: Vec<dep_vet::intent::Intent> = added
-        .iter()
-        .map(|package| dep_vet::intent::Intent {
-            ecosystem: format.ecosystem(),
-            kind: dep_vet::intent::IntentKind::Install,
-            specs: spec_for(format.ecosystem(), &package.name, &package.version)
-                .into_iter()
-                .collect(),
-            lockfile: None,
-            source: lockfile.to_string(),
+        .map(|package| {
+            serde_json::json!({
+                "ecosystem": package.ecosystem.to_string(),
+                "kind": "install",
+                "specs": [{
+                    "name": package.name,
+                    "version": package.version,
+                }],
+                "lockfile": null,
+            })
         })
         .collect();
-    let parse = dep_vet::intent::ParseOutcome {
-        intents: raw,
-        notes: Vec::new(),
-    };
-    let (packages, errors) = audit_specs(auditor, allowlist, &parse);
-    let report = dep_vet::guard::GuardReport {
-        command: format!("lockfile change: {lockfile} vs {base}"),
-        parse,
-        packages,
-        errors: errors.clone(),
-    };
-    let structured: serde_json::Value =
-        serde_json::from_str(&report.to_json()).unwrap_or_else(|_| serde_json::json!({}));
-    let mut result = tool_result(structured, report.to_human());
-    if !errors.is_empty() {
+    let errors: Vec<String> = report
+        .errors
+        .iter()
+        .map(|error| format!("{}: {}", error.package, error.message))
+        .collect();
+    let structured = serde_json::json!({
+        "command": format!("lockfile change: {lockfile} vs {base}"),
+        "intents": intents,
+        "lockfile": report.lockfile,
+        "base": report.base,
+        "packages": report.new_packages,
+        "errors": errors,
+        "notes": report.notes,
+        "verdict": report.verdict().label().to_ascii_lowercase(),
+        "exit_code": report.exit_code(),
+        "unofficial_registry": dep_vet::netpolicy::insecure_active(),
+    });
+    let mut result = tool_result(
+        structured,
+        dep_vet::report::render_lock_human(&report, false),
+    );
+    if report.exit_code() == 3 {
         result["isError"] = serde_json::json!(true);
     }
     Ok(result)
@@ -1431,9 +1389,10 @@ fn run_audit(
         &contents.packages,
         &[],
         now,
+        true,
     );
     let (jsr_reports, jsr_errors) =
-        audit_packages(auditor, Ecosystem::Jsr, &contents.jsr, &[], now);
+        audit_packages(auditor, Ecosystem::Jsr, &contents.jsr, &[], now, true);
     reports.extend(jsr_reports);
     errors.extend(jsr_errors);
     errors.extend(skipped_errors(&contents));
@@ -1477,6 +1436,60 @@ fn attach_dependency_paths(
         return;
     };
     dep_vet::graph::attach_dependency_paths(&graph, reports);
+}
+
+/// Shared differential lockfile audit for the CLI and MCP. Keeping one
+/// implementation is what makes JSR entries, notes, skipped entries, and
+/// dependency paths identical on both surfaces.
+fn diff_lockfile(
+    auditor: &Auditor,
+    allowlist: &dep_vet::allowlist::Allowlist,
+    path: &std::path::Path,
+    base: &str,
+    allow_progress: bool,
+) -> anyhow::Result<LockReport> {
+    let format = lockfile::detect(path)?;
+    let ecosystem = format.ecosystem();
+    let current = lockfile::read(path)?;
+    let base_contents = lockfile::at_ref(path, base)?;
+    let added = lockfile::added(&current.packages, &base_contents.packages);
+    let local: Vec<String> = if ecosystem == Ecosystem::Npm {
+        base_contents
+            .packages
+            .iter()
+            .map(|package| package.name.to_ascii_lowercase())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let now = now_seconds();
+    let (mut new_packages, mut errors) =
+        audit_packages(auditor, ecosystem, &added, &local, now, allow_progress);
+    let added_jsr = lockfile::added(&current.jsr, &base_contents.jsr);
+    let (jsr_reports, jsr_errors) = audit_packages(
+        auditor,
+        Ecosystem::Jsr,
+        &added_jsr,
+        &[],
+        now,
+        allow_progress,
+    );
+    new_packages.extend(jsr_reports);
+    errors.extend(jsr_errors);
+    attach_dependency_paths(format, path, &mut new_packages);
+    errors.extend(skipped_errors(&current));
+    for report in &mut new_packages {
+        allowlist.apply(report);
+    }
+
+    Ok(LockReport {
+        lockfile: path.display().to_string(),
+        base: base.to_string(),
+        new_packages,
+        errors,
+        notes: current.notes,
+    })
 }
 
 fn skipped_errors(contents: &lockfile::LockContents) -> Vec<LockFetchError> {
@@ -1543,16 +1556,18 @@ fn audit_packages(
     packages: &[lockfile::LockedPackage],
     local: &[String],
     now: i64,
+    allow_progress: bool,
 ) -> (Vec<PackageReport>, Vec<LockFetchError>) {
     let mut reports = Vec::new();
     let mut errors = Vec::new();
     // A long tree audit looks frozen without this; pipes and CI stay silent,
     // including CI runners that allocate a pseudo-TTY.
-    let draw = dep_vet::progress::should_draw(
-        io::stderr().is_terminal(),
-        std::env::var_os("CI").is_some(),
-        std::env::var("TERM").is_ok_and(|term| term == "dumb"),
-    );
+    let draw = allow_progress
+        && dep_vet::progress::should_draw(
+            io::stderr().is_terminal(),
+            std::env::var_os("CI").is_some(),
+            std::env::var("TERM").is_ok_and(|term| term == "dumb"),
+        );
     let mut progress = dep_vet::progress::Progress::new(packages.len(), draw);
 
     // One OSV batch and one downloads batch for the whole tree. Only names

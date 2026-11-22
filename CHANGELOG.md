@@ -7,6 +7,16 @@
   and direct flags, as a human tree or `--json`. Nested versions resolve to the
   nearest `node_modules`; cycles are cut; a dependency named but absent from the
   lockfile is listed, never dropped. No network, no install, no execution.
+- **Security and correctness remediation.** MCP `vet_lockfile_change` now uses
+  the same differential audit as `lock`, including JSR packages, skipped
+  entries, notes, and dependency paths; it no longer reports an incomplete tree
+  as clean. Archive caps are validated at parse time with documented maximums and
+  checked arithmetic, so huge `*_mb` values cannot wrap. MCP rejects non-2.0
+  JSON-RPC requests, invalid IDs, and batch arrays before any tool runs, while
+  valid notifications stay response-free. URL-policy tests now cover mixed and
+  changing DNS answers, special redirect targets, and invalid overrides. The
+  Composer origin comes from `source.url` only and requires the fixed provider
+  set.
 - **Outbound URL policy follow-up.** IPv6 NAT64 (`64:ff9b::/96`),
   IPv4-compatible, and 6to4 addresses now inherit their embedded IPv4 verdict,
   while Teredo, discard-only `100::/64`, and `3fff::/20` are refused. Composer

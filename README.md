@@ -142,6 +142,12 @@ max_decompressed_mb = 200
 disabled_rules = ["PY-IMPORT-001"]
 ```
 
+Caps must be between 1 and their maximum: `max_download_mb` and `max_file_mb`
+<= 4096, `max_total_mb` <= 8192, `max_decompressed_mb` <= 16384, and
+`max_entries` <= 1,000,000. Values are validated and converted with checked
+arithmetic at config parse time, so an oversized number is an error rather than
+a wrapped limit.
+
 A disabled rule id must be one dep-vet knows, and every cap must be greater than
 zero; a typo is a configuration error (exit `3`), never a silent no-op.
 
@@ -842,6 +848,12 @@ Tools: `vet_package {ecosystem, name, version?}`, `vet_command {command}`, and
 text summary; tool-level failures are `isError` results, while bad arguments and
 unknown tools are JSON-RPC errors. stdout carries only MCP messages — logs go to
 stderr and the progress bar is never drawn.
+
+Requests must be JSON-RPC 2.0 objects: `"jsonrpc": "2.0"`, a string `method`,
+and an optional string, number, or null `id`. Notifications get no response;
+invalid requests get `-32600`, and batch arrays are rejected explicitly.
+`vet_lockfile_change` uses the same differential audit as `lock`, including
+JSR entries, skipped entries, notes, and dependency paths.
 
 Inputs are untrusted: ecosystems are validated, commands are capped at 64 KiB,
 lockfile paths are canonicalized and must stay under the server's working

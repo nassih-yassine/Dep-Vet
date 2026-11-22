@@ -39,6 +39,8 @@ pub enum PolicyError {
     ComposerRepo(String),
     #[error("dev registry overrides require DEPVET_ALLOW_INSECURE_BASES=1: {0}")]
     OverrideGate(String),
+    #[error("dev registry override is not a valid http(s) URL: {0}")]
+    OverrideInvalid(String),
     #[error("no public address remains for {0}")]
     NoPublicAddress(String),
 }
@@ -404,8 +406,16 @@ pub fn check_overrides(env: &std::collections::HashMap<String, String>) -> Resul
         .get("DEPVET_ALLOW_INSECURE_BASES")
         .is_some_and(|value| value == "1");
     for (key, value) in env {
-        if key.starts_with("DEPVET_") && key.ends_with("_BASE") && !gate {
-            return Err(PolicyError::OverrideGate(format!("{key}={value}")));
+        if key.starts_with("DEPVET_") && key.ends_with("_BASE") {
+            if !gate {
+                return Err(PolicyError::OverrideGate(format!("{key}={value}")));
+            }
+            let valid = Url::parse(value).is_ok_and(|url| {
+                matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+            });
+            if !valid {
+                return Err(PolicyError::OverrideInvalid(format!("{key}={value}")));
+            }
         }
     }
     Ok(())
@@ -705,6 +715,22 @@ mod tests {
     }
 
     #[test]
+    fn overrides_reject_invalid_urls_and_allow_explicit_private_bases() {
+        let env = std::collections::HashMap::from([
+            ("DEPVET_ALLOW_INSECURE_BASES".to_string(), "1".to_string()),
+            ("DEPVET_REGISTRY_BASE".to_string(), "not a url".to_string()),
+        ]);
+        assert!(matches!(
+            check_overrides(&env),
+            Err(PolicyError::OverrideInvalid(_))
+        ));
+
+        let private = overrides("http://10.0.0.1:8080");
+        assert!(validate_with(Ecosystem::Npm, "http://10.0.0.1:8080/x.tgz", &private).is_ok());
+        assert!(validate_with(Ecosystem::Npm, "http://10.0.0.2:8080/x.tgz", &private).is_err());
+    }
+
+    #[test]
     fn resolver_filtering_drops_every_non_public_address() {
         let gated = overrides("http://127.0.0.1:8080");
         let kept = filter_resolved_addresses(
@@ -715,6 +741,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(kept, vec![SocketAddr::from(([127, 0, 0, 1], 8080))]);
+
+        let mixed = filter_resolved_addresses(
+            "public.example",
+            443,
+            [
+                IpAddr::from([10, 0, 0, 1]),
+                IpAddr::from([93, 184, 216, 34]),
+            ],
+            &Overrides::default(),
+        )
+        .unwrap();
+        assert_eq!(mixed, vec![SocketAddr::from(([93, 184, 216, 34], 443))]);
 
         let error = filter_resolved_addresses(
             "evil.example",

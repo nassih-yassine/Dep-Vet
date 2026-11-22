@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 583 unit + 193 end-to-end tests
+cargo test --locked                      # 587 unit + 198 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -579,6 +579,20 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   refuses malformed JSON with exit 3 and no write. Writes are atomic
   (sibling temp file then rename). The settings `command` is a shell string; the
   binary path must be absolute and quoted when it has spaces.
+- **MCP lockfile diffs share the CLI implementation.** `diff_lockfile` is the one
+  differential audit for `lock` and `vet_lockfile_change`; it covers npm and
+  JSR, attaches dependency paths, includes skipped entries as errors, and keeps
+  parser notes. MCP passes `allow_progress = false`, maps `exit_code == 3` to
+  `isError`, and never silently drops a partial result.
+- **Archive caps are parsed safely.** `MAX_DOWNLOAD_MB` (4096),
+  `MAX_TOTAL_MB` (8192), `MAX_FILE_MB` (4096), `MAX_DECOMPRESSED_MB` (16384), and
+  `MAX_ENTRIES` (1,000,000) bound `.depvet.toml`. Values above them are
+  `LimitTooLarge`; `limits()` uses `checked_mul` and saturates only for
+  manually constructed configs that bypassed parsing.
+- **MCP validates JSON-RPC before dispatch.** `handle` requires
+  `"jsonrpc": "2.0"`, a string method, and a string/number/null id (or no id for
+  a notification). Invalid notifications get no response; invalid requests get
+  `-32600`; batch arrays are rejected. Tools are not called before validation.
 - **MCP stdio is newline-delimited JSON, not LSP framing.** `src/mcp.rs` reads
   with `read_line_bounded`, which never allocates past `MAX_LINE_BYTES` plus a
   two-byte lookahead, drains an oversized line to its newline, and recovers for
