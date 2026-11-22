@@ -645,7 +645,7 @@ outputs are validated against the official CycloneDX 1.5 and SPDX 2.3 schemas.
 Archive and provenance URLs come from registry JSON, so they are treated as
 untrusted. dep-vet only fetches `https` URLs from the ecosystem's known hosts
 (npm's `registry.npmjs.org`, PyPI's `files.pythonhosted.org`, and so on;
-Composer code hosts must be the package's declared source/dist host),
+Composer code hosts must match the package's declared source host and a fixed code-host set),
 refuses credentials, non-default ports, private/loopback/link-local IP
 literals, cloud metadata addresses, and IPv6 transition forms that embed a
 non-public IPv4 address (NAT64, IPv4-compatible, 6to4), and returns exit `3`

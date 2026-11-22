@@ -4450,6 +4450,26 @@ fn diff_flags_a_changed_install_script_and_a_new_binary() {
 }
 
 #[test]
+fn inspect_refuses_a_composer_dist_host_outside_the_source_provider() {
+    let registry = MockRegistry::start(HashMap::from([(
+        "/p2/vendor/pkg.json".to_string(),
+        (
+            200,
+            r#"{"packages":{"vendor/pkg":[{"version":"1.0.0","source":{"url":"https://evil.example/pkg"},"dist":{"url":"https://evil.example/pkg.zip"}}]}}"#
+                .to_string(),
+        ),
+    )]));
+    registry
+        .command()
+        .args(["inspect", "composer", "vendor/pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "Composer dist hosted outside known code hosts",
+        ));
+}
+
+#[test]
 fn inspect_notes_a_nuget_signature_file_without_verifying_it() {
     let nupkg = zip_archive(&[
         ("lib/net8.0/A.dll", b"compiled"),

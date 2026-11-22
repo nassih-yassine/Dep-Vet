@@ -531,7 +531,6 @@ fn resolve_composer(
         .map(|value| Checksum::Sha1Hex(value.to_string()));
     let composer_origin = Some(crate::netpolicy::ComposerOrigin::from_metadata(
         entry["source"]["url"].as_str(),
-        Some(url),
     ));
     Ok(ArchiveRef {
         url: url.to_string(),
