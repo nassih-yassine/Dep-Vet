@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- **Dependency tree.** `dep-vet tree package-lock.json` shows the graph npm
+  already resolved: nodes, parent-to-child edges (normal, dev, optional, peer),
+  and direct flags, as a human tree or `--json`. Nested versions resolve to the
+  nearest `node_modules`; cycles are cut; a dependency named but absent from the
+  lockfile is listed, never dropped. No network, no install, no execution.
+- **MCP input is bounded before allocation.** The stdio loop reads at most the
+  line limit plus two bytes, drains oversized lines without storing them, and
+  recovers for the next request. A multi-megabyte newline-free request can no
+  longer exhaust memory.
+- **Release workflow hardening.** Every third-party action is pinned to a
+  verified commit SHA with a version comment, the workflow defaults to
+  `contents: read`, and only the `host` job that creates the release gets
+  `contents: write`.
+- **Archive downloads retry transient failures.** Tarballs now use the same
+  backoff, `Retry-After`, and jitter policy as metadata requests, reject a
+  declared `Content-Length` over the cap before reading, and never cache a
+  failed or unverified download.
+
 ## 0.12.1 — 2026-11-22
 
 - **Windows hook fix.** The guard child now receives the command on stdin
