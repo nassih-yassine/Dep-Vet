@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 563 unit + 177 end-to-end tests
+cargo test --locked                      # 568 unit + 177 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -245,6 +245,15 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **`Profile` drives honesty, not exit codes.** Disabled signals produce no
   finding and appear in `PackageReport.not_checked` (human line "not checked",
   JSON field, omitted when empty). Never turn a missing signal into a clean one.
+- **Typosquat distance is Damerau–Levenshtein.** Adjacent transpositions count
+  as one edit, so they reach the HIGH `distance <= 1` branch and are not
+  age-suppressed as weak matches. `normalize` folds ASCII digits, `rn`, common
+  Cyrillic/Greek confusables, and fullwidth ASCII; unknown scripts are left
+  alone. `tests/fixtures/typosquat-cases.tsv` is the regression set: `known`
+  rows must all be caught with their exact target, `legit` rows must stay
+  unflagged, and `synthetic` rows measure one-edit behavior without claiming a
+  package exists. Do not lower the test floors or remove legitimate neighbours
+  to make a change pass; add a case with its reason instead.
 - **Typosquat candidates = seed ∪ local lockfile names.** `closest()` takes the
   caller's local list. `lock` passes base lockfile names; `npm` finds the nearest
   `package-lock.json` by walking up (`lockfile::nearest`) unless `--no-local`.

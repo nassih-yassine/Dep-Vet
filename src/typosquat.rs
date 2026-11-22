@@ -39,6 +39,7 @@ pub const POPULAR_PYPI: &[&str] = &[
     "celery",
     "certifi",
     "charset-normalizer",
+    "colorama",
     "click",
     "cryptography",
     "dbt-core",
@@ -53,6 +54,7 @@ pub const POPULAR_PYPI: &[&str] = &[
     "httpx",
     "huggingface-hub",
     "idna",
+    "jellyfish",
     "jinja2",
     "kubernetes",
     "lightgbm",
@@ -519,11 +521,14 @@ pub fn closest<'a>(name: &str, popular: &'a [&'a str], local: &'a [String]) -> O
         .filter(|(candidate, _)| candidate.chars().count() >= MIN_NAME_LEN)
         .map(|(candidate, local)| {
             let folded = candidate.to_ascii_lowercase();
-            let homoglyph = normalize(candidate) == normalized && folded != needle;
+            let candidate_normalized = normalize(candidate);
+            let homoglyph = candidate_normalized == normalized && folded != needle;
             let distance = if homoglyph {
                 0
             } else {
-                levenshtein(&needle, &folded)
+                // Adjacent transpositions are a common typo; count them as one
+                // edit so an old lookalike is not dismissed as a weak match.
+                damerau_levenshtein(&normalized, &candidate_normalized)
             };
             Suspect {
                 candidate,
@@ -542,9 +547,13 @@ pub fn closest<'a>(name: &str, popular: &'a [&'a str], local: &'a [String]) -> O
         })
 }
 
-/// Folds lookalike characters so `1odash` and `lodash` compare equal.
+/// Folds lookalike characters so `1odash`, `pаypal` (Cyrillic а), and
+/// `ｌｏｄａｓｈ` (fullwidth) compare like their ASCII originals.
 pub fn normalize(name: &str) -> String {
-    name.to_ascii_lowercase()
+    name.chars()
+        .flat_map(char::to_lowercase)
+        .map(fold_confusable)
+        .collect::<String>()
         .replace("rn", "m")
         .chars()
         .map(|c| match c {
@@ -557,6 +566,76 @@ pub fn normalize(name: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+/// Common Cyrillic/Greek lookalikes and fullwidth ASCII. A registry that
+/// accepts these should not get a free pass just because the glyph is not
+/// ASCII; unknown characters are left alone rather than guessed.
+fn fold_confusable(c: char) -> char {
+    let code = c as u32;
+    if (0xFF01..=0xFF5E).contains(&code)
+        && let Some(ascii) = char::from_u32(code - 0xFEE0)
+    {
+        return ascii;
+    }
+    match c {
+        'а' => 'a',
+        'е' => 'e',
+        'о' => 'o',
+        'р' => 'p',
+        'с' => 'c',
+        'х' => 'x',
+        'у' => 'y',
+        'і' | 'ї' | 'ı' => 'i',
+        'ѕ' => 's',
+        'ј' | 'ȷ' => 'j',
+        'ԁ' => 'd',
+        'һ' => 'h',
+        'ӏ' => 'l',
+        'ԛ' => 'q',
+        'ԝ' => 'w',
+        'ɡ' => 'g',
+        'α' => 'a',
+        'ε' => 'e',
+        'ι' => 'i',
+        'κ' => 'k',
+        'ν' => 'v',
+        'ο' => 'o',
+        'ρ' => 'p',
+        'τ' => 't',
+        'υ' => 'u',
+        'χ' => 'x',
+        'ω' => 'w',
+        'γ' => 'y',
+        other => other,
+    }
+}
+
+/// Optimal-string-alignment Damerau–Levenshtein distance: adjacent
+/// transpositions count as one edit, substitutions as one.
+pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut distance = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in distance.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in distance[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut value = (distance[i - 1][j] + 1)
+                .min(distance[i][j - 1] + 1)
+                .min(distance[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                value = value.min(distance[i - 2][j - 2] + 1);
+            }
+            distance[i][j] = value;
+        }
+    }
+    distance[a.len()][b.len()]
 }
 
 pub fn levenshtein(a: &str, b: &str) -> usize {
@@ -838,6 +917,134 @@ mod tests {
     #[test]
     fn empty_name_is_not_a_suspect() {
         assert_eq!(closest("", popular_npm(), &[]), None);
+    }
+
+    #[test]
+    fn adjacent_transpositions_are_one_edit() {
+        assert_eq!(damerau_levenshtein("lodahs", "lodash"), 1);
+        assert_eq!(damerau_levenshtein("axois", "axios"), 1);
+        assert_eq!(damerau_levenshtein("lodash", "lodash"), 0);
+        assert_eq!(damerau_levenshtein("consoel", "console"), 1);
+        assert_eq!(damerau_levenshtein("kitten", "sitting"), 3);
+    }
+
+    #[test]
+    fn unicode_confusables_fold_to_ascii() {
+        assert_eq!(normalize("pаypal"), "paypal");
+        assert_eq!(normalize("рreact"), "preact");
+        assert_eq!(normalize("ｌｏｄａｓｈ"), "lodash");
+        assert_eq!(normalize("PAYPAL"), "paypal");
+    }
+
+    #[test]
+    fn a_cyrillic_lookalike_is_a_homoglyph_suspect() {
+        let suspect = closest("рreact", &["preact"], &[]).unwrap();
+        assert_eq!(suspect.candidate, "preact");
+        assert_eq!(suspect.distance, 0);
+        assert!(suspect.homoglyph, "{suspect:?}");
+    }
+
+    #[test]
+    fn the_regression_dataset_meets_the_precision_and_recall_floor() {
+        struct Case {
+            ecosystem: &'static str,
+            name: &'static str,
+            target: &'static str,
+            kind: &'static str,
+            note: &'static str,
+        }
+
+        let cases: Vec<Case> = include_str!("../tests/fixtures/typosquat-cases.tsv")
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+            .filter_map(|line| {
+                let mut fields = line.splitn(5, '\t');
+                Some(Case {
+                    ecosystem: fields.next()?,
+                    name: fields.next()?,
+                    target: fields.next()?,
+                    kind: fields.next()?,
+                    note: fields.next().unwrap_or(""),
+                })
+            })
+            .collect();
+        assert!(cases.len() >= 40, "the dataset shrank: {}", cases.len());
+
+        let seed = |ecosystem: &str| -> &'static [&'static str] {
+            match ecosystem {
+                "npm" => popular_npm(),
+                "pypi" => POPULAR_PYPI,
+                "crates" => POPULAR_CRATES,
+                "go" => POPULAR_GO,
+                "jsr" => POPULAR_JSR,
+                "rubygems" => POPULAR_RUBYGEMS,
+                "nuget" => POPULAR_NUGET,
+                "maven" => POPULAR_MAVEN,
+                "composer" => POPULAR_COMPOSER,
+                other => panic!("unknown ecosystem in dataset: {other}"),
+            }
+        };
+
+        let mut true_positives = 0;
+        let mut false_positives = 0;
+        let mut false_negatives = 0;
+        let mut known_true = 0;
+        let mut known_total = 0;
+        for case in &cases {
+            let suspect = closest(case.name, seed(case.ecosystem), &[]);
+            if case.kind == "legit" {
+                if let Some(suspect) = suspect {
+                    false_positives += 1;
+                    eprintln!(
+                        "false positive: {} {} -> {} at distance {} ({})",
+                        case.ecosystem, case.name, suspect.candidate, suspect.distance, case.note
+                    );
+                }
+                continue;
+            }
+            if case.kind == "known" {
+                known_total += 1;
+            }
+            match suspect {
+                Some(suspect) if suspect.candidate == case.target => {
+                    true_positives += 1;
+                    if case.kind == "known" {
+                        known_true += 1;
+                    }
+                }
+                other => {
+                    false_negatives += 1;
+                    eprintln!(
+                        "miss: {} {} expected {} got {:?} ({})",
+                        case.ecosystem,
+                        case.name,
+                        case.target,
+                        other.map(|suspect| (
+                            suspect.candidate,
+                            suspect.distance,
+                            suspect.homoglyph
+                        )),
+                        case.note
+                    );
+                }
+            }
+        }
+        let precision = true_positives as f64 / (true_positives + false_positives) as f64;
+        let recall = true_positives as f64 / (true_positives + false_negatives) as f64;
+        eprintln!(
+            "typosquat dataset: {} cases, precision {:.3}, recall {:.3}, known {}/{}",
+            cases.len(),
+            precision,
+            recall,
+            known_true,
+            known_total
+        );
+        assert!(precision >= 0.95, "precision {precision:.3}");
+        assert!(recall >= 0.95, "recall {recall:.3}");
+        assert_eq!(
+            known_true, known_total,
+            "every documented attack must be caught"
+        );
     }
 
     #[test]

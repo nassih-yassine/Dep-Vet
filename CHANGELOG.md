@@ -7,6 +7,13 @@
   and direct flags, as a human tree or `--json`. Nested versions resolve to the
   nearest `node_modules`; cycles are cut; a dependency named but absent from the
   lockfile is listed, never dropped. No network, no install, no execution.
+- **Typosquat regression set and stronger lookalikes.** Adjacent transpositions
+  now count as one edit, so `lodahs` is a HIGH finding instead of a weak
+  distance-2 match that age could suppress. Cyrillic, Greek, and fullwidth
+  lookalikes fold to ASCII before comparison. A 56-case regression set
+  (`tests/fixtures/typosquat-cases.tsv`) covers documented attacks, synthetic
+  mutations, and legitimate neighbours; tests require precision and recall
+  floors and catch every documented attack.
 - **SBOM output.** `dep-vet sbom <lockfile> --format cyclonedx|spdx` writes a
   CycloneDX 1.5 or SPDX 2.3 inventory from the resolved lockfile, offline. npm
   adds PURLs, SHA checksums from `integrity`, the project component, and

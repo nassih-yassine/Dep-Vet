@@ -1,0 +1,62 @@
+# Typosquat regression set: ecosystem, name, expected popular target, kind, note.
+# `kind` is known (documented real attack), synthetic (one controlled mutation),
+# or legit (a real package that must not be flagged). Tabs separate fields.
+#
+# Known examples are cited in the notes; synthetic rows only measure behavior
+# and do not claim that a package exists or is malicious.
+npm	crossenv	cross-env	known	documented crossenv malware campaign
+npm	lodahs	lodash	synthetic	adjacent transposition
+npm	1odash	lodash	synthetic	digit-for-letter homoglyph
+npm	expresss	express	synthetic	appended character
+npm	axois	axios	synthetic	adjacent transposition
+npm	chalkk	chalk	synthetic	appended character
+npm	webpak	webpack	synthetic	deleted character
+npm	eslnt	eslint	synthetic	deleted character
+npm	node-fetchh	node-fetch	synthetic	appended character
+npm	dottenv	dotenv	synthetic	adjacent transposition
+npm	рreact	preact	synthetic	Cyrillic lookalike
+npm	preact	-	legit	real package, exact seed match
+npm	react-dom	-	legit	real package, longer name
+npm	lodash.merge	-	legit	real package, longer name
+npm	cross-env	-	legit	real package, exact seed match
+npm	fastify	-	legit	real package, distinct name
+npm	esbuild	-	legit	real package, distinct name
+npm	tslib	-	legit	real package, distinct name
+pypi	urlib3	urllib3	known	documented PyPI typosquat
+pypi	jeIlyfish	jellyfish	known	documented capital-I homoglyph
+pypi	colourama	colorama	known	documented PyPI typosquat
+pypi	reqeusts	requests	synthetic	adjacent transposition
+pypi	numppy	numpy	synthetic	appended character
+pypi	pandaas	pandas	synthetic	appended character
+pypi	python-dateutils	python-dateutil	synthetic	appended character
+pypi	рandas	pandas	synthetic	Cyrillic lookalike
+pypi	torch	-	legit	real package, exact seed match
+pypi	tornado	-	legit	real package, distinct name
+pypi	pytest	-	legit	real package, exact seed match
+pypi	safetensors	-	legit	real package, longer name
+pypi	ruff	-	legit	real package, exact seed match
+crates	tokioo	tokio	synthetic	appended character
+crates	clapp	clap	synthetic	appended character
+crates	reqwestt	reqwest	synthetic	appended character
+crates	serdee	serde	synthetic	appended character
+crates	serde_json	-	legit	real package, longer name
+crates	tokio-util	-	legit	real package, longer name
+crates	clap_complete	-	legit	real package, longer name
+rubygems	railz	rails	synthetic	substituted character
+rubygems	rackk	rack	synthetic	appended character
+rubygems	rack-test	-	legit	real package, longer name
+rubygems	rails-html-sanitizer	-	legit	real package, longer name
+nuget	newtonsoft.jsonn	newtonsoft.json	synthetic	appended character
+nuget	xunitt	xunit	synthetic	appended character
+nuget	xunit.core	-	legit	real package, longer name
+nuget	system.text.json	-	legit	real package, exact seed match
+maven	junit:junitt	junit:junit	synthetic	appended character
+maven	org.slf4j:slf4j-apii	org.slf4j:slf4j-api	synthetic	appended character
+maven	junit:junit	-	legit	real package, exact seed match
+composer	symfony/consoel	symfony/console	synthetic	adjacent transposition
+composer	guzzlehttp/guzzel	guzzlehttp/guzzle	synthetic	adjacent transposition
+composer	symfony/http-foundation	-	legit	real package, longer name
+go	github.com/gin-gonic/ginn	github.com/gin-gonic/gin	synthetic	appended character
+go	github.com/gin-gonic/gin	-	legit	real package, exact seed match
+jsr	@std/assertt	@std/assert	synthetic	appended character
+jsr	@std/assert	-	legit	real package, exact seed match

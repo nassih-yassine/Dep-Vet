@@ -2023,6 +2023,26 @@ mod tests {
     }
 
     #[test]
+    fn a_transposed_typosquat_is_high_risk_and_not_age_suppressed() {
+        let mut meta = meta();
+        meta.name = "lodahs".to_string();
+        let findings = report(
+            meta.clone(),
+            Ecosystem::Npm,
+            None,
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert_eq!(
+            finding(&findings.findings, "typosquat").severity,
+            Severity::High
+        );
+        assert_eq!(findings.exit_code(), 2);
+    }
+
+    #[test]
     fn homoglyph_typosquat_is_high_risk() {
         let mut meta = meta();
         meta.name = "1odash".to_string();
