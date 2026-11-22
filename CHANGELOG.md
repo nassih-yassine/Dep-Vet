@@ -7,6 +7,12 @@
   and direct flags, as a human tree or `--json`. Nested versions resolve to the
   nearest `node_modules`; cycles are cut; a dependency named but absent from the
   lockfile is listed, never dropped. No network, no install, no execution.
+- **SBOM output.** `dep-vet sbom <lockfile> --format cyclonedx|spdx` writes a
+  CycloneDX 1.5 or SPDX 2.3 inventory from the resolved lockfile, offline. npm
+  adds PURLs, SHA checksums from `integrity`, the project component, and
+  dependency edges; other formats list PURLs without edges. Skipped entries are
+  disclosed as properties/annotations, and metadata the lockfile does not carry
+  is omitted or `NOASSERTION`. Both formats validate against their schemas.
 - **Opt-in publisher trust policy.** `[provenance]` can require an attestation
   or a verified source, and `[trusted_publishers]` can allow GitHub
   organizations, repositories, or workflow paths. `inspect npm` compares the

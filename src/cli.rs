@@ -40,6 +40,13 @@ pub enum OutputFormat {
     Sarif,
 }
 
+/// SBOM serialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SbomFormat {
+    Cyclonedx,
+    Spdx,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum HookAction {
     /// Serve a Claude Code PreToolUse hook on stdin
@@ -178,6 +185,20 @@ pub enum Command {
         format: Option<OutputFormat>,
 
         /// Write the report to a file instead of stdout
+        #[arg(short = 'o', long, value_name = "PATH")]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Write a CycloneDX or SPDX inventory from a lockfile
+    Sbom {
+        /// Lockfile to read (default: nearest package-lock.json)
+        lockfile: Option<std::path::PathBuf>,
+
+        /// SBOM format
+        #[arg(long, value_enum, default_value = "cyclonedx")]
+        format: SbomFormat,
+
+        /// Write the SBOM to a file instead of stdout
         #[arg(short = 'o', long, value_name = "PATH")]
         output: Option<std::path::PathBuf>,
     },
@@ -471,6 +492,36 @@ mod tests {
             }
             _ => panic!("expected audit command"),
         }
+    }
+
+    #[test]
+    fn parses_sbom_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "sbom", "package-lock.json"]).unwrap();
+        match cli.command {
+            Command::Sbom {
+                lockfile,
+                format,
+                output,
+            } => {
+                assert_eq!(
+                    lockfile,
+                    Some(std::path::PathBuf::from("package-lock.json"))
+                );
+                assert_eq!(format, SbomFormat::Cyclonedx);
+                assert!(output.is_none());
+            }
+            _ => panic!("expected sbom command"),
+        }
+        let cli =
+            Cli::try_parse_from(["dep-vet", "sbom", "--format", "spdx", "-o", "bom.json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Sbom {
+                format: SbomFormat::Spdx,
+                output: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]

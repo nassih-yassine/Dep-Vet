@@ -1276,6 +1276,184 @@ fn write_lockfile(directory: &tempfile::TempDir, body: &str) -> std::path::PathB
     path
 }
 
+fn sbom_lockfile() -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(b"hello"));
+    format!(
+        r#"{{
+          "name": "app",
+          "version": "1.0.0",
+          "lockfileVersion": 3,
+          "packages": {{
+            "": {{"name": "app", "version": "1.0.0", "dependencies": {{"a": "^1"}}}},
+            "node_modules/a": {{
+              "version": "1.0.0",
+              "integrity": "sha512-{digest}",
+              "dependencies": {{"b": "^2"}}
+            }},
+            "node_modules/b": {{"version": "2.0.0"}}
+          }}
+        }}"#
+    )
+}
+
+#[test]
+fn sbom_emits_cyclonedx_with_purls_hashes_and_edges() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = directory.path().join("package-lock.json");
+    std::fs::write(&lock, sbom_lockfile()).unwrap();
+
+    let output = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["sbom", lock.to_str().unwrap(), "--format", "cyclonedx"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["bomFormat"], "CycloneDX");
+    assert_eq!(value["specVersion"], "1.5");
+    assert_eq!(value["metadata"]["component"]["name"], "app");
+    let components = value["components"].as_array().unwrap();
+    assert_eq!(components.len(), 2);
+    let a = components
+        .iter()
+        .find(|component| component["name"] == "a")
+        .unwrap();
+    assert_eq!(a["purl"], "pkg:npm/a@1.0.0");
+    assert_eq!(a["hashes"][0]["alg"], "SHA-512");
+    assert_eq!(
+        a["hashes"][0]["content"].as_str().unwrap().len(),
+        128,
+        "{value}"
+    );
+    let dependencies = value["dependencies"].as_array().unwrap();
+    assert!(
+        dependencies
+            .iter()
+            .any(|dependency| dependency["ref"] == "dep-vet:project"
+                && dependency["dependsOn"] == serde_json::json!(["pkg:npm/a@1.0.0"])),
+        "{value}"
+    );
+    assert!(
+        dependencies
+            .iter()
+            .any(|dependency| dependency["ref"] == "pkg:npm/a@1.0.0"
+                && dependency["dependsOn"] == serde_json::json!(["pkg:npm/b@2.0.0"])),
+        "{value}"
+    );
+}
+
+#[test]
+fn sbom_emits_spdx_with_project_relationships_and_checksums() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = directory.path().join("package-lock.json");
+    std::fs::write(&lock, sbom_lockfile()).unwrap();
+
+    let output = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["sbom", lock.to_str().unwrap(), "--format", "spdx"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["spdxVersion"], "SPDX-2.3");
+    assert_eq!(value["dataLicense"], "CC0-1.0");
+    assert!(
+        value["documentNamespace"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://github.com/nassih-yassine/Dep-Vet/sbom/"),
+        "{value}"
+    );
+    let packages = value["packages"].as_array().unwrap();
+    assert_eq!(packages.len(), 3);
+    let a = packages
+        .iter()
+        .find(|package| package["name"] == "a")
+        .unwrap();
+    assert_eq!(a["checksums"][0]["algorithm"], "SHA512");
+    assert_eq!(a["externalRefs"][0]["referenceLocator"], "pkg:npm/a@1.0.0");
+    let relationships = value["relationships"].as_array().unwrap();
+    assert!(
+        relationships.iter().any(|relationship| {
+            relationship["relationshipType"] == "DESCRIBES"
+                && relationship["relatedSpdxElement"] == "SPDXRef-Project"
+        }),
+        "{value}"
+    );
+    assert!(
+        relationships
+            .iter()
+            .filter(|relationship| relationship["relationshipType"] == "DEPENDS_ON")
+            .count()
+            >= 2,
+        "{value}"
+    );
+}
+
+#[test]
+fn sbom_writes_to_a_file_and_leaves_stdout_empty() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = directory.path().join("package-lock.json");
+    std::fs::write(&lock, sbom_lockfile()).unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args([
+            "sbom",
+            lock.to_str().unwrap(),
+            "--format",
+            "spdx",
+            "-o",
+            "bom.json",
+        ])
+        .current_dir(directory.path())
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty());
+    let body = std::fs::read_to_string(directory.path().join("bom.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["spdxVersion"], "SPDX-2.3");
+}
+
+#[test]
+fn sbom_supports_a_non_npm_lockfile_without_claiming_edges() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = directory.path().join("Cargo.lock");
+    std::fs::write(
+        &lock,
+        "version = 3\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["sbom", lock.to_str().unwrap(), "--format", "cyclonedx"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let components = value["components"].as_array().unwrap();
+    assert!(
+        components
+            .iter()
+            .any(|component| component["purl"] == "pkg:cargo/serde@1.0.0"),
+        "{value}"
+    );
+    assert!(
+        value["dependencies"].as_array().unwrap().is_empty(),
+        "{value}"
+    );
+}
+
 #[test]
 fn tree_builds_nested_npm_edges_and_reports_json() {
     let directory = tempfile::tempdir().unwrap();

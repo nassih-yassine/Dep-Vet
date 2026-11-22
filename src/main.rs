@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use dep_vet::cli::{Cli, Command, OutputFormat};
+use dep_vet::cli::{Cli, Command, OutputFormat, SbomFormat};
 use dep_vet::composer::{ComposerClient, ComposerError};
 use dep_vet::crates::{CratesClient, CratesError};
 use dep_vet::go::{GoClient, GoError};
@@ -286,6 +286,58 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 OutputFormat::Human
             });
             run_audit(&auditor, &allowlist, path, format, output.as_deref(), cli)
+        }
+
+        Command::Sbom {
+            lockfile,
+            format,
+            output,
+        } => {
+            let path = match lockfile {
+                Some(path) => path.clone(),
+                None => lockfile::nearest(std::path::Path::new(".")).ok_or_else(|| {
+                    anyhow::anyhow!("no package-lock.json found; pass a lockfile path")
+                })?,
+            };
+            let lock_format = lockfile::detect(&path)?;
+            let contents = lockfile::read(&path)?;
+            let mut graph = None;
+            let mut project = None;
+            let mut checksums = std::collections::HashMap::new();
+            if lock_format == lockfile::Format::Npm {
+                let body = std::fs::read_to_string(&path)?;
+                graph = dep_vet::graph::npm_from_package_lock(&body).ok();
+                project = dep_vet::sbom::npm_project(&body);
+                checksums = dep_vet::sbom::npm_checksums(&body);
+            }
+            let mut inventory = dep_vet::sbom::inventory(
+                lock_format.ecosystem(),
+                &contents,
+                graph.as_ref(),
+                project,
+                &checksums,
+            );
+            if lock_format == lockfile::Format::Npm && inventory.edges.is_empty() {
+                inventory
+                    .notes
+                    .push("no dependency relationships were readable".to_string());
+            }
+            let text = match format {
+                SbomFormat::Cyclonedx => dep_vet::sbom::cyclonedx(
+                    &inventory,
+                    &path.display().to_string(),
+                    now_seconds(),
+                )?,
+                SbomFormat::Spdx => {
+                    dep_vet::sbom::spdx(&inventory, &path.display().to_string(), now_seconds())?
+                }
+            };
+            if let Some(destination) = output {
+                std::fs::write(destination, format!("{text}\n"))?;
+                Ok(0)
+            } else {
+                emit(&text, 0)
+            }
         }
 
         Command::Watch { lockfile } => {
