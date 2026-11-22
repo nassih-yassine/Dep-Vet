@@ -4700,6 +4700,34 @@ fn diff_flags_a_changed_install_script_and_a_new_binary() {
 }
 
 #[test]
+fn inspect_rejects_a_composer_archive_with_the_wrong_package_name() {
+    let archive = zip_archive(&[
+        ("composer.json", br#"{"name":"vendor/other"}"#),
+        ("index.php", b"<?php echo 1;"),
+    ]);
+    let registry = MockRegistry::start_with(move |base| {
+        let document = format!(
+            r#"{{"packages":{{"vendor/pkg":[{{"version":"1.0.0","source":{{"url":"https://github.com/vendor/pkg.git"}},"dist":{{"url":"{base}/pkg.zip"}}}}]}}}}"#
+        );
+        HashMap::from([
+            (
+                "/p2/vendor/pkg.json".to_string(),
+                (200, document.into_bytes()),
+            ),
+            ("/pkg.zip".to_string(), (200, archive.clone())),
+        ])
+    });
+    registry
+        .command()
+        .args(["inspect", "composer", "vendor/pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "Composer archive identity does not match",
+        ));
+}
+
+#[test]
 fn inspect_refuses_a_composer_dist_host_outside_the_source_provider() {
     let registry = MockRegistry::start(HashMap::from([(
         "/p2/vendor/pkg.json".to_string(),
