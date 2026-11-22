@@ -7,6 +7,13 @@
   and direct flags, as a human tree or `--json`. Nested versions resolve to the
   nearest `node_modules`; cycles are cut; a dependency named but absent from the
   lockfile is listed, never dropped. No network, no install, no execution.
+- **Opt-in publisher trust policy.** `[provenance]` can require an attestation
+  or a verified source, and `[trusted_publishers]` can allow GitHub
+  organizations, repositories, or workflow paths. `inspect npm` compares the
+  verified signer identity and OIDC issuer against the policy and emits WARN
+  findings (`PROVENANCE-TRUST-001/002/003`); a valid signature alone is not
+  trust. Defaults are off, and non-npm ecosystems report the policy as not
+  checked instead of claiming an attestation is missing.
 - **SARIF 2.1.0 output.** `audit --format sarif -o results.sarif` emits one
   result per finding with stable rule ids, SARIF severity levels, evidence
   URLs, package/version/confidence properties, dependency paths when known,

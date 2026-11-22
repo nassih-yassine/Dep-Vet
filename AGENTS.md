@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 551 unit + 170 end-to-end tests
+cargo test --locked                      # 557 unit + 173 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -416,6 +416,16 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **`lock` exits 3 when any added package could not be checked**, even if the
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.
+- **Publisher trust is policy, not verification.** `[provenance]` and
+  `[trusted_publishers]` are opt-in and empty by default; `inspect` applies them
+  only to npm, because offline verification exists only there. A verified Fulcio
+  signer is matched by GitHub org/repo/workflow (any list, org/repo
+  case-insensitive) and must carry the GitHub Actions issuer. Violations are
+  WARN `PROVENANCE-TRUST-001` (no attestation), `-002` (did not verify), or
+  `-003` (signer outside the lists). A valid signature is never described as
+  trust. Non-npm inspections add a not-checked line instead of claiming
+  absence. These are inspect findings, not `signals.rs` findings, so they are
+  not in `KNOWN_FINDINGS` and cannot be allowlisted; change the policy.
 - **SARIF is a view of the existing findings.** `src/sarif.rs` maps High to
   `error`, Warn to `warning`, and Info to `note`; rule ids and evidence URLs
   come from `Finding`, and allowed findings stay as notes. The artifact
