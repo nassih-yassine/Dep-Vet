@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 — 2026-11-22
 
 - **Dependency tree.** `dep-vet tree package-lock.json` shows the graph npm
   already resolved: nodes, parent-to-child edges (normal, dev, optional, peer),
