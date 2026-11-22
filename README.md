@@ -919,20 +919,23 @@ clean.
   their `freshness` signal is reported as `not checked`. Composer has maintainers,
   repository metadata, and an abandoned flag, but no install-time file list and
   no weekly download figure.
-- **Release transitions are metadata only.** Dormancy, changed install
-  scripts, added dependencies, and publisher changes come from the registry;
-  dep-vet never unpacks a release. History is requested only for versions from
-  the last 30 days.
-- **Provenance: presence in audits, verification in inspect.** `present` means
+- **Audit/lock release transitions are metadata only.** Dormancy, changed
+  install scripts, added dependencies, and publisher changes come from the
+  registry. `inspect` and `diff` do unpack archives. History is requested only
+  for versions from the last 30 days.
+- **Provenance: presence, verification, and opt-in policy.** `present` means
   the registry publishes an attestation. An audit checks the subject digest
-  only; `inspect npm` performs full offline Sigstore verification. Neither
-  decides whether the signer is trustworthy for that package. `missing` is never a finding, and `unavailable` means the ecosystem
-  has no provenance dep-vet can read.
-- **Release diffs are text-based.** `diff` compares extracted files by content
-  and rule hits by (rule, file). Install hooks are compared as parsed commands,
-  not as a `package.json` text diff. It does not decompile compiled artifacts;
-  added binaries are reported as INFO and never scanned, and a minified rewrite
-  can produce a large but harmless diff.
+  only; `inspect npm` performs full offline Sigstore verification. A
+  `[trusted_publishers]` policy can decide whether that verified signer is
+  trusted. Without that policy, `missing` is not a finding; with
+  `require_attestation`, it becomes `PROVENANCE-TRUST-001`. `unavailable` means
+  the ecosystem has no provenance dep-vet can read.
+- **Release diffs combine content and trust.** `diff` compares extracted files
+  by content, rule hits by (rule, file), parsed install hooks, npm publisher,
+  provenance/signer changes, declared dependencies, checksums, and new or
+  resolved advisories. It does not decompile compiled artifacts; added binaries
+  are reported as INFO and never scanned, and a minified rewrite can produce a
+  large but harmless diff.
 - **Archive inspection never executes a package.** It downloads, verifies,
   extracts in memory, and reads text. No install hooks run, no script is
   sourced, and no file is written outside the process.
@@ -941,10 +944,10 @@ clean.
   `$(...)`, `eval`, nested shells, and absolute paths are outside what the
   parser can guarantee, and a hostile agent can bypass it. `--strict` closes the
   fail-open path; `strict` never turns a miss into a detection.
-- **MCP inputs are untrusted.** Ecosystems and specs are validated, commands are
-  capped, lockfiles must resolve under the server's working directory, and
-  output is capped. Tool errors are `isError` results; protocol errors stay
-  JSON-RPC.
+- **MCP inputs are untrusted.** Requests must be JSON-RPC 2.0 objects,
+  ecosystems and specs are validated, commands are capped, lockfiles must
+  resolve under the server's working directory, and output is capped. Tool
+  errors are `isError` results; protocol errors stay JSON-RPC errors.
 - **Advice is a pointer, not a guarantee.** `fixed in` is what OSV publishes for
   that advisory; `newest` is the highest published version and may be a breaking
   major or still vulnerable. dep-vet never upgrades, rewrites, or tests anything.
@@ -976,8 +979,15 @@ clean.
 - **Gradle needs dependency locking.** `gradle.lockfile` (and its `buildscript-`
   and `settings-` variants) is audited as Maven coordinates; a build that never
   ran `--write-locks` has no file to check, and dep-vet will not invent one.
-- Not an SBOM generator or a Dependabot replacement.
-- No LLM in the verdict, no risk score, no hosted service, no accounts.
+- **Composer source ownership is only archive-checked.** The registry's
+  `source.url` claim is untrusted; dep-vet verifies the downloaded archive's
+  `composer.json` name, not that the repository really belongs to the package.
+  A public fork with the same package name can still pass.
+- **SBOM output is an inventory, not license compliance.** CycloneDX/SPDX use
+  only lockfile data; missing licenses, downloads, and provenance stay absent
+  or `NOASSERTION`.
+- Not a Dependabot replacement, license scanner, or hosted service.
+- No LLM in the verdict, no risk score, no accounts.
 - One batch query plus one request per advisory on a cold cache, at most 8 in
   flight; bounded at 25 advisories per run, and the report says how many were
   skipped. Lockfile audits run 4 packages at a time.

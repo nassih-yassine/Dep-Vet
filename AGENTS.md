@@ -19,9 +19,10 @@ These override convenience. Do not shortcut them.
 2. Every change ships with tests. Actively try to break the app: malformed
    registry JSON, future timestamps, path traversal in specs, huge packuments,
    closed pipes, missing fields.
-3. Keep `README.md` and the GitHub repository About description in sync with
-   what ships. A feature is not done until both describe it: update the About
-   with `gh repo edit ... --description` in the same pass as the README.
+3. Keep `README.md`, `SECURITY.md`, `CHANGELOG.md`, the wiki, and the GitHub
+   repository About description in sync with what ships. A feature or security
+   change is not done until the docs no longer state an old limit. Update the
+   About with `gh repo edit ... --description` in the same pass as the README.
 4. Bug found → write the failing test first, watch it fail, then fix. See
    `ci_publishers_are_not_maintainer_mismatches` in `src/signals.rs` for the
    shape of a regression test.
