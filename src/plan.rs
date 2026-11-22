@@ -338,17 +338,26 @@ pub fn render_json(report: &PlanReport) -> Result<String, serde_json::Error> {
         #[serde(flatten)]
         report: &'a PlanReport,
         exit_code: u8,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        unofficial_registry: bool,
     }
     serde_json::to_string_pretty(&Json {
         report,
         exit_code: report.exit_code(),
+        unofficial_registry: crate::netpolicy::insecure_active(),
     })
 }
 
 pub fn render(report: &PlanReport) -> String {
     let mut out = format!(
-        "plan: npm/{} (requested {})\n\n",
-        report.root, report.requested
+        "{}plan: npm/{} (requested {})\n\n",
+        if crate::netpolicy::insecure_active() {
+            "UNOFFICIAL REGISTRY: a development override is active; results are not production registry data\n\n"
+        } else {
+            ""
+        },
+        report.root,
+        report.requested
     );
     out.push_str(&format!(
         "  {} package{}, {} edge{}\n",

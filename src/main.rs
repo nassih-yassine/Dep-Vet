@@ -49,6 +49,19 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(error) => return usage_exit(error),
     };
+    if cli.dev_registry {
+        // The flag is the explicit opt-in; the HTTP layer reads the same gate.
+        // SAFETY: set before any worker or client is created.
+        unsafe {
+            std::env::set_var("DEPVET_ALLOW_INSECURE_BASES", "1");
+        }
+    }
+    if let Err(error) = dep_vet::netpolicy::check_overrides_env() {
+        eprintln!("dep-vet: {error}");
+        eprintln!("dep-vet could not start the check; this is not a verdict (exit {TOOL_ERROR}).");
+        return ExitCode::from(TOOL_ERROR);
+    }
+    dep_vet::netpolicy::warn_once();
     match execute(&cli) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
@@ -849,7 +862,8 @@ fn run_guard_child(command: &str) -> (u8, Option<String>) {
                 format!("{}/downloads", test_base.to_string_lossy()),
             )
             .env("DEPVET_OSV_BASE", &test_base)
-            .env("DEPVET_NO_CACHE", "1");
+            .env("DEPVET_NO_CACHE", "1")
+            .env("DEPVET_ALLOW_INSECURE_BASES", "1");
     }
     let Ok(mut child) = child.spawn() else {
         return (3, None);
@@ -1659,7 +1673,12 @@ fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result
     let output = if json {
         render_json(report)?
     } else {
-        let report_text = render_human(report, use_color(cli));
+        let mut report_text = render_human(report, use_color(cli));
+        if dep_vet::netpolicy::insecure_active() {
+            report_text = format!(
+                "UNOFFICIAL REGISTRY: a development override is active; results are not production registry data\n\n{report_text}"
+            );
+        }
         // The wordmark is for humans at a terminal; pipes and CI get the
         // report alone.
         if io::stdout().is_terminal() {

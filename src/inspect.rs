@@ -15,6 +15,8 @@ pub enum InspectError {
     Http(String),
     #[error("archive could not be inspected: {0}")]
     Archive(String),
+    #[error("archive URL refused: {0}")]
+    Policy(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,15 +107,24 @@ pub fn inspect_archive(
         }
         Err(error) => return Err(InspectError::Archive(error.to_string())),
     };
-    let provenance = source
-        .provenance_url
-        .as_deref()
-        .map(|url| match http.get(url) {
+    let provenance = if let Some(url) = source.provenance_url.as_deref() {
+        crate::netpolicy::validate_url(Ecosystem::Npm, url).map_err(|error| {
+            InspectError::Policy(format!("attestation URL rejected for {url}: {error}"))
+        })?;
+        Some(match http.get_trusted(Ecosystem::Npm, url) {
             Ok(body) => crate::provenance::verify(&body, &bytes),
+            Err(crate::http::HttpError::Policy { message, .. }) => {
+                return Err(InspectError::Policy(format!(
+                    "attestation URL rejected for {url}: {message}"
+                )));
+            }
             Err(error) => {
                 crate::provenance::unverified(format!("attestation could not be fetched: {error}"))
             }
-        });
+        })
+    } else {
+        None
+    };
     Ok(Prepared {
         url: source.url,
         kind: source.kind,
@@ -138,7 +149,7 @@ fn get_bytes(
 ) -> Result<Vec<u8>, InspectError> {
     let mut last_error = None;
     for attempt in 0..DOWNLOAD_ATTEMPTS {
-        match http.get_raw(url) {
+        match http.get_raw(ecosystem, url) {
             Ok(mut response) => {
                 let declared = response
                     .headers()
@@ -174,6 +185,7 @@ fn get_bytes(
                     format!("{url} returned 404"),
                 ));
             }
+            Err(HttpError::Policy { message, .. }) => return Err(InspectError::Policy(message)),
             Err(error) if error.is_transient() && attempt + 1 < DOWNLOAD_ATTEMPTS => {
                 std::thread::sleep(crate::http::retry_delay_jittered(
                     attempt,

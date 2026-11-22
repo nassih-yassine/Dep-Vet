@@ -30,6 +30,10 @@ pub struct Cli {
     /// Path to a .depvet.toml allowlist (default: nearest, walking up)
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<std::path::PathBuf>,
+
+    /// Allow DEPVET_*_BASE overrides (development only)
+    #[arg(long, global = true)]
+    pub dev_registry: bool,
 }
 
 /// Report serialization. `--json` remains an alias for `--format json`.

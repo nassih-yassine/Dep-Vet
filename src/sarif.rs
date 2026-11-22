@@ -123,6 +123,9 @@ pub fn render(report: &AuditReport) -> Result<String, serde_json::Error> {
         "executionSuccessful": report.errors.is_empty(),
         "exitCode": report.exit_code(),
     });
+    if crate::netpolicy::insecure_active() {
+        invocation["properties"] = json!({ "unofficial_registry": true });
+    }
     if !report.errors.is_empty() {
         invocation["toolExecutionNotifications"] = Value::Array(
             report

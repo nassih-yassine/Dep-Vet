@@ -39,13 +39,24 @@ pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> 
         package: &'a PackageReport,
         verdict: Severity,
         exit_code: u8,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        unofficial_registry: bool,
     }
 
     serde_json::to_string_pretty(&JsonReport {
         package: report,
         verdict: report.verdict(),
         exit_code: report.exit_code(),
+        unofficial_registry: crate::netpolicy::insecure_active(),
     })
+}
+
+fn unofficial_banner() -> &'static str {
+    if crate::netpolicy::insecure_active() {
+        "UNOFFICIAL REGISTRY: a development override is active; results are not production registry data\n\n"
+    } else {
+        ""
+    }
 }
 
 pub fn render_human(report: &PackageReport, color: bool) -> String {
@@ -249,19 +260,25 @@ pub fn render_inspection_json(
         report: &'a crate::inspect::InspectionReport,
         verdict: Severity,
         exit_code: u8,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        unofficial_registry: bool,
     }
 
     serde_json::to_string_pretty(&Json {
         report,
         verdict: report.verdict(),
         exit_code: report.exit_code(),
+        unofficial_registry: crate::netpolicy::insecure_active(),
     })
 }
 
 pub fn render_inspection_human(report: &crate::inspect::InspectionReport, color: bool) -> String {
     let mut out = format!(
-        "inspection: {}/{}@{}\n\n",
-        report.ecosystem, report.name, report.version
+        "{}inspection: {}/{}@{}\n\n",
+        unofficial_banner(),
+        report.ecosystem,
+        report.name,
+        report.version
     );
     push_field(
         &mut out,
@@ -358,19 +375,26 @@ pub fn render_diff_json(report: &crate::inspect::DiffReport) -> Result<String, s
         report: &'a crate::inspect::DiffReport,
         verdict: Severity,
         exit_code: u8,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        unofficial_registry: bool,
     }
 
     serde_json::to_string_pretty(&Json {
         report,
         verdict: report.verdict(),
         exit_code: report.exit_code(),
+        unofficial_registry: crate::netpolicy::insecure_active(),
     })
 }
 
 pub fn render_diff_human(report: &crate::inspect::DiffReport, color: bool) -> String {
     let mut out = format!(
-        "diff: {}/{} {} -> {}\n\n",
-        report.ecosystem, report.name, report.from_version, report.to_version
+        "{}diff: {}/{} {} -> {}\n\n",
+        unofficial_banner(),
+        report.ecosystem,
+        report.name,
+        report.from_version,
+        report.to_version
     );
     push_field(
         &mut out,
@@ -523,12 +547,15 @@ pub fn render_lock_json(report: &LockReport) -> Result<String, serde_json::Error
         report: &'a LockReport,
         verdict: Severity,
         exit_code: u8,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        unofficial_registry: bool,
     }
 
     serde_json::to_string_pretty(&Json {
         report,
         verdict: report.verdict(),
         exit_code: report.exit_code(),
+        unofficial_registry: crate::netpolicy::insecure_active(),
     })
 }
 
@@ -554,12 +581,15 @@ pub fn render_audit_json(report: &AuditReport) -> Result<String, serde_json::Err
         report: &'a AuditReport,
         verdict: Severity,
         exit_code: u8,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        unofficial_registry: bool,
     }
 
     serde_json::to_string_pretty(&Json {
         report,
         verdict: report.verdict(),
         exit_code: report.exit_code(),
+        unofficial_registry: crate::netpolicy::insecure_active(),
     })
 }
 
@@ -643,7 +673,7 @@ fn render_tree_advice(packages: &[PackageReport]) -> Option<String> {
 }
 
 fn render_tree(view: TreeView<'_>) -> String {
-    let mut out = format!("{}\n\n", view.header);
+    let mut out = format!("{}{}\n\n", unofficial_banner(), view.header);
 
     if view.packages.is_empty() {
         out.push_str(&format!("  {}\n", view.empty));

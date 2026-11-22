@@ -20,6 +20,7 @@ pub mod lockfile;
 pub mod maven;
 pub mod mcp;
 pub mod model;
+pub mod netpolicy;
 pub mod nuget;
 pub mod osv;
 pub mod plan;

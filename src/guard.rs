@@ -51,6 +51,7 @@ impl GuardReport {
             "notes": self.parse.notes,
             "verdict": self.verdict().label().to_ascii_lowercase(),
             "exit_code": self.exit_code(),
+            "unofficial_registry": crate::netpolicy::insecure_active(),
         });
         value.to_string()
     }

@@ -7,6 +7,13 @@
   and direct flags, as a human tree or `--json`. Nested versions resolve to the
   nearest `node_modules`; cycles are cut; a dependency named but absent from the
   lockfile is listed, never dropped. No network, no install, no execution.
+- **Outbound URL policy.** Archive and provenance URLs from registry JSON now
+  require https, an ecosystem host allowlist, no userinfo or non-default ports,
+  and a public IP literal. Archive fetches follow at most three redirects
+  manually with validation per hop and no https-to-http downgrade. A custom DNS
+  resolver filters non-public answers before connecting. `DEPVET_*_BASE`
+  overrides require `DEPVET_ALLOW_INSECURE_BASES=1` or `--dev-registry`, emit
+  one warning, and mark reports `unofficial_registry`; refusals exit `3`.
 - **`plan` for npm ranges.** `dep-vet plan npm express@5` resolves the
   dependency tree from packuments without downloading tarballs or running
   scripts, with normal/optional/peer edges, multiple-version reporting, cycle
