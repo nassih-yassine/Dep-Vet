@@ -91,6 +91,20 @@ Releases are checksummed (`sha256.sum`), carry SLSA provenance attestations,
 and are built for Linux (glibc and static musl), macOS (aarch64 and x86_64),
 and Windows x86_64.
 
+## How it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.png">
+  <img alt="How dep-vet works: Claude Code, OpenCode and GitHub Actions call dep-vet, which queries npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven and Composer plus OSV, and returns evidence with a verdict" src="assets/architecture.png" width="100%">
+</picture>
+
+Callers name a package or an install command. dep-vet queries the registry and
+OSV, applies local rules, and returns findings with evidence and an exit code.
+The diagram covers the metadata path; `inspect` adds the archive download and
+Sigstore verification step. Built with
+[stack-diagram](https://github.com/caru-ini/stack-diagram); logos remain the
+trademarks of their owners.
+
 ## Usage
 
 ```sh
