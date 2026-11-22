@@ -558,6 +558,15 @@ pre-push hook plus CI on every push.
 - After a release, bump the reusable workflow's default `ref` to the new tag;
   `main` moving is not a version. The action downloads the prebuilt installer
   for that ref and only builds from source when no release exists.
+- **Do not push workflow changes while a release is running.** `dist host`
+  creates the release with `target_commitish`; GitHub compares that commit with
+  the default branch and requires `workflows: write` when the range changes any
+  `.github/workflows/*`. `GITHUB_TOKEN` cannot be granted `workflows: write`, so
+  the host job fails with `403 Resource not accessible by integration` even
+  though its log shows `Contents: write`. Push follow-ups such as the Action
+  `ref` bump only after the Release workflow finishes. If it has already
+  happened, publish from the run's artifacts; rerunning the same tag does not
+  clear the comparison.
 
 ## Not built yet
 
