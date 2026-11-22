@@ -115,10 +115,21 @@ impl HttpClient {
             .user_agent(concat!("dep-vet/", env!("CARGO_PKG_VERSION")))
             .build();
         // Both agents use a resolver that filters every DNS answer before the
-        // connector sees it, closing the resolve-then-rebind window.
-        let agent = ureq::Agent::with_parts(config, DefaultConnector::new(), PublicOnlyResolver);
-        let archive_agent =
-            ureq::Agent::with_parts(archive_config, DefaultConnector::new(), PublicOnlyResolver);
+        // connector sees it, closing the resolve-then-rebind window. Read the
+        // override set once; DNS lookups must not re-parse the environment.
+        let overrides = crate::netpolicy::Overrides::from_env();
+        let agent = ureq::Agent::with_parts(
+            config,
+            DefaultConnector::new(),
+            PublicOnlyResolver {
+                overrides: overrides.clone(),
+            },
+        );
+        let archive_agent = ureq::Agent::with_parts(
+            archive_config,
+            DefaultConnector::new(),
+            PublicOnlyResolver { overrides },
+        );
         let policy_error = crate::netpolicy::check_overrides_env()
             .err()
             .map(|error| error.to_string());
@@ -189,12 +200,21 @@ impl HttpClient {
         ecosystem: crate::model::Ecosystem,
         url: &str,
     ) -> Result<ureq::http::Response<ureq::Body>, HttpError> {
+        self.get_raw_with_origin(ecosystem, url, None)
+    }
+
+    pub fn get_raw_with_origin(
+        &self,
+        ecosystem: crate::model::Ecosystem,
+        url: &str,
+        composer_origin: Option<&crate::netpolicy::ComposerOrigin>,
+    ) -> Result<ureq::http::Response<ureq::Body>, HttpError> {
         self.guard()?;
-        let mut current =
-            crate::netpolicy::validate_url(ecosystem, url).map_err(|error| HttpError::Policy {
-                url: url.to_string(),
-                message: error.to_string(),
-            })?;
+        let mut current = crate::netpolicy::validate_archive_url(ecosystem, url, composer_origin)
+            .map_err(|error| HttpError::Policy {
+            url: url.to_string(),
+            message: error.to_string(),
+        })?;
         let mut redirects = 0;
         loop {
             let response = match self.archive_agent.get(current.as_str()).call() {
@@ -221,13 +241,15 @@ impl HttpClient {
                         url: current.to_string(),
                         message,
                     })?;
-                current =
-                    crate::netpolicy::validate_url(ecosystem, next.as_str()).map_err(|error| {
-                        HttpError::Policy {
-                            url: next.to_string(),
-                            message: error.to_string(),
-                        }
-                    })?;
+                current = crate::netpolicy::validate_archive_url(
+                    ecosystem,
+                    next.as_str(),
+                    composer_origin,
+                )
+                .map_err(|error| HttpError::Policy {
+                    url: next.to_string(),
+                    message: error.to_string(),
+                })?;
                 redirects += 1;
                 continue;
             }
@@ -361,8 +383,10 @@ fn status_error(response: ureq::http::Response<ureq::Body>, url: &str) -> HttpEr
     }
 }
 
-#[derive(Debug)]
-struct PublicOnlyResolver;
+#[derive(Debug, Clone)]
+struct PublicOnlyResolver {
+    overrides: crate::netpolicy::Overrides,
+}
 
 impl Resolver for PublicOnlyResolver {
     fn resolve(
@@ -387,7 +411,7 @@ impl Resolver for PublicOnlyResolver {
             host,
             port,
             addresses.iter().map(|address| address.ip()),
-            &crate::netpolicy::Overrides::from_env(),
+            &self.overrides,
         )
         .map_err(|error| {
             ureq::Error::Io(std::io::Error::new(
