@@ -1288,6 +1288,7 @@ fn run_mcp_lockfile(
         "base": report.base,
         "packages": report.new_packages,
         "errors": errors,
+        "error_details": &report.errors,
         "notes": report.notes,
         "verdict": report.verdict().label().to_ascii_lowercase(),
         "exit_code": report.exit_code(),
@@ -1483,12 +1484,19 @@ fn diff_lockfile(
         allowlist.apply(report);
     }
 
+    let mut notes: Vec<String> = base_contents
+        .notes
+        .iter()
+        .map(|note| format!("base: {note}"))
+        .collect();
+    notes.extend(current.notes);
+
     Ok(LockReport {
         lockfile: path.display().to_string(),
         base: base.to_string(),
         new_packages,
         errors,
-        notes: current.notes,
+        notes,
     })
 }
 

@@ -309,6 +309,7 @@ pub fn is_public_ip(address: IpAddr) -> bool {
                 || (octets[0] == 100 && (64..=127).contains(&octets[1]))
                 || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
                 || (octets[0] == 198 && matches!(octets[1], 18 | 19))
+                || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
                 || octets[0] >= 240)
         }
         IpAddr::V6(address) => {
@@ -319,11 +320,19 @@ pub fn is_public_ip(address: IpAddr) -> bool {
             // Refuse transition/documentation ranges even if an embedded
             // address looks public: Teredo, discard-only, and 3fff::/20.
             if (segments[0] == 0x2001 && segments[1] == 0)
+                || (segments[0] == 0x2001 && segments[1] == 0x0002)
+                || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0010)
+                || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0020)
+                || (segments[0] == 0x2001 && (segments[1] & 0xfff0) == 0x0030)
                 || (segments[0] == 0x0100
                     && segments[1] == 0
                     && segments[2] == 0
                     && segments[3] == 0)
                 || (segments[0] == 0x3fff && (segments[1] & 0xf000) == 0)
+                || (segments[0] & 0xff00) == 0x5f00
+                // Local-use NAT64 prefix: its embedded IPv4 must not make a
+                // local translator look globally routable.
+                || (segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2] == 0x0001)
             {
                 return false;
             }
@@ -595,6 +604,14 @@ mod tests {
             "100::1",
             "3fff::1",
             "2001:db8::1",
+            "64:ff9b:1::a9fe:a9fe",
+            "2001:2::1",
+            "2001:10::1",
+            "2001:20::1",
+            "2001:30::1",
+            "5f00::1",
+            "5f01::1",
+            "192.88.99.1",
             "::",
             "::1",
         ] {

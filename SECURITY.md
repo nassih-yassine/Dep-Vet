@@ -67,10 +67,12 @@ provenance document, the URL must pass `src/netpolicy.rs`:
 - IP-literal hosts must be globally routable. Loopback, RFC 1918, link-local
   (`169.254.0.0/16`, `fe80::/10`), CGNAT (`100.64.0.0/10`), ULA (`fc00::/7`),
   unspecified, multicast, broadcast, documentation (`2001:db8::/32`,
-  `3fff::/20`), reserved, Teredo (`2001::/32`), discard-only (`100::/64`), and
-  IPv4-mapped IPv6 forms of all of these are refused. NAT64 (`64:ff9b::/96`),
-  IPv4-compatible, and 6to4 (`2002::/16`) addresses are judged by their
-  embedded IPv4 address. This blocks the cloud metadata address
+  `3fff::/20`), reserved, Teredo (`2001::/32`), discard-only (`100::/64`),
+  local-use NAT64 (`64:ff9b:1::/48`), benchmarking (`2001:2::/48`), ORCHID
+  (`2001:10::/28`, `2001:20::/28`), Drone (`2001:30::/28`), SRv6 (`5f00::/8`),
+  the deprecated 6to4 relay (`192.88.99.0/24`), and IPv4-mapped IPv6 forms of
+  all of these are refused. NAT64 (`64:ff9b::/96`), IPv4-compatible, and 6to4
+  (`2002::/16`) addresses are judged by their embedded IPv4 address. This blocks the cloud metadata address
   (`169.254.169.254`) and local services.
 - Archive fetches do not follow redirects automatically. dep-vet follows at
   most three, resolves relative `Location` values, revalidates every hop, and

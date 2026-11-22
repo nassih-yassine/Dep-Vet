@@ -175,14 +175,48 @@ impl HttpClient {
         url: &str,
     ) -> Result<bool, HttpError> {
         self.guard()?;
-        let url =
-            crate::netpolicy::validate_url(ecosystem, url).map_err(|error| HttpError::Policy {
-                url: url.to_string(),
-                message: error.to_string(),
+        let mut current =
+            crate::netpolicy::validate_archive_url(ecosystem, url, None).map_err(|error| {
+                HttpError::Policy {
+                    url: url.to_string(),
+                    message: error.to_string(),
+                }
             })?;
-        match self.archive_agent.head(url.as_str()).call() {
-            Ok(response) => Ok((200..300).contains(&response.status().as_u16())),
-            Err(error) => Err(network_error(error, url.as_str())),
+        let mut redirects = 0;
+        loop {
+            let response = match self.archive_agent.head(current.as_str()).call() {
+                Ok(response) => response,
+                Err(error) => return Err(network_error(error, current.as_str())),
+            };
+            let status = response.status().as_u16();
+            if (300..400).contains(&status) {
+                if redirects >= 3 {
+                    return Err(HttpError::Policy {
+                        url: current.to_string(),
+                        message: "more than 3 redirects".to_string(),
+                    });
+                }
+                let Some(location) = response
+                    .headers()
+                    .get("location")
+                    .and_then(|value| value.to_str().ok())
+                else {
+                    return Err(status_error(response, current.as_str()));
+                };
+                let next =
+                    redirect_target(&current, location).map_err(|message| HttpError::Policy {
+                        url: current.to_string(),
+                        message,
+                    })?;
+                current = crate::netpolicy::validate_archive_url(ecosystem, next.as_str(), None)
+                    .map_err(|error| HttpError::Policy {
+                        url: next.to_string(),
+                        message: error.to_string(),
+                    })?;
+                redirects += 1;
+                continue;
+            }
+            return Ok((200..300).contains(&status));
         }
     }
 

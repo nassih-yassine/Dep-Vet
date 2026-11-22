@@ -556,6 +556,8 @@ fn hook_input(command: &str) -> String {
     .to_string()
 }
 
+// The hook child only accepts DEPVET_HOOK_TEST_BASE in debug builds.
+#[cfg(debug_assertions)]
 #[test]
 fn hook_denies_a_typosquat_with_an_actionable_reason() {
     let package = PackageFixture::clean("expresss");
@@ -909,6 +911,8 @@ fn hook_install_strict_writes_an_absolute_pathed_handler() {
     assert!(command.ends_with("hook claude --strict"), "{command}");
 }
 
+// The hook child only accepts DEPVET_HOOK_TEST_BASE in debug builds.
+#[cfg(debug_assertions)]
 #[test]
 fn hook_times_out_and_allows() {
     use std::net::TcpListener;
@@ -1498,6 +1502,10 @@ fn mcp_lockfile_change_reports_malformed_and_partial_inputs() {
             .as_array()
             .unwrap()
             .is_empty(),
+        "{response}"
+    );
+    assert!(
+        response["result"]["structuredContent"]["error_details"][0]["package"].is_string(),
         "{response}"
     );
     drop(stdin);
@@ -4016,6 +4024,56 @@ fn pypi_reports_present_provenance() {
         .clone();
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["provenance"], "missing");
+}
+
+#[test]
+fn pypi_provenance_follows_a_redirect() {
+    let registry = MockRegistry::start_replies(|_base| {
+        HashMap::from([
+            (
+                "/pypi/flask/json".to_string(),
+                Reply {
+                    status: 200,
+                    body: PYPI_WHEEL.as_bytes().to_vec(),
+                    headers: Vec::new(),
+                },
+            ),
+            (
+                "/integrity/flask/3.1.0/flask-3.1.0.tar.gz/provenance".to_string(),
+                Reply {
+                    status: 302,
+                    body: Vec::new(),
+                    headers: vec![("Location".to_string(), "/provenance".to_string())],
+                },
+            ),
+            (
+                "/provenance".to_string(),
+                Reply {
+                    status: 200,
+                    body: b"{}".to_vec(),
+                    headers: Vec::new(),
+                },
+            ),
+            (
+                "/v1/querybatch".to_string(),
+                Reply {
+                    status: 200,
+                    body: NO_ADVISORIES.as_bytes().to_vec(),
+                    headers: Vec::new(),
+                },
+            ),
+        ])
+    });
+    let output = registry
+        .command()
+        .args(["pypi", "flask", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["provenance"], "present", "{value}");
 }
 
 fn attested_registry(subject_hex: &str) -> MockRegistry {

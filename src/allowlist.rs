@@ -78,10 +78,10 @@ pub struct TrustedPublishersConfig {
 
 /// Upper bounds for archive configuration. They are generous enough for real
 /// packages but keep every stock cap well below `u64` overflow.
-pub const MAX_DOWNLOAD_MB: u64 = 4_096;
-pub const MAX_TOTAL_MB: u64 = 8_192;
-pub const MAX_FILE_MB: u64 = 4_096;
-pub const MAX_DECOMPRESSED_MB: u64 = 16_384;
+pub const MAX_DOWNLOAD_MB: u64 = 1_024;
+pub const MAX_TOTAL_MB: u64 = 1_024;
+pub const MAX_FILE_MB: u64 = 512;
+pub const MAX_DECOMPRESSED_MB: u64 = 2_048;
 pub const MAX_ENTRIES: usize = 1_000_000;
 
 /// Archive-inspection settings from the same `.depvet.toml`.
