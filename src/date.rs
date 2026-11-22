@@ -78,6 +78,19 @@ pub fn format_date(epoch_seconds: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// Formats Unix seconds as an RFC 3339 UTC timestamp for SBOM creation info.
+pub fn format_timestamp(epoch_seconds: i64) -> String {
+    let days = epoch_seconds.div_euclid(SECONDS_PER_DAY);
+    let seconds = epoch_seconds.rem_euclid(SECONDS_PER_DAY);
+    format!(
+        "{}T{:02}:{:02}:{:02}Z",
+        format_date(days * SECONDS_PER_DAY),
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60
+    )
+}
+
 fn digits(slice: &[u8]) -> Option<i64> {
     let mut value = 0i64;
     for byte in slice {
@@ -224,6 +237,16 @@ mod tests {
         assert_eq!(days_between(start, start + 86_399), 0);
         assert_eq!(days_between(start, start + 86_400), 1);
         assert_eq!(days_between(start, start - 1), -1);
+    }
+
+    #[test]
+    fn formats_timestamps_from_epoch_seconds() {
+        assert_eq!(format_timestamp(0), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            format_timestamp(parse_timestamp("2024-02-29T23:59:59Z").unwrap()),
+            "2024-02-29T23:59:59Z"
+        );
+        assert_eq!(format_timestamp(-1), "1969-12-31T23:59:59Z");
     }
 
     #[test]

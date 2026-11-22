@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 557 unit + 173 end-to-end tests
+cargo test --locked                      # 563 unit + 177 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -416,6 +416,16 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **`lock` exits 3 when any added package could not be checked**, even if the
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.
+- **SBOM is inventory, not resolution or a verdict.** `src/sbom.rs` reads only
+  `LockContents` plus, for npm, the graph, project name/version, and `integrity`
+  checksums, all from the lockfile. It never fetches or invents licenses,
+  downloads, or provenance; SPDX uses `NOASSERTION`. PURLs follow each
+  ecosystem's type, and JSR gets an internal `bom-ref` because there is no
+  standard type to guess. Edges exist for npm only. Skipped entries are
+  disclosed in CycloneDX `metadata.properties` and SPDX annotations. `sbom` is
+  offline, defaults to the nearest `package-lock.json`, and does not change the
+  audit exit-code contract. Validate regenerated samples against the official
+  CycloneDX 1.5 and SPDX 2.3 schemas before shipping changes.
 - **Publisher trust is policy, not verification.** `[provenance]` and
   `[trusted_publishers]` are opt-in and empty by default; `inspect` applies them
   only to npm, because offline verification exists only there. A verified Fulcio

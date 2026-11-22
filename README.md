@@ -580,6 +580,31 @@ SARIF run still fails CI on warnings or worse.
 `--format json` is equivalent to `--json`, and the two cannot be combined.
 `-o`/`--output` writes the report to that path and leaves stdout empty.
 
+### SBOM
+
+```sh
+dep-vet sbom package-lock.json --format cyclonedx
+dep-vet sbom package-lock.json --format spdx -o bom.json
+```
+
+An inventory of the packages the lockfile already resolved, not a verdict. It
+makes no network requests and resolves nothing. `--format cyclonedx` emits
+CycloneDX 1.5; `--format spdx` emits SPDX 2.3. Without a path it reads the
+nearest `package-lock.json`; any supported lockfile can be passed explicitly.
+
+Every component carries its ecosystem, name, and version, plus a Package URL
+where the ecosystem has a standard type. For npm, the lockfile also supplies
+SHA checksums, the project's own name and version, and the parent-to-child
+dependency edges. Other formats list components without edges, because no
+dependency graph parser exists for them yet. A JSR entry gets an internal
+`bom-ref` instead of a guessed PURL. Entries the lockfile parser could not read
+are disclosed in CycloneDX `metadata.properties` and SPDX annotations, never
+dropped silently.
+
+Licenses, download locations, and provenance are not in a lockfile, so they are
+omitted or marked `NOASSERTION`; dep-vet does not fetch them for an SBOM. Both
+outputs are validated against the official CycloneDX 1.5 and SPDX 2.3 schemas.
+
 ### Exit codes
 
 | Code | Meaning |

@@ -30,6 +30,7 @@ pub mod report;
 pub mod rubygems;
 pub mod rules;
 pub mod sarif;
+pub mod sbom;
 pub mod signals;
 pub mod typosquat;
 pub mod version;
