@@ -13,7 +13,10 @@
 <img alt="9 ecosystems" src="https://img.shields.io/badge/ecosystems-9-success.svg">
 </p>
 
-<code>dep-vet npm express@5.3.0</code>
+<code>dep-vet npm express@5.3.0</code><br>
+<code>dep-vet pypi requests==2.31.0</code><br>
+<code>dep-vet audit package-lock.json</code><br>
+<code>dep-vet guard --check -- npm i express</code>
 
 </div>
 
