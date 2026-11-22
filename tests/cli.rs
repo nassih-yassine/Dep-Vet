@@ -3809,6 +3809,139 @@ fn npm_tarball_routes(
     routes
 }
 
+fn advisory_diff_registry(old: Vec<u8>, new: Vec<u8>) -> MockRegistry {
+    MockRegistry::start_scripted(move |base| {
+        let mut routes: HashMap<String, Vec<(u16, Vec<u8>)>> = npm_tarball_routes(
+            base,
+            &[
+                ("pkg", "1.0.0", old.as_slice()),
+                ("pkg", "2.0.0", new.as_slice()),
+            ],
+        )
+        .into_iter()
+        .map(|(path, response)| (path, vec![response]))
+        .collect();
+        routes.insert(
+            "/v1/querybatch".to_string(),
+            vec![
+                (200, br#"{"results":[{"vulns":[]}]}"#.to_vec()),
+                (
+                    200,
+                    br#"{"results":[{"vulns":[{"id":"GHSA-test-0001"}]}]}"#.to_vec(),
+                ),
+            ],
+        );
+        routes.insert(
+            "/v1/vulns/GHSA-test-0001".to_string(),
+            vec![(200, HIGH_ADVISORY_DETAIL.as_bytes().to_vec())],
+        );
+        routes
+    })
+}
+
+#[test]
+fn diff_reports_new_advisories_from_osv() {
+    let old = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let new = tar_gz(&[("index.js", b"const a = 2;\n")]);
+    let registry = advisory_diff_registry(old.clone(), new.clone());
+
+    let output = registry
+        .command()
+        .args(["diff", "npm", "pkg@1.0.0", "pkg@2.0.0", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["new_advisories"][0]["id"], "GHSA-test-0001");
+    assert_eq!(value["new_advisories"][0]["severity"], "high");
+    assert!(value.get("resolved_advisories").is_none());
+    assert_eq!(value["exit_code"], 2);
+
+    let registry = advisory_diff_registry(old, new);
+    registry
+        .command()
+        .args(["diff", "npm", "pkg@1.0.0", "pkg@2.0.0"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("new advisory"))
+        .stdout(predicate::str::contains("GHSA-test-0001"));
+}
+
+#[test]
+fn diff_reports_publisher_change_and_a_lookalike_dependency() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let old = tar_gz(&[
+        (
+            "package.json",
+            br#"{"name":"pkg","dependencies":{"a":"1"}}"#,
+        ),
+        ("index.js", b"const a = 1;\n"),
+    ]);
+    let new = tar_gz(&[
+        (
+            "package.json",
+            br#"{"name":"pkg","dependencies":{"a":"1","lodahs":"1"}}"#,
+        ),
+        ("index.js", b"const a = 1;\n"),
+    ]);
+    let registry = MockRegistry::start_with(|base| {
+        let mut routes = HashMap::new();
+        for (version, archive, publisher) in [("1.0.0", &old, "alice"), ("2.0.0", &new, "mallory")]
+        {
+            let digest =
+                base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(archive));
+            let doc = format!(
+                r#"{{"name":"pkg","version":"{version}","_npmUser":{{"name":"{publisher}"}},"dist":{{"tarball":"{base}/pkg-{version}.tgz","integrity":"sha512-{digest}"}}}}"#
+            );
+            routes.insert(format!("/pkg/{version}"), (200, doc.into_bytes()));
+            routes.insert(format!("/pkg-{version}.tgz"), (200, archive.to_vec()));
+        }
+        routes
+    });
+
+    let output = registry
+        .command()
+        .args(["diff", "npm", "pkg@1.0.0", "pkg@2.0.0", "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["from_publisher"], "alice");
+    assert_eq!(value["to_publisher"], "mallory");
+    let findings = value["findings"].as_array().unwrap();
+    let publisher = findings
+        .iter()
+        .find(|finding| finding["rule"] == "DIFF-PUBLISHER-001")
+        .expect("publisher change is a finding");
+    assert_eq!(publisher["severity"], "info");
+    let dependencies = findings
+        .iter()
+        .find(|finding| finding["rule"] == "DIFF-DEPENDENCIES-001")
+        .expect("dependency change is a finding");
+    assert_eq!(dependencies["severity"], "warn");
+    assert!(
+        dependencies["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("lodahs"),
+        "{dependencies}"
+    );
+
+    registry
+        .command()
+        .args(["diff", "npm", "pkg@1.0.0", "pkg@2.0.0"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("publisher"))
+        .stdout(predicate::str::contains("alice -> mallory"));
+}
+
 #[test]
 fn diff_reports_added_files_scripts_and_new_findings() {
     let old = tar_gz(&[("lib/a.js", b"eval(atob(x))\n"), ("old.txt", b"old\n")]);

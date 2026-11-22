@@ -486,6 +486,7 @@ mod tests {
                 bytes: 1,
                 provenance: None,
                 decompression_limit: None,
+                publisher: None,
             },
             &[],
         );

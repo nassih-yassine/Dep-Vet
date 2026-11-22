@@ -43,6 +43,9 @@ pub struct Prepared {
     /// Set when extraction stopped at the decompression cap. The archive was
     /// not scanned, so a report must say so.
     pub decompression_limit: Option<u64>,
+    /// npm's `_npmUser` for this version. `None` when the registry does not
+    /// record one or the ecosystem cannot provide it.
+    pub publisher: Option<String>,
 }
 
 struct ArchiveRef {
@@ -51,6 +54,7 @@ struct ArchiveRef {
     checksum: Option<Checksum>,
     /// npm's attestation endpoint, when the version publishes one.
     provenance_url: Option<String>,
+    publisher: Option<String>,
 }
 
 /// Downloaded archives are kept only when their checksum is known, so a cached
@@ -118,6 +122,7 @@ pub fn inspect_archive(
         bytes: bytes.len(),
         provenance,
         decompression_limit,
+        publisher: source.publisher,
     })
 }
 
@@ -333,6 +338,7 @@ fn resolve_npm(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveRe
             .and_then(|url| url.as_str())
             .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
             .map(str::to_string),
+        publisher: doc["_npmUser"]["name"].as_str().map(str::to_string),
     })
 }
 
@@ -362,6 +368,7 @@ fn resolve_pypi(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveR
         },
         checksum: sha,
         provenance_url: None,
+        publisher: None,
     })
 }
 
@@ -380,6 +387,7 @@ fn resolve_crates(
         kind: ArchiveKind::TarGz,
         checksum,
         provenance_url: None,
+        publisher: None,
     })
 }
 
@@ -405,6 +413,7 @@ fn resolve_go(name: &str, version: &str) -> ArchiveRef {
         kind: ArchiveKind::Zip,
         checksum: None,
         provenance_url: None,
+        publisher: None,
     }
 }
 
@@ -425,6 +434,7 @@ fn resolve_gem(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveRe
         kind: ArchiveKind::Gem,
         checksum,
         provenance_url: None,
+        publisher: None,
     })
 }
 
@@ -436,6 +446,7 @@ fn resolve_nuget(name: &str, version: &str) -> ArchiveRef {
         kind: ArchiveKind::Zip,
         checksum: None,
         provenance_url: None,
+        publisher: None,
     }
 }
 
@@ -462,6 +473,7 @@ fn resolve_maven(name: &str, version: &str) -> Result<ArchiveRef, InspectError> 
         kind: ArchiveKind::Zip,
         checksum: None,
         provenance_url: None,
+        publisher: None,
     })
 }
 
@@ -495,6 +507,7 @@ fn resolve_composer(
         kind: ArchiveKind::Zip,
         checksum,
         provenance_url: None,
+        publisher: None,
     })
 }
 
@@ -528,6 +541,7 @@ mod tests {
             bytes: 0,
             provenance: None,
             decompression_limit: None,
+            publisher: None,
         }
     }
 
@@ -540,7 +554,105 @@ mod tests {
             old,
             new,
             &[],
+            None,
+            None,
         )
+    }
+
+    fn verified_by(identity: &str) -> crate::provenance::ProvenanceReport {
+        crate::provenance::ProvenanceReport {
+            status: "verified",
+            identity: Some(identity.to_string()),
+            issuer: Some("https://token.actions.githubusercontent.com".to_string()),
+            reason: None,
+            certificate: true,
+            sct: true,
+            tlog: true,
+        }
+    }
+
+    fn advisory(id: &str, severity: crate::model::Severity) -> crate::osv::Advisory {
+        crate::osv::Advisory {
+            id: id.to_string(),
+            summary: format!("summary for {id}"),
+            severity,
+            aliases: Vec::new(),
+            url: format!("https://osv.dev/vulnerability/{id}"),
+            fixed_versions: Vec::new(),
+            details_missing: false,
+        }
+    }
+
+    #[test]
+    fn diff_reports_trust_and_declared_dependency_changes() {
+        let mut old = prepared(&[("package.json", r#"{"dependencies":{"a":"1"}}"#)], &[]);
+        old.publisher = Some("alice".to_string());
+        old.provenance = Some(verified_by("https://github.com/alice/repo/release.yml"));
+        let mut new = prepared(
+            &[("package.json", r#"{"dependencies":{"a":"1","lodahs":"1"}}"#)],
+            &[],
+        );
+        new.publisher = Some("mallory".to_string());
+
+        let report = diff(&old, &new);
+        let rule = |id: &str| {
+            report
+                .findings
+                .iter()
+                .find(|finding| finding.rule == id)
+                .unwrap_or_else(|| panic!("missing {id}: {:?}", report.findings))
+        };
+        assert_eq!(
+            rule("DIFF-PUBLISHER-001").severity,
+            crate::model::Severity::Info
+        );
+        assert_eq!(
+            rule("DIFF-PROVENANCE-001").severity,
+            crate::model::Severity::Warn
+        );
+        let dependencies = rule("DIFF-DEPENDENCIES-001");
+        assert_eq!(dependencies.severity, crate::model::Severity::Warn);
+        assert!(dependencies.evidence.contains("lodahs"), "{dependencies:?}");
+        assert!(
+            dependencies.evidence.contains("lodash"),
+            "a new lookalike is named: {dependencies:?}"
+        );
+        assert_eq!(report.verdict(), crate::model::Severity::Warn);
+        assert_eq!(report.from_publisher.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn diff_reports_advisory_gains_and_resolutions() {
+        let old_list = crate::osv::AdvisoryList {
+            advisories: vec![advisory("GHSA-old", crate::model::Severity::Warn)],
+            hidden: 0,
+            stale_seconds: None,
+        };
+        let new_list = crate::osv::AdvisoryList {
+            advisories: vec![
+                advisory("GHSA-old", crate::model::Severity::Warn),
+                advisory("GHSA-new", crate::model::Severity::High),
+            ],
+            hidden: 0,
+            stale_seconds: None,
+        };
+        let old = prepared(&[("index.js", "const a = 1;")], &[]);
+        let new = prepared(&[("index.js", "const a = 2;")], &[]);
+        let report = build_diff(
+            Ecosystem::Npm,
+            "pkg",
+            &package_spec("1.0.0"),
+            &package_spec("1.1.0"),
+            &old,
+            &new,
+            &[],
+            Some(&old_list),
+            Some(&new_list),
+        );
+        assert_eq!(report.new_advisories[0].id, "GHSA-new");
+        assert!(report.resolved_advisories.is_empty());
+        assert_eq!(report.verdict(), crate::model::Severity::High);
+        assert_eq!(report.exit_code(), 2);
     }
 
     #[test]
@@ -910,6 +1022,17 @@ pub struct DiffReport {
     pub findings: Vec<crate::rules::RuleFinding>,
     /// Findings that disappeared.
     pub resolved: Vec<crate::rules::RuleFinding>,
+    /// npm's version publisher on each side, when the registry records one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_publisher: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_publisher: Option<String>,
+    /// Advisories that affect only the new release.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub new_advisories: Vec<crate::osv::Advisory>,
+    /// Advisories that affected only the previous release.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub resolved_advisories: Vec<crate::osv::Advisory>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_checked: Vec<String>,
 }
@@ -919,6 +1042,7 @@ impl DiffReport {
         self.findings
             .iter()
             .map(|finding| finding.severity)
+            .chain(self.new_advisories.iter().map(|advisory| advisory.severity))
             .max()
             .unwrap_or(crate::model::Severity::Info)
     }
@@ -1121,6 +1245,305 @@ fn new_script_findings(
         .collect()
 }
 
+/// Trust-signal deltas that are not file findings: publisher, provenance,
+/// integrity, and declared dependencies.
+fn trust_findings(
+    ecosystem: Ecosystem,
+    old: &Prepared,
+    new: &Prepared,
+) -> Vec<crate::rules::RuleFinding> {
+    use crate::model::{Confidence, Severity};
+
+    let mut findings = Vec::new();
+    if let (Some(previous), Some(current)) = (&old.publisher, &new.publisher)
+        && !previous.eq_ignore_ascii_case(current)
+    {
+        findings.push(crate::rules::RuleFinding {
+            rule: "DIFF-PUBLISHER-001",
+            title: "publisher identity changed",
+            description: "A different npm account published this release.",
+            severity: Severity::Info,
+            confidence: Confidence::High,
+            file: "package.json".to_string(),
+            line: 1,
+            evidence: format!("publisher: {previous} -> {current}"),
+            recommendation: "Confirm the account is expected before updating.",
+            references: vec!["https://docs.npmjs.com/cli/v10/commands/npm-view"],
+        });
+    }
+
+    if ecosystem == Ecosystem::Npm {
+        let previous = old.provenance.as_ref();
+        let current = new.provenance.as_ref();
+        let previous_verified = previous.is_some_and(|report| report.verified());
+        match (previous, current) {
+            (Some(previous), None) if previous.verified() => findings.push(crate::rules::RuleFinding {
+                rule: "DIFF-PROVENANCE-001",
+                title: "this release dropped provenance",
+                description: "The previous release published a verifiable attestation; this one publishes none.",
+                severity: Severity::Warn,
+                confidence: Confidence::High,
+                file: String::new(),
+                line: 0,
+                evidence: format!(
+                    "previous signer: {}",
+                    previous.identity.as_deref().unwrap_or("(identity unreadable)")
+                ),
+                recommendation: "Treat the publishing-pipeline change as unreviewed until explained.",
+                references: vec![
+                    "https://docs.npmjs.com/generating-provenance-statements",
+                    "https://slsa.dev/spec/v1.0/verifying-artifacts",
+                ],
+            }),
+            (Some(previous), Some(current))
+                if previous.verified() && !current.verified() =>
+            {
+                findings.push(crate::rules::RuleFinding {
+                    rule: "DIFF-PROVENANCE-002",
+                    title: "provenance no longer verifies",
+                    description: "An attestation is still published, but it no longer passes offline verification.",
+                    severity: Severity::Warn,
+                    confidence: Confidence::High,
+                    file: String::new(),
+                    line: 0,
+                    evidence: format!(
+                        "reason: {}",
+                        current.reason.as_deref().unwrap_or("verification failed")
+                    ),
+                    recommendation: "Do not treat presence as verification; review the release.",
+                    references: vec!["https://docs.npmjs.com/generating-provenance-statements"],
+                });
+            }
+            (Some(previous), Some(current))
+                if previous.verified()
+                    && current.verified()
+                    && previous.identity != current.identity =>
+            {
+                findings.push(crate::rules::RuleFinding {
+                    rule: "DIFF-PROVENANCE-003",
+                    title: "signing identity changed",
+                    description: "Both releases verify, but a different certificate identity signed this one.",
+                    severity: Severity::Warn,
+                    confidence: Confidence::High,
+                    file: String::new(),
+                    line: 0,
+                    evidence: format!(
+                        "{} -> {}",
+                        previous.identity.as_deref().unwrap_or("(none)"),
+                        current.identity.as_deref().unwrap_or("(none)")
+                    ),
+                    recommendation: "Confirm the new workflow is allowed to publish this package.",
+                    references: vec!["https://slsa.dev/spec/v1.0/verifying-artifacts"],
+                });
+            }
+            (_previous, Some(current)) if !previous_verified && current.verified() => {
+                findings.push(crate::rules::RuleFinding {
+                    rule: "DIFF-PROVENANCE-004",
+                    title: "this release added verifiable provenance",
+                    description: "The new release publishes an attestation that verifies offline.",
+                    severity: Severity::Info,
+                    confidence: Confidence::High,
+                    file: String::new(),
+                    line: 0,
+                    evidence: format!(
+                        "signer: {}",
+                        current.identity.as_deref().unwrap_or("(identity unreadable)")
+                    ),
+                    recommendation: "No action; this is an improvement.",
+                    references: vec!["https://docs.npmjs.com/generating-provenance-statements"],
+                });
+            }
+            _ => {}
+        }
+    }
+
+    for (label, integrity) in [
+        ("previous release", &old.integrity),
+        ("this release", &new.integrity),
+    ] {
+        if let Integrity::Mismatch { expected, actual } = integrity {
+            findings.push(crate::rules::RuleFinding {
+                rule: "DIFF-INTEGRITY-001",
+                title: "archive checksum does not match the registry",
+                description: "Downloaded bytes differ from the release the registry published.",
+                severity: Severity::High,
+                confidence: Confidence::High,
+                file: String::new(),
+                line: 0,
+                evidence: format!("{label}: expected {expected}, got {actual}"),
+                recommendation: "Do not install; the download does not match its published release.",
+                references: vec!["https://docs.npmjs.com/about-registry-signatures"],
+            });
+        }
+    }
+    if matches!(old.integrity, Integrity::Verified)
+        && matches!(new.integrity, Integrity::Unverified)
+    {
+        findings.push(crate::rules::RuleFinding {
+            rule: "DIFF-INTEGRITY-002",
+            title: "this release has no published checksum",
+            description: "The previous release could be verified; this one cannot.",
+            severity: Severity::Warn,
+            confidence: Confidence::High,
+            file: String::new(),
+            line: 0,
+            evidence: "registry published no checksum for the new archive".to_string(),
+            recommendation: "Verify the download through another trusted channel.",
+            references: vec!["https://docs.npmjs.com/about-registry-signatures"],
+        });
+    }
+
+    findings
+}
+
+fn declared_dependencies(
+    files: &[crate::archive::ExtractedFile],
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let file = package_json_path(files)?;
+    let value: serde_json::Value = serde_json::from_str(&file.text).ok()?;
+    let mut out = std::collections::BTreeMap::new();
+    for field in [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ] {
+        let Some(map) = value.get(field).and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        for (name, range) in map {
+            out.insert(name.clone(), range.as_str().unwrap_or_default().to_string());
+        }
+    }
+    Some(out)
+}
+
+fn dependency_findings(old: &Prepared, new: &Prepared) -> Vec<crate::rules::RuleFinding> {
+    use crate::model::{Confidence, Severity};
+
+    let (Some(previous), Some(current)) = (
+        declared_dependencies(&old.extracted.files),
+        declared_dependencies(&new.extracted.files),
+    ) else {
+        return Vec::new();
+    };
+    let added: Vec<&String> = current
+        .keys()
+        .filter(|name| !previous.contains_key(*name))
+        .collect();
+    let removed: Vec<&String> = previous
+        .keys()
+        .filter(|name| !current.contains_key(*name))
+        .collect();
+    if added.is_empty() && removed.is_empty() {
+        return Vec::new();
+    }
+    let suspicious: Vec<(&String, &str)> = added
+        .iter()
+        .filter_map(|name| {
+            let suspect = crate::typosquat::closest(name, crate::typosquat::popular_npm(), &[])?;
+            (suspect.homoglyph || suspect.distance <= 1).then_some((*name, suspect.candidate))
+        })
+        .collect();
+    let mut evidence = Vec::new();
+    if !added.is_empty() {
+        evidence.push(format!(
+            "added: {}",
+            added
+                .iter()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !removed.is_empty() {
+        evidence.push(format!(
+            "removed: {}",
+            removed
+                .iter()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    for (name, candidate) in &suspicious {
+        evidence.push(format!("{name} resembles the popular package {candidate}"));
+    }
+    vec![crate::rules::RuleFinding {
+        rule: "DIFF-DEPENDENCIES-001",
+        title: "declared dependencies changed",
+        description: "The new release adds or removes dependencies from its package.json.",
+        severity: if suspicious.is_empty() {
+            Severity::Info
+        } else {
+            Severity::Warn
+        },
+        confidence: if suspicious.is_empty() {
+            Confidence::High
+        } else {
+            Confidence::Medium
+        },
+        file: "package.json".to_string(),
+        line: 1,
+        evidence: evidence.join("; "),
+        recommendation: "Review new dependency names before updating.",
+        references: vec![
+            "https://docs.npmjs.com/cli/v10/configuring-npm/package-json#dependencies",
+        ],
+    }]
+}
+
+fn advisory_keys(advisory: &crate::osv::Advisory) -> impl Iterator<Item = &str> {
+    std::iter::once(advisory.id.as_str()).chain(advisory.aliases.iter().map(String::as_str))
+}
+
+fn diff_advisories(
+    old: Option<&crate::osv::AdvisoryList>,
+    new: Option<&crate::osv::AdvisoryList>,
+) -> (
+    Vec<crate::osv::Advisory>,
+    Vec<crate::osv::Advisory>,
+    Option<&'static str>,
+) {
+    use std::collections::HashSet;
+
+    match (old, new) {
+        (Some(old), Some(new)) => {
+            let old_keys: HashSet<&str> = old.advisories.iter().flat_map(advisory_keys).collect();
+            let new_keys: HashSet<&str> = new.advisories.iter().flat_map(advisory_keys).collect();
+            let added = new
+                .advisories
+                .iter()
+                .filter(|advisory| advisory_keys(advisory).all(|key| !old_keys.contains(key)))
+                .cloned()
+                .collect();
+            let resolved = old
+                .advisories
+                .iter()
+                .filter(|advisory| advisory_keys(advisory).all(|key| !new_keys.contains(key)))
+                .cloned()
+                .collect();
+            (added, resolved, None)
+        }
+        (None, Some(_)) => (
+            Vec::new(),
+            Vec::new(),
+            Some("advisory delta (the previous release could not be checked)"),
+        ),
+        (Some(_), None) => (
+            Vec::new(),
+            Vec::new(),
+            Some("advisory delta (this release could not be checked)"),
+        ),
+        (None, None) => (
+            Vec::new(),
+            Vec::new(),
+            Some("advisory delta (neither release could be checked)"),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build_diff(
     ecosystem: Ecosystem,
     name: &str,
@@ -1129,6 +1552,8 @@ pub fn build_diff(
     old: &Prepared,
     new: &Prepared,
     disabled_rules: &[String],
+    old_advisories: Option<&crate::osv::AdvisoryList>,
+    new_advisories: Option<&crate::osv::AdvisoryList>,
 ) -> DiffReport {
     let (added, removed, modified, unchanged) =
         compare_files(&old.extracted.files, &new.extracted.files);
@@ -1150,6 +1575,8 @@ pub fn build_diff(
     ));
     findings.extend(new_script_findings(&new.extracted.files, &added));
     findings.extend(new_binary_findings(&old.extracted, &new.extracted));
+    findings.extend(trust_findings(ecosystem, old, new));
+    findings.extend(dependency_findings(old, new));
     if let Some(finding) = crate::rules::partially_scanned(&old.extracted, "previous release: ") {
         findings.push(finding);
     }
@@ -1166,6 +1593,8 @@ pub fn build_diff(
         .into_iter()
         .filter(|finding| !new_keys.contains(&key(finding)))
         .collect();
+    let (added_advisories, resolved_advisories, advisory_gap) =
+        diff_advisories(old_advisories, new_advisories);
     findings.sort_by(|left, right| {
         left.file
             .cmp(&right.file)
@@ -1179,6 +1608,19 @@ pub fn build_diff(
     }
     if matches!(new.integrity, Integrity::Unverified) {
         not_checked.push("archive checksum (registry publishes none)".to_string());
+    }
+    if let Some(gap) = advisory_gap {
+        not_checked.push(gap.to_string());
+    }
+    if old_advisories.is_some_and(|list| list.hidden > 0)
+        || new_advisories.is_some_and(|list| list.hidden > 0)
+    {
+        not_checked.push("advisory delta (one list was truncated at the cap)".to_string());
+    }
+    if old_advisories.is_some_and(|list| list.stale_seconds.is_some())
+        || new_advisories.is_some_and(|list| list.stale_seconds.is_some())
+    {
+        not_checked.push("advisory delta (served from stale cache)".to_string());
     }
 
     DiffReport {
@@ -1194,6 +1636,10 @@ pub fn build_diff(
         unchanged,
         findings,
         resolved,
+        from_publisher: old.publisher.clone(),
+        to_publisher: new.publisher.clone(),
+        new_advisories: added_advisories,
+        resolved_advisories,
         not_checked,
     }
 }

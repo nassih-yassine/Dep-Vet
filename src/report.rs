@@ -377,6 +377,17 @@ pub fn render_diff_human(report: &crate::inspect::DiffReport, color: bool) -> St
         "integrity",
         &format!("{} -> {}", report.from_integrity, report.to_integrity),
     );
+    if report.from_publisher.is_some() || report.to_publisher.is_some() {
+        push_field(
+            &mut out,
+            "publisher",
+            &format!(
+                "{} -> {}",
+                report.from_publisher.as_deref().unwrap_or("unknown"),
+                report.to_publisher.as_deref().unwrap_or("unknown")
+            ),
+        );
+    }
     push_field(
         &mut out,
         "files",
@@ -443,6 +454,47 @@ pub fn render_diff_human(report: &crate::inspect::DiffReport, color: bool) -> St
             }
             out.push('\n');
         }
+    }
+    if !report.new_advisories.is_empty() {
+        out.push_str(&format!(
+            "  {} new advisor{} since {}\n\n",
+            report.new_advisories.len(),
+            if report.new_advisories.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            report.from_version
+        ));
+        for advisory in &report.new_advisories {
+            out.push_str(&format!(
+                "  {}  {} {}\n",
+                paint(
+                    &format!("[{}]", advisory.severity.label()),
+                    verdict_color(advisory.severity),
+                    color
+                ),
+                advisory.id,
+                advisory.summary
+            ));
+            out.push_str(&format!("        -> {}\n\n", advisory.url));
+        }
+    }
+    if !report.resolved_advisories.is_empty() {
+        out.push_str(&format!(
+            "  {} advisor{} resolved since {}\n\n",
+            report.resolved_advisories.len(),
+            if report.resolved_advisories.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            report.from_version
+        ));
+        for advisory in &report.resolved_advisories {
+            out.push_str(&format!("  {}  {}\n", advisory.id, advisory.summary));
+        }
+        out.push('\n');
     }
     if !report.resolved.is_empty() {
         out.push_str(&format!(

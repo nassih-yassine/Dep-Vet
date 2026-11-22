@@ -304,6 +304,18 @@ files are listed as INFO, since they cannot be read as text. The diff is
 text-based; a minified rewrite can look large without being suspicious, and
 line numbers shift, so rule findings are matched by rule and file, not line.
 
+For npm it also compares the registry's `_npmUser` publisher account (INFO),
+verified attestation status and signer identity (WARN when provenance is
+dropped, stops verifying, or changes signer), and the declared dependencies in
+`package.json` (INFO; WARN when an added name is one edit from a popular
+package). A checksum mismatch is HIGH, and losing a previously published
+checksum is WARN. OSV is queried for both exact versions: advisories that affect
+only the new release are listed with severity and a link, and ones resolved
+since the old release are noted. If either lookup fails, the report says the
+advisory delta was not checked instead of treating it as clean. The diff sees
+only these two versions; it does not read publisher history or transitive
+installs from a lockfile.
+
 ### Release transitions
 
 A compromised package rarely looks like a typosquat. The exploitable moment is
