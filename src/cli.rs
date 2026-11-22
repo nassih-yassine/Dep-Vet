@@ -147,8 +147,12 @@ pub enum Command {
         #[arg(long)]
         json: bool,
 
+        /// Read the command from stdin instead of argv
+        #[arg(long)]
+        stdin: bool,
+
         /// The command to inspect, after `--`
-        #[arg(last = true, required = true)]
+        #[arg(last = true)]
         command: Vec<String>,
     },
 

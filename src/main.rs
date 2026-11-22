@@ -113,8 +113,23 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         Command::Guard {
             check,
             json,
+            stdin,
             command,
-        } => run_guard(&auditor, &allowlist, *check, *json, &command.join(" ")),
+        } => {
+            let command = if *stdin {
+                use std::io::Read as _;
+                let mut body = String::new();
+                let mut reader = io::stdin().take(dep_vet::intent::MAX_COMMAND_BYTES as u64 + 1);
+                let _ = reader.read_to_string(&mut body);
+                body
+            } else {
+                command.join(" ")
+            };
+            if command.is_empty() {
+                anyhow::bail!("pass a command after `--`, or use --stdin");
+            }
+            run_guard(&auditor, &allowlist, *check, *json, &command)
+        }
 
         Command::Npm { package, json } => {
             let spec = PackageSpec::parse(package)?;
@@ -681,8 +696,11 @@ fn run_guard_child(command: &str) -> (u8, Option<String>) {
     // input cannot hit E2BIG.
     let (command, _) = dep_vet::intent::cap_command(command);
     let mut child = Process::new(executable);
+    // Pass the command on stdin: Windows caps a process command line at about
+    // 32,767 characters, so a large command cannot be one argv element.
     child
-        .args(["guard", "--check", "--json", "--", command])
+        .args(["guard", "--check", "--json", "--stdin"])
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     for (key, _) in std::env::vars_os() {
@@ -711,6 +729,11 @@ fn run_guard_child(command: &str) -> (u8, Option<String>) {
     let Ok(mut child) = child.spawn() else {
         return (3, None);
     };
+    if let Some(mut input) = child.stdin.take() {
+        use std::io::Write as _;
+        let _ = input.write_all(command.as_bytes());
+        // Dropping closes the pipe so the child sees EOF.
+    }
     // Drain stdout concurrently: a report larger than the pipe buffer would
     // otherwise block the child while we wait for it to exit, and the deadline
     // would turn a real verdict into "allow".
