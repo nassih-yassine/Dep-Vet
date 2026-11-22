@@ -152,19 +152,15 @@ fn resolve(
     requested: &str,
 ) -> Result<PlanReport, String> {
     let raw_name = spec.name.clone();
-    let mut cache: HashMap<String, Result<PlanPackument, String>> = HashMap::new();
-    let fetch = |cache: &mut HashMap<String, Result<PlanPackument, String>>, name: &str| {
-        if let Some(existing) = cache.get(name) {
-            return existing.clone();
-        }
-        let fetched = client
+    // Packuments can be tens of megabytes; keeping every one would defeat the
+    // node cap. Reuse comes from the on-disk HTTP cache instead.
+    let fetch = |name: &str| {
+        client
             .plan_packument(name)
-            .map_err(|error| error.to_string());
-        cache.insert(name.to_string(), fetched.clone());
-        fetched
+            .map_err(|error| error.to_string())
     };
 
-    let root_document = fetch(&mut cache, &raw_name)?;
+    let root_document = fetch(&raw_name)?;
     let root_version = choose_version(&root_document, requested).ok_or_else(|| {
         format!(
             "no version of '{raw_name}' matches '{requested}' (plan does not resolve non-semver or git/URL specs)"
@@ -230,7 +226,7 @@ fn resolve(
             });
             continue;
         }
-        let document = match fetch(&mut cache, &name) {
+        let document = match fetch(&name) {
             Ok(document) => document,
             Err(error) => {
                 unresolved.push(Unresolved {

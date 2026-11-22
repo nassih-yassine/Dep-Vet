@@ -475,8 +475,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `MAX_DEPTH` (50). A required unresolved edge or truncation exits `3`;
   optional/peer misses do not. Non-semver (`git+`, `file:`, URL), `||`
   alternatives, and npm hoisting are handled as documented: alternatives are
-  tried; the rest is listed as unresolved, never approximated. `plan` is npm
-  only and never changes the audit verdict path.
+  tried; the rest is listed as unresolved, never approximated. Packuments are
+  not retained in a resolver-wide map because one can be tens of megabytes;
+  reuse comes from the on-disk HTTP cache. `plan` is npm only and never changes
+  the audit verdict path.
 - **`tree` graphs, it does not resolve.** Only `package-lock.json` v2/v3 is
   accepted; v1 is refused with upgrade advice instead of approximated. Edges
   come from each entry's `dependencies`/`devDependencies`/
