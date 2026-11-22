@@ -1208,12 +1208,12 @@ mod tests {
 
     #[test]
     fn the_table_has_at_least_60_cases() {
+        // Count rows by line, not by a byte pattern: a Windows checkout uses
+        // CRLF and would otherwise miss every multi-line `case(` call.
         let count = include_str!("intent.rs")
-            .matches("\n        case(\"")
-            .count()
-            + include_str!("intent.rs")
-                .matches("\n        case(\n")
-                .count();
+            .lines()
+            .filter(|line| line.trim_start().starts_with("case("))
+            .count();
         assert!(count >= 60, "the contract table has {count} cases");
     }
 
