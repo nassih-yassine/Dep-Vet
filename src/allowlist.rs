@@ -76,6 +76,14 @@ pub struct TrustedPublishersConfig {
     pub workflows: Vec<String>,
 }
 
+/// Upper bounds for archive configuration. They are generous enough for real
+/// packages but keep every stock cap well below `u64` overflow.
+pub const MAX_DOWNLOAD_MB: u64 = 4_096;
+pub const MAX_TOTAL_MB: u64 = 8_192;
+pub const MAX_FILE_MB: u64 = 4_096;
+pub const MAX_DECOMPRESSED_MB: u64 = 16_384;
+pub const MAX_ENTRIES: usize = 1_000_000;
+
 /// Archive-inspection settings from the same `.depvet.toml`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -109,7 +117,9 @@ impl InspectConfig {
     pub fn limits(&self) -> crate::archive::Limits {
         let defaults = crate::archive::Limits::default();
         let mb = |value: Option<u64>, fallback: u64| {
-            value.map(|mb| mb * 1024 * 1024).unwrap_or(fallback)
+            value
+                .map(|mb| mb.saturating_mul(1024 * 1024))
+                .unwrap_or(fallback)
         };
         crate::archive::Limits {
             max_compressed: mb(self.max_download_mb, defaults.max_compressed),
@@ -140,6 +150,13 @@ pub enum AllowError {
     UnknownRule { path: String, rule: String },
     #[error("{path}: {field} must be greater than zero")]
     ZeroLimit { path: String, field: String },
+    #[error("{path}: {field} must be at most {max} (got {value})")]
+    LimitTooLarge {
+        path: String,
+        field: String,
+        value: u64,
+        max: u64,
+    },
     #[error("{path}: {field} contains an empty entry")]
     EmptyPolicyValue { path: String, field: String },
 }
@@ -191,24 +208,52 @@ impl Allowlist {
                 });
             }
         }
-        for (field, value) in [
-            ("max_download_mb", list.inspect.max_download_mb),
-            ("max_total_mb", list.inspect.max_total_mb),
-            ("max_file_mb", list.inspect.max_file_mb),
-            ("max_decompressed_mb", list.inspect.max_decompressed_mb),
+        for (field, value, maximum) in [
+            (
+                "max_download_mb",
+                list.inspect.max_download_mb,
+                MAX_DOWNLOAD_MB,
+            ),
+            ("max_total_mb", list.inspect.max_total_mb, MAX_TOTAL_MB),
+            ("max_file_mb", list.inspect.max_file_mb, MAX_FILE_MB),
+            (
+                "max_decompressed_mb",
+                list.inspect.max_decompressed_mb,
+                MAX_DECOMPRESSED_MB,
+            ),
         ] {
-            if value == Some(0) {
-                return Err(AllowError::ZeroLimit {
-                    path: path.display().to_string(),
-                    field: field.to_string(),
-                });
+            if let Some(value) = value {
+                if value == 0 {
+                    return Err(AllowError::ZeroLimit {
+                        path: path.display().to_string(),
+                        field: field.to_string(),
+                    });
+                }
+                if value > maximum {
+                    return Err(AllowError::LimitTooLarge {
+                        path: path.display().to_string(),
+                        field: field.to_string(),
+                        value,
+                        max: maximum,
+                    });
+                }
             }
         }
-        if list.inspect.max_entries == Some(0) {
-            return Err(AllowError::ZeroLimit {
-                path: path.display().to_string(),
-                field: "max_entries".to_string(),
-            });
+        if let Some(entries) = list.inspect.max_entries {
+            if entries == 0 {
+                return Err(AllowError::ZeroLimit {
+                    path: path.display().to_string(),
+                    field: "max_entries".to_string(),
+                });
+            }
+            if entries > MAX_ENTRIES {
+                return Err(AllowError::LimitTooLarge {
+                    path: path.display().to_string(),
+                    field: "max_entries".to_string(),
+                    value: entries as u64,
+                    max: MAX_ENTRIES as u64,
+                });
+            }
         }
         for (field, values) in [
             (
@@ -399,6 +444,97 @@ mod tests {
             Allowlist::parse(path, "[provenance]\nrequire_attestation = \"yes\"\n"),
             Err(AllowError::Toml { .. })
         ));
+    }
+
+    #[test]
+    fn archive_limits_reject_overflow_and_excessive_values() {
+        let path = Path::new(".depvet.toml");
+        let max = format!(
+            "[inspect]\nmax_download_mb = {MAX_DOWNLOAD_MB}\nmax_total_mb = {MAX_TOTAL_MB}\nmax_file_mb = {MAX_FILE_MB}\nmax_decompressed_mb = {MAX_DECOMPRESSED_MB}\nmax_entries = {MAX_ENTRIES}\n"
+        );
+        let limits = Allowlist::parse(path, &max).unwrap().inspect().limits();
+        assert_eq!(limits.max_compressed, MAX_DOWNLOAD_MB * 1024 * 1024);
+        assert_eq!(limits.max_total, MAX_TOTAL_MB * 1024 * 1024);
+        assert_eq!(limits.max_file, MAX_FILE_MB * 1024 * 1024);
+        assert_eq!(limits.max_decompressed, MAX_DECOMPRESSED_MB * 1024 * 1024);
+        assert_eq!(limits.max_entries, MAX_ENTRIES);
+
+        for (field, body) in [
+            (
+                "max_download_mb",
+                format!("[inspect]\nmax_download_mb = {}\n", MAX_DOWNLOAD_MB + 1),
+            ),
+            (
+                "max_total_mb",
+                format!("[inspect]\nmax_total_mb = {}\n", MAX_TOTAL_MB + 1),
+            ),
+            (
+                "max_file_mb",
+                format!("[inspect]\nmax_file_mb = {}\n", MAX_FILE_MB + 1),
+            ),
+            (
+                "max_decompressed_mb",
+                format!(
+                    "[inspect]\nmax_decompressed_mb = {}\n",
+                    MAX_DECOMPRESSED_MB + 1
+                ),
+            ),
+            (
+                "max_entries",
+                format!("[inspect]\nmax_entries = {}\n", MAX_ENTRIES + 1),
+            ),
+            (
+                "max_download_mb",
+                format!("[inspect]\nmax_download_mb = {}\n", u64::MAX),
+            ),
+            (
+                "max_decompressed_mb",
+                format!(
+                    "[inspect]\nmax_decompressed_mb = {}\n",
+                    u64::MAX / (1024 * 1024) + 1
+                ),
+            ),
+        ] {
+            assert!(
+                matches!(
+                    Allowlist::parse(path, &body),
+                    Err(AllowError::LimitTooLarge { field: ref found, .. }) if found == field
+                ),
+                "{field}: {body}"
+            );
+        }
+
+        let minimum = Allowlist::parse(
+            path,
+            "[inspect]\nmax_download_mb = 1\nmax_total_mb = 1\nmax_file_mb = 1\nmax_decompressed_mb = 1\nmax_entries = 1\n",
+        )
+        .unwrap()
+        .inspect()
+        .limits();
+        assert_eq!(minimum.max_compressed, 1024 * 1024);
+        assert_eq!(minimum.max_entries, 1);
+
+        let defaults = Allowlist::parse(path, "").unwrap().inspect().limits();
+        assert_eq!(
+            defaults.max_compressed,
+            crate::archive::Limits::default().max_compressed
+        );
+        assert!(matches!(
+            Allowlist::parse(
+                path,
+                "[inspect]\nmax_download_mb = 10\nmax_total_mb = 99999999\n"
+            ),
+            Err(AllowError::LimitTooLarge {
+                field: ref found,
+                ..
+            }) if found == "max_total_mb"
+        ));
+
+        let manually_huge = InspectConfig {
+            max_download_mb: Some(u64::MAX),
+            ..InspectConfig::default()
+        };
+        assert_eq!(manually_huge.limits().max_compressed, u64::MAX);
     }
 
     #[test]

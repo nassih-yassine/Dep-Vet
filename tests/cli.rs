@@ -1312,6 +1312,198 @@ fn mcp_vet_lockfile_change_audits_added_packages() {
     let _ = child.wait();
 }
 
+fn git_lock_repo(name: &str, base: &str, working: &str) -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = directory.path().join(name);
+    std::fs::write(&lock, base).unwrap();
+    let git = |args: &[&str]| {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.email=test@example.test",
+        "-c",
+        "user.name=test",
+        "commit",
+        "-qm",
+        "base",
+    ]);
+    std::fs::write(&lock, working).unwrap();
+    directory
+}
+
+#[test]
+fn mcp_lockfile_change_ignores_unchanged_and_removed_packages() {
+    let unchanged = r#"{"lockfileVersion":3,"packages":{"":{"name":"app"},"node_modules/keep":{"version":"1.0.0"}}}"#;
+    let directory = git_lock_repo("package-lock.json", unchanged, unchanged);
+    let registry = registry_with(&[], None);
+    let (mut child, mut stdin, mut reader) = mcp_session_in(&registry, Some(directory.path()));
+    mcp_initialize(&mut stdin, &mut reader);
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "package-lock.json"}),
+    );
+    assert_eq!(
+        response["result"]["structuredContent"]["packages"],
+        serde_json::json!([])
+    );
+    assert_eq!(response["result"]["structuredContent"]["exit_code"], 0);
+    assert_eq!(response["result"]["isError"], false);
+    drop(stdin);
+    let _ = child.wait();
+
+    let base = r#"{"lockfileVersion":3,"packages":{"":{"name":"app"},"node_modules/gone":{"version":"1.0.0"}}}"#;
+    let empty = r#"{"lockfileVersion":3,"packages":{"":{"name":"app"}}}"#;
+    let directory = git_lock_repo("package-lock.json", base, empty);
+    let (mut child, mut stdin, mut reader) = mcp_session_in(&registry, Some(directory.path()));
+    mcp_initialize(&mut stdin, &mut reader);
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        3,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "package-lock.json"}),
+    );
+    assert_eq!(
+        response["result"]["structuredContent"]["packages"],
+        serde_json::json!([])
+    );
+    assert_eq!(response["result"]["structuredContent"]["exit_code"], 0);
+    drop(stdin);
+    let _ = child.wait();
+
+    let empty_lock = r#"{"lockfileVersion":3,"packages":{"":{"name":"app"}}}"#;
+    let directory = git_lock_repo("package-lock.json", empty_lock, empty_lock);
+    let (mut child, mut stdin, mut reader) = mcp_session_in(&registry, Some(directory.path()));
+    mcp_initialize(&mut stdin, &mut reader);
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        4,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "package-lock.json"}),
+    );
+    assert_eq!(
+        response["result"]["structuredContent"]["packages"],
+        serde_json::json!([])
+    );
+    assert_eq!(response["result"]["structuredContent"]["exit_code"], 0);
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_lockfile_change_audits_a_version_change_as_new() {
+    let base = r#"{"lockfileVersion":3,"packages":{"":{"name":"app"},"node_modules/pkg":{"version":"1.0.0"}}}"#;
+    let working = r#"{"lockfileVersion":3,"packages":{"":{"name":"app"},"node_modules/pkg":{"version":"1.1.0"}}}"#;
+    let directory = git_lock_repo("package-lock.json", base, working);
+    let package = PackageFixture {
+        version: "1.1.0",
+        ..PackageFixture::clean("pkg")
+    };
+    let registry = registry_with(&[package], None);
+    let (mut child, mut stdin, mut reader) = mcp_session_in(&registry, Some(directory.path()));
+    mcp_initialize(&mut stdin, &mut reader);
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "package-lock.json"}),
+    );
+    let packages = response["result"]["structuredContent"]["packages"]
+        .as_array()
+        .unwrap();
+    assert_eq!(packages.len(), 1, "{response}");
+    assert_eq!(packages[0]["version"], "1.1.0");
+    assert_eq!(packages[0]["ecosystem"], "npm");
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_lockfile_change_audits_jsr_entries() {
+    let base = r#"{"version":"5","jsr":{},"npm":{"chalk@5.3.0":{"integrity":"sha512-x"}}}"#;
+    let working = r#"{"version":"5","jsr":{"@std/assert@1.0.0":{"integrity":"abc"}},"npm":{"chalk@5.3.0":{"integrity":"sha512-x"}}}"#;
+    let directory = git_lock_repo("deno.lock", base, working);
+    let chalk = PackageFixture {
+        version: "5.3.0",
+        ..PackageFixture::clean("chalk")
+    };
+    let mut routes = HashMap::new();
+    routes.insert(chalk.route(), (200, chalk.to_json()));
+    jsr_routes(&mut routes);
+    let registry = MockRegistry::start(routes);
+    let (mut child, mut stdin, mut reader) = mcp_session_in(&registry, Some(directory.path()));
+    mcp_initialize(&mut stdin, &mut reader);
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "deno.lock"}),
+    );
+    let packages = response["result"]["structuredContent"]["packages"]
+        .as_array()
+        .unwrap();
+    assert_eq!(packages.len(), 1, "{response}");
+    assert_eq!(packages[0]["name"], "@std/assert");
+    assert_eq!(packages[0]["ecosystem"], "jsr");
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn mcp_lockfile_change_reports_malformed_and_partial_inputs() {
+    let base = r#"{"lockfileVersion":3,"packages":{"":{"name":"app"}}}"#;
+    let directory = git_lock_repo("package-lock.json", base, "{not json");
+    let registry = registry_with(&[], None);
+    let (mut child, mut stdin, mut reader) = mcp_session_in(&registry, Some(directory.path()));
+    mcp_initialize(&mut stdin, &mut reader);
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        2,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "package-lock.json"}),
+    );
+    assert_eq!(response["error"]["code"], -32603, "{response}");
+    drop(stdin);
+    let _ = child.wait();
+
+    let directory = git_lock_repo("requirements.txt", "", "requests==2.31.0\nunpinned\n");
+    let (mut child, mut stdin, mut reader) = mcp_session_in(&registry, Some(directory.path()));
+    mcp_initialize(&mut stdin, &mut reader);
+    let response = mcp_call(
+        &mut stdin,
+        &mut reader,
+        3,
+        "vet_lockfile_change",
+        serde_json::json!({"lockfile": "requirements.txt"}),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    assert_eq!(response["result"]["structuredContent"]["exit_code"], 3);
+    assert!(
+        !response["result"]["structuredContent"]["errors"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{response}"
+    );
+    drop(stdin);
+    let _ = child.wait();
+}
+
 #[test]
 fn mcp_refuses_lockfiles_outside_the_working_directory() {
     let registry = registry_with(&[], None);
@@ -5034,6 +5226,52 @@ fn inspect_stops_a_redirect_loop() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("more than 3 redirects"));
+}
+
+#[test]
+fn inspect_refuses_untrusted_and_special_redirect_targets() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    for (location, shown) in [
+        ("https://evil.example/pkg.tgz", "evil.example"),
+        ("http://127.0.0.1:9/pkg.tgz", "127.0.0.1"),
+        ("http://169.254.169.254/", "169.254.169.254"),
+        ("http://10.0.0.1/", "10.0.0.1"),
+        ("http://[::1]/", "::1"),
+        ("http://[fc00::1]/", "fc00"),
+        ("https://user:pass@evil.example/pkg.tgz", "credentials"),
+        ("https://evil.example:8443/pkg.tgz", "port"),
+    ] {
+        let archive = archive.clone();
+        let location = location.to_string();
+        let registry = MockRegistry::start_replies(move |base| {
+            let document =
+                npm_policy_document("pkg", "1.0.0", &format!("{base}/start"), &archive, None);
+            HashMap::from([
+                (
+                    "/pkg/1.0.0".to_string(),
+                    Reply {
+                        status: 200,
+                        body: document.into_bytes(),
+                        headers: Vec::new(),
+                    },
+                ),
+                (
+                    "/start".to_string(),
+                    Reply {
+                        status: 302,
+                        body: Vec::new(),
+                        headers: vec![("Location".to_string(), location)],
+                    },
+                ),
+            ])
+        });
+        registry
+            .command()
+            .args(["inspect", "npm", "pkg@1.0.0", "--no-cache"])
+            .assert()
+            .code(3)
+            .stderr(predicate::str::contains(shown));
+    }
 }
 
 #[test]
