@@ -3815,6 +3815,160 @@ fn inspect_verifies_npm_provenance_offline() {
     assert!(value["provenance"]["reason"].is_string(), "{value}");
 }
 
+fn semver_with_attestation() -> MockRegistry {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let tarball = include_bytes!("fixtures/semver-7.8.6.tgz");
+    let attestation = include_str!("fixtures/semver-7.8.6-attestation.json");
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(tarball));
+    MockRegistry::start_with(move |base| {
+        let doc = format!(
+            r#"{{"name":"semver","version":"7.8.6","dist":{{"tarball":"{base}/semver.tgz","integrity":"sha512-{digest}","attestations":{{"url":"{base}/attestation"}}}}}}"#
+        );
+        let mut routes = HashMap::new();
+        routes.insert("/semver/7.8.6".to_string(), (200, doc.into_bytes()));
+        routes.insert("/semver.tgz".to_string(), (200, tarball.to_vec()));
+        routes.insert(
+            "/attestation".to_string(),
+            (200, attestation.as_bytes().to_vec()),
+        );
+        routes
+    })
+}
+
+fn policy_config(directory: &tempfile::TempDir, body: &str) -> std::path::PathBuf {
+    let path = directory.path().join(".depvet.toml");
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn inspect_trust_policy_accepts_a_matching_publisher() {
+    let registry = semver_with_attestation();
+    let directory = tempfile::tempdir().unwrap();
+    let config = policy_config(
+        &directory,
+        "[trusted_publishers]\nrepositories = [\"npm/node-semver\"]\n",
+    );
+
+    let output = registry
+        .command()
+        .args([
+            "inspect",
+            "npm",
+            "semver@7.8.6",
+            "--json",
+            "--no-cache",
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|finding| !finding["rule"]
+                .as_str()
+                .unwrap()
+                .starts_with("PROVENANCE-TRUST")),
+        "{value}"
+    );
+}
+
+#[test]
+fn inspect_trust_policy_warns_on_an_untrusted_publisher() {
+    let registry = semver_with_attestation();
+    let directory = tempfile::tempdir().unwrap();
+    let config = policy_config(
+        &directory,
+        "[trusted_publishers]\nrepositories = [\"evil/repo\"]\n",
+    );
+
+    let output = registry
+        .command()
+        .args([
+            "inspect",
+            "npm",
+            "semver@7.8.6",
+            "--json",
+            "--no-cache",
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let finding = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["rule"] == "PROVENANCE-TRUST-003")
+        .expect("untrusted publisher is a finding");
+    assert_eq!(finding["severity"], "warn");
+    assert_eq!(finding["confidence"], "medium");
+    assert!(
+        finding["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("npm/node-semver"),
+        "{finding}"
+    );
+    assert!(
+        finding["references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reference| reference.as_str().unwrap().contains("docs.github.com")),
+        "{finding}"
+    );
+}
+
+#[test]
+fn inspect_trust_policy_requires_an_attestation_when_configured() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_scripted(|base| {
+        inspect_npm_routes(base, &archive, vec![(200, archive.clone())])
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let config = policy_config(&directory, "[provenance]\nrequire_attestation = true\n");
+
+    let output = registry
+        .command()
+        .args([
+            "inspect",
+            "npm",
+            "retry-pkg@1.0.0",
+            "--json",
+            "--no-cache",
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["rule"] == "PROVENANCE-TRUST-001"),
+        "{value}"
+    );
+}
+
 #[test]
 fn inspect_discloses_files_the_size_cap_skipped() {
     let big = vec![b'a'; 6 * 1024 * 1024];

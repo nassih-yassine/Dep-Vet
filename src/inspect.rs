@@ -544,6 +544,26 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_trust_policy_is_not_claimed_for_non_npm() {
+        let prepared = prepared(&[("index.js", "const a = 1;")], &[]);
+        let mut report = build_report(Ecosystem::Jsr, &package_spec("1.0.0"), prepared, &[]);
+        let policy = crate::provenance::TrustPolicy {
+            require_attestation: true,
+            ..crate::provenance::TrustPolicy::default()
+        };
+        apply_trust_policy(&mut report, &policy);
+        assert!(report.findings.is_empty());
+        assert!(
+            report
+                .not_checked
+                .iter()
+                .any(|item| item.contains("npm only")),
+            "{:?}",
+            report.not_checked
+        );
+    }
+
+    #[test]
     fn a_decompression_bomb_is_a_high_finding_not_a_clean_report() {
         let mut prepared = prepared(&[("a.js", "const a = 1;")], &[]);
         prepared.extracted = crate::archive::Extracted::default();
@@ -835,6 +855,42 @@ pub fn build_report(
         findings,
         not_checked,
     }
+}
+
+/// Apply the opt-in publisher policy on top of verification. A valid signature
+/// is not a trusted publisher, and an absent one is never a clean result.
+pub fn apply_trust_policy(report: &mut InspectionReport, policy: &crate::provenance::TrustPolicy) {
+    if !policy.configured() {
+        return;
+    }
+    // Offline verification exists for npm only. Saying "no attestation" for a
+    // registry whose provenance we never looked for would be a false claim.
+    if report.ecosystem != crate::model::Ecosystem::Npm {
+        report
+            .not_checked
+            .push("publisher trust policy (npm only, not verified here)".to_string());
+        return;
+    }
+    for issue in policy.check(report.provenance.as_ref()) {
+        report.findings.push(crate::rules::RuleFinding {
+            rule: issue.rule,
+            title: issue.title,
+            description: issue.description,
+            severity: crate::model::Severity::Warn,
+            confidence: issue.confidence,
+            file: String::new(),
+            line: 0,
+            evidence: issue.detail,
+            recommendation: issue.recommendation,
+            references: crate::provenance::TRUST_REFERENCES.to_vec(),
+        });
+    }
+    report.findings.sort_by(|left, right| {
+        left.file
+            .cmp(&right.file)
+            .then(left.line.cmp(&right.line))
+            .then(left.rule.cmp(right.rule))
+    });
 }
 
 /// Security-focused comparison of two releases.

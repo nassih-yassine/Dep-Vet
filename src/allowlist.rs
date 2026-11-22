@@ -47,6 +47,33 @@ pub struct Allowlist {
     allow: Vec<AllowEntry>,
     #[serde(default)]
     inspect: InspectConfig,
+    #[serde(default)]
+    provenance: ProvenancePolicyConfig,
+    #[serde(default)]
+    trusted_publishers: TrustedPublishersConfig,
+}
+
+/// Opt-in provenance requirements. Both default to false, so adding this
+/// section never changes a verdict by itself.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvenancePolicyConfig {
+    #[serde(default)]
+    pub require_attestation: bool,
+    #[serde(default)]
+    pub require_verified_source: bool,
+}
+
+/// GitHub identities allowed to publish. Empty lists mean no publisher gate.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedPublishersConfig {
+    #[serde(default)]
+    pub github_organizations: Vec<String>,
+    #[serde(default)]
+    pub repositories: Vec<String>,
+    #[serde(default)]
+    pub workflows: Vec<String>,
 }
 
 /// Archive-inspection settings from the same `.depvet.toml`.
@@ -113,6 +140,8 @@ pub enum AllowError {
     UnknownRule { path: String, rule: String },
     #[error("{path}: {field} must be greater than zero")]
     ZeroLimit { path: String, field: String },
+    #[error("{path}: {field} contains an empty entry")]
+    EmptyPolicyValue { path: String, field: String },
 }
 
 impl Allowlist {
@@ -181,11 +210,43 @@ impl Allowlist {
                 field: "max_entries".to_string(),
             });
         }
+        for (field, values) in [
+            (
+                "trusted_publishers.github_organizations",
+                &list.trusted_publishers.github_organizations,
+            ),
+            (
+                "trusted_publishers.repositories",
+                &list.trusted_publishers.repositories,
+            ),
+            (
+                "trusted_publishers.workflows",
+                &list.trusted_publishers.workflows,
+            ),
+        ] {
+            if values.iter().any(|value| value.trim().is_empty()) {
+                return Err(AllowError::EmptyPolicyValue {
+                    path: path.display().to_string(),
+                    field: field.to_string(),
+                });
+            }
+        }
         Ok(list)
     }
 
     pub fn inspect(&self) -> &InspectConfig {
         &self.inspect
+    }
+
+    /// Combine the two opt-in sections into the policy `inspect` evaluates.
+    pub fn trust_policy(&self) -> crate::provenance::TrustPolicy {
+        crate::provenance::TrustPolicy {
+            require_attestation: self.provenance.require_attestation,
+            require_verified_source: self.provenance.require_verified_source,
+            github_organizations: self.trusted_publishers.github_organizations.clone(),
+            repositories: self.trusted_publishers.repositories.clone(),
+            workflows: self.trusted_publishers.workflows.clone(),
+        }
     }
 
     /// Downgrades matching findings to INFO, keeps their evidence, and records
@@ -306,6 +367,37 @@ mod tests {
         assert!(matches!(
             Allowlist::parse(path, "[inspect]\ndisabled_rules = [\"NOPE-000\"]\n"),
             Err(AllowError::UnknownRule { .. })
+        ));
+    }
+
+    #[test]
+    fn provenance_policy_is_opt_in_and_rejects_empty_entries() {
+        let path = Path::new(".depvet.toml");
+        assert!(!allowlist("").trust_policy().configured());
+
+        let config = allowlist(
+            "[provenance]\nrequire_attestation = true\nrequire_verified_source = true\n\n[trusted_publishers]\ngithub_organizations = [\"acme\"]\nrepositories = [\"acme/pkg\"]\nworkflows = [\"acme/pkg/.github/workflows/release.yml\"]\n",
+        );
+        let policy = config.trust_policy();
+        assert!(policy.require_attestation && policy.require_verified_source);
+        assert_eq!(policy.github_organizations, vec!["acme"]);
+        assert_eq!(policy.repositories, vec!["acme/pkg"]);
+        assert_eq!(
+            policy.workflows,
+            vec!["acme/pkg/.github/workflows/release.yml"]
+        );
+
+        assert!(matches!(
+            Allowlist::parse(path, "[trusted_publishers]\nrepositories = [\"  \"]\n"),
+            Err(AllowError::EmptyPolicyValue { .. })
+        ));
+        assert!(matches!(
+            Allowlist::parse(path, "[provenance]\nrequire_attestations = true\n"),
+            Err(AllowError::Toml { .. })
+        ));
+        assert!(matches!(
+            Allowlist::parse(path, "[provenance]\nrequire_attestation = \"yes\"\n"),
+            Err(AllowError::Toml { .. })
         ));
     }
 

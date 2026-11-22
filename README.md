@@ -370,6 +370,39 @@ In an audit, `present` means the attestation exists, **not** that its signature
 was verified; `inspect npm` is where verification happens. `missing` is not
 suspicious on its own: most packages do not publish provenance.
 
+#### Publisher trust
+
+A valid signature says who signed; it does not say whether you trust them.
+`inspect npm` can enforce that as an opt-in policy:
+
+```toml
+[provenance]
+require_attestation = true      # presence, not verification
+require_verified_source = true  # offline Sigstore verification must pass
+
+[trusted_publishers]
+github_organizations = ["trusted-org"]
+repositories = ["trusted-org/example"]
+workflows = ["trusted-org/example/.github/workflows/release.yml"]
+```
+
+A verified signer is trusted when its GitHub organization, repository, or
+workflow matches any configured list **and** its OIDC issuer is
+`https://token.actions.githubusercontent.com`. Violations are WARN findings:
+
+| Rule | Meaning |
+|---|---|
+| `PROVENANCE-TRUST-001` | the policy requires an attestation and none was published |
+| `PROVENANCE-TRUST-002` | an attestation was published but did not verify |
+| `PROVENANCE-TRUST-003` | the signature verified, but the signer is not on the trusted lists |
+
+All three exit `1` unless a higher finding exists. Empty lists and `false` flags
+are the defaults, so this section changes nothing until you add it. Trust lists
+are evaluated only for `inspect npm`, the one path with offline verification;
+other ecosystems report the policy as `not checked` instead of claiming an
+attestation is absent. These policy findings are not allowlistable: change the
+policy when a publisher becomes trusted.
+
 ### Watch mode
 
 ```sh

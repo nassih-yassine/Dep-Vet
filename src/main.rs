@@ -201,12 +201,13 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             let limits = allowlist.inspect().limits();
             let prepared =
                 dep_vet::inspect::inspect_archive(&http, ecosystem, &spec, limits, !cli.no_cache)?;
-            let report = dep_vet::inspect::build_report(
+            let mut report = dep_vet::inspect::build_report(
                 ecosystem,
                 &spec,
                 prepared,
                 &allowlist.inspect().disabled_rules,
             );
+            dep_vet::inspect::apply_trust_policy(&mut report, &allowlist.trust_policy());
             let output = if *json {
                 dep_vet::report::render_inspection_json(&report)?
             } else {
