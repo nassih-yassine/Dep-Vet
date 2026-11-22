@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 587 unit + 198 end-to-end tests
+cargo test --locked                      # 587 unit + 199 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -584,8 +584,8 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   JSR, attaches dependency paths, includes skipped entries as errors, and keeps
   parser notes. MCP passes `allow_progress = false`, maps `exit_code == 3` to
   `isError`, and never silently drops a partial result.
-- **Archive caps are parsed safely.** `MAX_DOWNLOAD_MB` (4096),
-  `MAX_TOTAL_MB` (8192), `MAX_FILE_MB` (4096), `MAX_DECOMPRESSED_MB` (16384), and
+- **Archive caps are parsed safely.** `MAX_DOWNLOAD_MB` (1024),
+  `MAX_TOTAL_MB` (1024), `MAX_FILE_MB` (512), `MAX_DECOMPRESSED_MB` (2048), and
   `MAX_ENTRIES` (1,000,000) bound `.depvet.toml`. Values above them are
   `LimitTooLarge`; `limits()` uses `checked_mul` and saturates only for
   manually constructed configs that bypassed parsing.

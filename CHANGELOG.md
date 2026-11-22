@@ -14,7 +14,13 @@
   checked arithmetic, so huge `*_mb` values cannot wrap. MCP rejects non-2.0
   JSON-RPC requests, invalid IDs, and batch arrays before any tool runs, while
   valid notifications stay response-free. URL-policy tests now cover mixed and
-  changing DNS answers, special redirect targets, and invalid overrides. The
+  changing DNS answers, special redirect targets, and invalid overrides; the
+  address filter also rejects local-use NAT64, benchmarking, ORCHID, SRv6, and
+  deprecated 6to4-relay ranges. Provenance HEAD redirects are followed and
+  validated. MCP keeps string errors for compatibility and adds structured
+  `error_details`; base lockfile notes are prefixed and preserved. Archive
+  maximums were lowered to keep extraction within a realistic memory budget.
+  Release-mode hook tests are gated because their test seam is debug-only. The
   Composer origin comes from `source.url` only and requires the fixed provider
   set.
 - **Outbound URL policy follow-up.** IPv6 NAT64 (`64:ff9b::/96`),

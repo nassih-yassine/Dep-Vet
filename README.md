@@ -142,9 +142,9 @@ max_decompressed_mb = 200
 disabled_rules = ["PY-IMPORT-001"]
 ```
 
-Caps must be between 1 and their maximum: `max_download_mb` and `max_file_mb`
-<= 4096, `max_total_mb` <= 8192, `max_decompressed_mb` <= 16384, and
-`max_entries` <= 1,000,000. Values are validated and converted with checked
+Caps must be between 1 and their maximum: `max_download_mb` <= 1024,
+`max_total_mb` <= 1024, `max_file_mb` <= 512, `max_decompressed_mb` <= 2048,
+and `max_entries` <= 1,000,000. Values are validated and converted with checked
 arithmetic at config parse time, so an oversized number is an error rather than
 a wrapped limit.
 
@@ -653,9 +653,10 @@ untrusted. dep-vet only fetches `https` URLs from the ecosystem's known hosts
 (npm's `registry.npmjs.org`, PyPI's `files.pythonhosted.org`, and so on;
 Composer code hosts must match the package's declared source host and a fixed code-host set),
 refuses credentials, non-default ports, private/loopback/link-local IP
-literals, cloud metadata addresses, and IPv6 transition forms that embed a
-non-public IPv4 address (NAT64, IPv4-compatible, 6to4), and returns exit `3`
-with the host named
+literals, cloud metadata addresses, special-purpose ranges (local-use NAT64,
+benchmarking, ORCHID, SRv6, deprecated 6to4 relay), and IPv6 transition forms
+that embed a non-public IPv4 address (NAT64, IPv4-compatible, 6to4), and returns
+exit `3` with the host named
 when a URL is refused. Redirects are followed manually, at most three, with the
 same checks on every hop and no `https`-to-`http` downgrade. DNS answers are
 filtered before connecting, so a hostname that suddenly resolves to a private
