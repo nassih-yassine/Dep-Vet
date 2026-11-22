@@ -114,6 +114,22 @@ pub fn inspect_archive(
         }
         Err(error) => return Err(InspectError::Archive(error.to_string())),
     };
+    if ecosystem == Ecosystem::Composer {
+        // The registry response chose the source and dist URLs, so its claim
+        // needs one independent check: the archive must identify itself as
+        // the package the caller asked for.
+        let declared = composer_manifest_name(&extracted.files);
+        let matches = declared
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case(&spec.name));
+        if !matches {
+            return Err(InspectError::Policy(format!(
+                "Composer archive identity does not match {}: {}",
+                spec.name,
+                declared.as_deref().unwrap_or("composer.json has no name")
+            )));
+        }
+    }
     let provenance = if let Some(url) = source.provenance_url.as_deref() {
         crate::netpolicy::validate_url(Ecosystem::Npm, url).map_err(|error| {
             InspectError::Policy(format!("attestation URL rejected for {url}: {error}"))
@@ -147,6 +163,27 @@ pub fn inspect_archive(
 /// Archive downloads retry transient failures the same way metadata requests
 /// do, because a rate-limited tarball is not a missing package.
 const DOWNLOAD_ATTEMPTS: u32 = 3;
+
+/// The shallowest `composer.json` in an archive, read independently of the
+/// registry metadata.
+fn composer_manifest_name(files: &[crate::archive::ExtractedFile]) -> Option<String> {
+    files
+        .iter()
+        .filter(|file| {
+            file.path
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case("composer.json"))
+        })
+        .min_by_key(|file| file.path.matches('/').count())
+        .and_then(|file| serde_json::from_str::<serde_json::Value>(&file.text).ok())
+        .and_then(|value| {
+            value
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+}
 
 fn get_bytes(
     http: &HttpClient,
@@ -684,6 +721,25 @@ mod tests {
         assert!(report.resolved_advisories.is_empty());
         assert_eq!(report.verdict(), crate::model::Severity::High);
         assert_eq!(report.exit_code(), 2);
+    }
+
+    #[test]
+    fn composer_archive_identity_is_read_from_composer_json() {
+        let files = vec![
+            crate::archive::ExtractedFile {
+                path: "vendor/pkg-1.0.0/composer.json".to_string(),
+                text: r#"{"name":"Vendor/Pkg"}"#.to_string(),
+            },
+            crate::archive::ExtractedFile {
+                path: "vendor/pkg-1.0.0/src/composer.json".to_string(),
+                text: r#"{"name":"other/pkg"}"#.to_string(),
+            },
+        ];
+        assert_eq!(
+            composer_manifest_name(&files).as_deref(),
+            Some("Vendor/Pkg")
+        );
+        assert_eq!(composer_manifest_name(&[]), None);
     }
 
     #[test]

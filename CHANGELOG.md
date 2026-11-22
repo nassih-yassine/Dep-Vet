@@ -21,8 +21,9 @@
   `error_details`; base lockfile notes are prefixed and preserved. Archive
   maximums were lowered to keep extraction within a realistic memory budget.
   Release-mode hook tests are gated because their test seam is debug-only. The
-  Composer origin comes from `source.url` only and requires the fixed provider
-  set.
+  Composer origin comes from `source.url` only, requires the fixed provider set,
+  and the downloaded archive must declare the requested package name before it
+  is reported.
 - **Outbound URL policy follow-up.** IPv6 NAT64 (`64:ff9b::/96`),
   IPv4-compatible, and 6to4 addresses now inherit their embedded IPv4 verdict,
   while Teredo, discard-only `100::/64`, and `3fff::/20` are refused. Composer

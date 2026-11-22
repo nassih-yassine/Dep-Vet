@@ -63,7 +63,9 @@ provenance document, the URL must pass `src/netpolicy.rs`:
   `codeload.github.com`, `gitlab.com`, or `bitbucket.org` (no subdomains), and
   the source host must be the same provider (`github.com` for the GitHub
   family). GitHub archive paths must contain the source owner/repo,
-  case-insensitively, with a trailing `.git` stripped.
+  case-insensitively, with a trailing `.git` stripped. The source claim is not
+  independently verified: the downloaded archive must contain a `composer.json`
+  whose `name` matches the requested package, or inspection exits `3`.
 - IP-literal hosts must be globally routable. Loopback, RFC 1918, link-local
   (`169.254.0.0/16`, `fe80::/10`), CGNAT (`100.64.0.0/10`), ULA (`fc00::/7`),
   unspecified, multicast, broadcast, documentation (`2001:db8::/32`,
