@@ -172,6 +172,11 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 limits,
                 !cli.no_cache,
             )?;
+            let osv = OsvClient::from_env(Arc::clone(&http));
+            let from_version = from_spec.version.clone().unwrap_or_default();
+            let to_version = to_spec.version.clone().unwrap_or_default();
+            let old_advisories = osv.query(ecosystem, &from_spec.name, &from_version).ok();
+            let new_advisories = osv.query(ecosystem, &from_spec.name, &to_version).ok();
             let report = dep_vet::inspect::build_diff(
                 ecosystem,
                 &from_spec.name,
@@ -180,6 +185,8 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 &old,
                 &new,
                 &allowlist.inspect().disabled_rules,
+                old_advisories.as_ref(),
+                new_advisories.as_ref(),
             );
             let output = if *json {
                 dep_vet::report::render_diff_json(&report)?

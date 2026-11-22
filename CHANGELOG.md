@@ -7,6 +7,12 @@
   and direct flags, as a human tree or `--json`. Nested versions resolve to the
   nearest `node_modules`; cycles are cut; a dependency named but absent from the
   lockfile is listed, never dropped. No network, no install, no execution.
+- **Differential trust analysis in `diff`.** npm publisher accounts, verified
+  attestation status and signer identity, declared dependency additions and
+  removals, and checksum regressions are compared alongside file changes.
+  OSV is queried for both versions, so advisories introduced by the new release
+  are listed with their severity and link, and resolved ones are noted. If
+  either advisory lookup fails, the delta is reported as not checked.
 - **Typosquat regression set and stronger lookalikes.** Adjacent transpositions
   now count as one edit, so `lodahs` is a HIGH finding instead of a weak
   distance-2 match that age could suppress. Cyrillic, Greek, and fullwidth

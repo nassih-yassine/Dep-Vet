@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 568 unit + 177 end-to-end tests
+cargo test --locked                      # 570 unit + 179 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -425,6 +425,15 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **`lock` exits 3 when any added package could not be checked**, even if the
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.
+- **`diff` now compares trust, not only bytes.** `Prepared.publisher` comes from
+  npm's `_npmUser`; provenance comparison uses the already-verified npm bundle
+  and never claims PyPI/other identities. Declared dependencies come from
+  `package.json`, not a lockfile, so they are not transitive. OSV is queried for
+  both exact versions; `DiffReport.new_advisories` contributes to the verdict,
+  and if either lookup fails the delta is `not_checked`, never "no new
+  advisories". A checksum mismatch stays HIGH; losing a previously verified
+  checksum is WARN. Publisher changes are INFO because one version's publisher
+  is not a maintainer history.
 - **SBOM is inventory, not resolution or a verdict.** `src/sbom.rs` reads only
   `LockContents` plus, for npm, the graph, project name/version, and `integrity`
   checksums, all from the lockfile. It never fetches or invents licenses,
