@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.1 — 2026-11-22
+
+- **Windows hook fix.** The guard child now receives the command on stdin
+  instead of one argv element, because Windows caps a process command line at
+  about 32,767 characters; a long command failed to spawn and was allowed as
+  "could not check".
+- **CI:** the 60-case parser table test counts rows per line, so a CRLF checkout
+  no longer reports 44 cases.
 ## 0.12.0 — 2026-11-22
 
 - **MCP server.** `dep-vet mcp` speaks newline-delimited JSON-RPC over stdio
