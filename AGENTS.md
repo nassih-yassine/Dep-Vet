@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 549 unit + 167 end-to-end tests
+cargo test --locked                      # 551 unit + 170 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -416,6 +416,14 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **`lock` exits 3 when any added package could not be checked**, even if the
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.
+- **SARIF is a view of the existing findings.** `src/sarif.rs` maps High to
+  `error`, Warn to `warning`, and Info to `note`; rule ids and evidence URLs
+  come from `Finding`, and allowed findings stay as notes. The artifact
+  location is the lockfile, not a line, because findings name packages rather
+  than offsets. `partialFingerprints` is `rule:name@version`. `--format` is
+  audit-only and conflicts with `--json`; `-o` writes the file but never
+  changes the exit code. The output was validated against the official SARIF
+  2.1.0 schema; keep it that way when adding fields.
 - **Dependency paths come from the graph.** `graph::attach_dependency_paths`
   matches reports by `(name, version)`, walks parents back to a root with BFS,
   keeps at most three shortest chains and a depth of 20, and leaves the field

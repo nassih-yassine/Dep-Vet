@@ -7,6 +7,11 @@
   and direct flags, as a human tree or `--json`. Nested versions resolve to the
   nearest `node_modules`; cycles are cut; a dependency named but absent from the
   lockfile is listed, never dropped. No network, no install, no execution.
+- **SARIF 2.1.0 output.** `audit --format sarif -o results.sarif` emits one
+  result per finding with stable rule ids, SARIF severity levels, evidence
+  URLs, package/version/confidence properties, dependency paths when known,
+  and an unsuccessful invocation when any package could not be checked. The
+  exit code is unchanged. `--json` remains, and conflicts with `--format`.
 - **Dependency paths on npm findings.** A `package-lock.json` audit now fills
   `dependency_paths` on each package (up to three root-to-package chains,
   shortest first) and the human report shows the shortest transitive chain as

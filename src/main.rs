@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use dep_vet::cli::{Cli, Command};
+use dep_vet::cli::{Cli, Command, OutputFormat};
 use dep_vet::composer::{ComposerClient, ComposerError};
 use dep_vet::crates::{CratesClient, CratesError};
 use dep_vet::go::{GoClient, GoError};
@@ -276,7 +276,16 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         Command::Audit {
             lockfile: path,
             json,
-        } => run_audit(&auditor, &allowlist, path, *json, cli),
+            format,
+            output,
+        } => {
+            let format = format.unwrap_or(if *json {
+                OutputFormat::Json
+            } else {
+                OutputFormat::Human
+            });
+            run_audit(&auditor, &allowlist, path, format, output.as_deref(), cli)
+        }
 
         Command::Watch { lockfile } => {
             let path = match lockfile {
@@ -289,13 +298,17 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 &path,
                 || {
                     println!("watching {} (Ctrl-C to stop)", path.display());
-                    if let Err(error) = run_audit(&auditor, &allowlist, &path, false, cli) {
+                    if let Err(error) =
+                        run_audit(&auditor, &allowlist, &path, OutputFormat::Human, None, cli)
+                    {
                         eprintln!("dep-vet: {error}");
                     }
                 },
                 || {
                     println!("\n── change detected ──");
-                    if let Err(error) = run_audit(&auditor, &allowlist, &path, false, cli) {
+                    if let Err(error) =
+                        run_audit(&auditor, &allowlist, &path, OutputFormat::Human, None, cli)
+                    {
                         eprintln!("dep-vet: {error}");
                     }
                 },
@@ -1308,22 +1321,28 @@ fn run_audit(
     auditor: &Auditor,
     allowlist: &dep_vet::allowlist::Allowlist,
     path: &std::path::Path,
-    json: bool,
+    format: OutputFormat,
+    destination: Option<&std::path::Path>,
     cli: &Cli,
 ) -> anyhow::Result<u8> {
-    let format = lockfile::detect(path)?;
+    let lock_format = lockfile::detect(path)?;
     let contents = lockfile::read(path)?;
     // No tree context: every package would otherwise look suspicious
     // to every other one. The seed list is the comparison set.
     let now = now_seconds();
-    let (mut reports, mut errors) =
-        audit_packages(auditor, format.ecosystem(), &contents.packages, &[], now);
+    let (mut reports, mut errors) = audit_packages(
+        auditor,
+        lock_format.ecosystem(),
+        &contents.packages,
+        &[],
+        now,
+    );
     let (jsr_reports, jsr_errors) =
         audit_packages(auditor, Ecosystem::Jsr, &contents.jsr, &[], now);
     reports.extend(jsr_reports);
     errors.extend(jsr_errors);
     errors.extend(skipped_errors(&contents));
-    attach_dependency_paths(format, path, &mut reports);
+    attach_dependency_paths(lock_format, path, &mut reports);
     for report in &mut reports {
         allowlist.apply(report);
     }
@@ -1333,11 +1352,15 @@ fn run_audit(
         errors,
         notes: contents.notes,
     };
-    let output = if json {
-        render_audit_json(&report)?
-    } else {
-        render_audit_human(&report, use_color(cli))
+    let output = match format {
+        OutputFormat::Human => render_audit_human(&report, use_color(cli)),
+        OutputFormat::Json => render_audit_json(&report)?,
+        OutputFormat::Sarif => dep_vet::sarif::render(&report)?,
     };
+    if let Some(path) = destination {
+        std::fs::write(path, format!("{output}\n"))?;
+        return Ok(report.exit_code());
+    }
     emit(&output, report.exit_code())
 }
 

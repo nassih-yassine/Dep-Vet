@@ -32,6 +32,14 @@ pub struct Cli {
     pub config: Option<std::path::PathBuf>,
 }
 
+/// Report serialization. `--json` remains an alias for `--format json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputFormat {
+    Human,
+    Json,
+    Sarif,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum HookAction {
     /// Serve a Claude Code PreToolUse hook on stdin
@@ -164,6 +172,14 @@ pub enum Command {
         /// Print machine-readable JSON instead of a human report
         #[arg(long)]
         json: bool,
+
+        /// Report format (--json is an alias for --format json)
+        #[arg(long, value_enum, conflicts_with = "json")]
+        format: Option<OutputFormat>,
+
+        /// Write the report to a file instead of stdout
+        #[arg(short = 'o', long, value_name = "PATH")]
+        output: Option<std::path::PathBuf>,
     },
 
     /// Re-audit a lockfile every time it changes on disk
@@ -442,9 +458,16 @@ mod tests {
     fn parses_audit_command() {
         let cli = Cli::try_parse_from(["dep-vet", "audit", "package-lock.json"]).unwrap();
         match cli.command {
-            Command::Audit { lockfile, json } => {
+            Command::Audit {
+                lockfile,
+                json,
+                format,
+                output,
+            } => {
                 assert_eq!(lockfile, std::path::PathBuf::from("package-lock.json"));
                 assert!(!json);
+                assert!(format.is_none());
+                assert!(output.is_none());
             }
             _ => panic!("expected audit command"),
         }

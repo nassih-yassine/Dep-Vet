@@ -529,6 +529,24 @@ command rather than guessed at. If any added package cannot be checked — an
 unpublished version, a network failure — the report lists it and exits `3`,
 because an incomplete audit must not read as clean.
 
+### SARIF for code scanning
+
+```sh
+dep-vet audit package-lock.json --format sarif -o results.sarif
+```
+
+SARIF 2.1.0, one result per finding. `HIGH` maps to `error`, `WARN` to
+`warning`, and `INFO` to `note`; allowed findings stay in the file as notes with
+their reason. Every result names the lockfile as its artifact location, carries
+the package, version, ecosystem, confidence, and dependency paths when known,
+and uses a stable fingerprint so GitHub Code Scanning deduplicates reruns. If
+any package could not be checked, the invocation is marked unsuccessful and
+lists each failure as a notification. The process exit code is unchanged, so a
+SARIF run still fails CI on warnings or worse.
+
+`--format json` is equivalent to `--json`, and the two cannot be combined.
+`-o`/`--output` writes the report to that path and leaves stdout empty.
+
 ### Exit codes
 
 | Code | Meaning |

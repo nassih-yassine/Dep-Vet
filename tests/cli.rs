@@ -1405,6 +1405,95 @@ fn tree_refuses_a_lockfile_it_cannot_graph_yet() {
         .code(3);
 }
 
+fn sarif_registry() -> MockRegistry {
+    let package = PackageFixture {
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        ..PackageFixture::clean("pkg-a")
+    };
+    let mut routes = HashMap::new();
+    routes.insert(package.route(), (200, package.to_json()));
+    MockRegistry::start(routes)
+}
+
+#[test]
+fn audit_emits_sarif_for_github_code_scanning() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("pkg-a", "1.0.0")]));
+    let registry = sarif_registry();
+
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--format", "sarif"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["version"], "2.1.0");
+    assert_eq!(value["runs"][0]["tool"]["driver"]["name"], "dep-vet");
+    let results = value["runs"][0]["results"].as_array().unwrap();
+    let install = results
+        .iter()
+        .find(|result| result["ruleId"] == "install-scripts")
+        .expect("install script finding is a SARIF result");
+    assert_eq!(install["level"], "warning");
+    assert_eq!(
+        install["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+        "package-lock.json"
+    );
+    assert_eq!(install["properties"]["package"], "pkg-a");
+    assert_eq!(install["properties"]["version"], "1.0.0");
+    assert_eq!(install["properties"]["confidence"], "high");
+    let rules = value["runs"][0]["tool"]["driver"]["rules"]
+        .as_array()
+        .unwrap();
+    assert!(
+        rules.iter().any(|rule| rule["id"] == "install-scripts"),
+        "{value}"
+    );
+}
+
+#[test]
+fn audit_writes_sarif_to_a_file_and_keeps_the_exit_code() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("pkg-a", "1.0.0")]));
+    let registry = sarif_registry();
+
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args([
+            "audit",
+            "package-lock.json",
+            "--format",
+            "sarif",
+            "-o",
+            "results.sarif",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty());
+    let body = std::fs::read_to_string(repo.path().join("results.sarif")).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["version"], "2.1.0");
+}
+
+#[test]
+fn json_and_sarif_formats_cannot_be_combined() {
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("pkg-a", "1.0.0")]));
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--json", "--format", "sarif"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
 #[test]
 fn audit_reports_the_path_that_reaches_a_transitive_package() {
     let directory = tempfile::tempdir().unwrap();
