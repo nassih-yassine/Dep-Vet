@@ -266,6 +266,7 @@ mod tests {
             registry_url: String::new(),
             review_url: None,
             upgrades: Vec::new(),
+            dependency_paths: Vec::new(),
             findings,
         }
     }

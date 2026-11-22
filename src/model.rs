@@ -738,6 +738,11 @@ pub struct PackageReport {
     /// live on its main registry (Google Maven, for example).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_url: Option<String>,
+    /// Root-to-package chains from the lockfile graph, each entry
+    /// `name@version`. Empty when the format has no graph or no root reaches
+    /// the package; never guessed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dependency_paths: Vec<Vec<String>>,
     /// What to do about this package, when there is something to do.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub upgrades: Vec<Upgrade>,
@@ -1264,6 +1269,7 @@ mod tests {
             registry_url: String::new(),
             review_url: None,
             upgrades: Vec::new(),
+            dependency_paths: Vec::new(),
             findings,
         }
     }

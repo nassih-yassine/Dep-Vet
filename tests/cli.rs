@@ -1406,6 +1406,55 @@ fn tree_refuses_a_lockfile_it_cannot_graph_yet() {
 }
 
 #[test]
+fn audit_reports_the_path_that_reaches_a_transitive_package() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("package-lock.json"),
+        r#"{
+          "lockfileVersion": 3,
+          "packages": {
+            "": {"dependencies": {"pkg-a": "^1"}},
+            "node_modules/pkg-a": {"version": "1.0.0", "dependencies": {"pkg-b": "^1"}},
+            "node_modules/pkg-b": {"version": "1.0.0"}
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let a = PackageFixture::clean("pkg-a");
+    let b = PackageFixture::clean("pkg-b");
+    let mut routes = HashMap::new();
+    routes.insert(a.route(), (200, a.to_json()));
+    routes.insert(b.route(), (200, b.to_json()));
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "package-lock.json", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let packages = value["packages"].as_array().unwrap();
+    let a = packages
+        .iter()
+        .find(|package| package["name"] == "pkg-a")
+        .unwrap();
+    let b = packages
+        .iter()
+        .find(|package| package["name"] == "pkg-b")
+        .unwrap();
+    assert_eq!(a["dependency_paths"], serde_json::json!([["pkg-a@1.0.0"]]));
+    assert_eq!(
+        b["dependency_paths"],
+        serde_json::json!([["pkg-a@1.0.0", "pkg-b@1.0.0"]])
+    );
+}
+
+#[test]
 fn clean_package_exits_zero() {
     let package = PackageFixture::clean("clean-pkg");
     let registry = registry_with(&[package], Some(500_000));

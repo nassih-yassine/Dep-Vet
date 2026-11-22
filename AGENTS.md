@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 546 unit + 166 end-to-end tests
+cargo test --locked                      # 549 unit + 167 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -416,6 +416,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **`lock` exits 3 when any added package could not be checked**, even if the
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.
+- **Dependency paths come from the graph.** `graph::attach_dependency_paths`
+  matches reports by `(name, version)`, walks parents back to a root with BFS,
+  keeps at most three shortest chains and a depth of 20, and leaves the field
+  empty when no root reaches the node. `audit` and `lock` attach paths only for
+  npm; a graph failure never fails the audit. The human report prints the
+  shortest chain as `via`, and only when it is transitive.
 - **`tree` graphs, it does not resolve.** Only `package-lock.json` v2/v3 is
   accepted; v1 is refused with upgrade advice instead of approximated. Edges
   come from each entry's `dependencies`/`devDependencies`/

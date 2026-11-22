@@ -283,6 +283,118 @@ fn walk(
     stack.pop();
 }
 
+/// Up to `max_paths` shortest root-to-package chains, each rendered as
+/// `name@version`. Empty when the node is absent or no root reaches it.
+pub fn paths_to(
+    graph: &DependencyGraph,
+    target: &str,
+    max_paths: usize,
+    max_depth: usize,
+) -> Vec<Vec<String>> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    if max_paths == 0 {
+        return Vec::new();
+    }
+    let nodes: HashMap<&str, &DependencyNode> = graph
+        .nodes
+        .iter()
+        .map(|node| (node.path.as_str(), node))
+        .collect();
+    if !nodes.contains_key(target) {
+        return Vec::new();
+    }
+    let roots: HashSet<&str> = graph.roots.iter().map(String::as_str).collect();
+    let mut parents: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &graph.edges {
+        parents
+            .entry(edge.to.as_str())
+            .or_default()
+            .push(edge.from.as_str());
+    }
+    for list in parents.values_mut() {
+        list.sort_unstable();
+        list.dedup();
+    }
+
+    // Breadth-first backwards from the target, so the shortest chain wins and
+    // cycles are cut by refusing to revisit a node already on this chain.
+    let mut queue = VecDeque::from([vec![target]]);
+    let mut found: Vec<Vec<String>> = Vec::new();
+    while let Some(chain) = queue.pop_front() {
+        let Some(current) = chain.last() else {
+            continue;
+        };
+        if roots.contains(current) {
+            let mut path = chain.clone();
+            path.reverse();
+            let rendered: Vec<String> = path
+                .iter()
+                .filter_map(|path| nodes.get(path))
+                .map(|node| format!("{}@{}", node.name, node.version))
+                .collect();
+            if !found.contains(&rendered) {
+                found.push(rendered);
+                if found.len() >= max_paths {
+                    break;
+                }
+            }
+            continue;
+        }
+        if chain.len() > max_depth {
+            continue;
+        }
+        for parent in parents.get(current).into_iter().flatten() {
+            if chain.iter().any(|seen| seen == parent) {
+                continue;
+            }
+            let mut next = chain.clone();
+            next.push(parent);
+            queue.push_back(next);
+        }
+    }
+    found.sort_by(|left, right| left.len().cmp(&right.len()).then(left.cmp(right)));
+    found
+}
+
+/// Fill `dependency_paths` on reports whose name and version appear in the
+/// graph. Reports for packages the lockfile does not place are left empty, so
+/// nothing is invented.
+pub fn attach_dependency_paths(
+    graph: &DependencyGraph,
+    reports: &mut [crate::model::PackageReport],
+) {
+    use std::collections::HashMap;
+
+    const MAX_PATHS: usize = 3;
+    const MAX_DEPTH: usize = 20;
+
+    let mut by_package: HashMap<(&str, &str), Vec<&str>> = HashMap::new();
+    for node in &graph.nodes {
+        by_package
+            .entry((node.name.as_str(), node.version.as_str()))
+            .or_default()
+            .push(node.path.as_str());
+    }
+    for report in reports {
+        let key = (report.name.as_str(), report.version.as_str());
+        let Some(node_paths) = by_package.get(&key) else {
+            continue;
+        };
+        let mut paths: Vec<Vec<String>> = Vec::new();
+        for node_path in node_paths {
+            for path in paths_to(graph, node_path, MAX_PATHS, MAX_DEPTH) {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+        paths.sort_by(|left, right| left.len().cmp(&right.len()).then(left.cmp(right)));
+        paths.truncate(MAX_PATHS);
+        report.dependency_paths = paths;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +439,85 @@ mod tests {
     fn v1_lockfiles_are_refused_with_an_explanation() {
         let error = npm_from_package_lock(r#"{"lockfileVersion":1}"#).unwrap_err();
         assert!(error.contains("npm 7"), "{error}");
+    }
+
+    #[test]
+    fn paths_start_at_the_root_and_use_the_nearest_copy() {
+        let graph = npm_from_package_lock(NESTED).unwrap();
+        assert_eq!(
+            paths_to(&graph, "node_modules/a", 3, 20),
+            vec![vec!["a@1.0.0".to_string()]]
+        );
+        assert_eq!(
+            paths_to(&graph, "node_modules/a/node_modules/b", 3, 20),
+            vec![vec!["a@1.0.0".to_string(), "b@2.0.0".to_string()]]
+        );
+        // The root-level b is present but no root dependency reaches it.
+        assert!(paths_to(&graph, "node_modules/b", 3, 20).is_empty());
+        assert!(paths_to(&graph, "node_modules/missing", 3, 20).is_empty());
+    }
+
+    #[test]
+    fn paths_are_capped_and_cycles_terminate() {
+        let graph = DependencyGraph {
+            nodes: vec![
+                DependencyNode {
+                    name: "a".into(),
+                    version: "1".into(),
+                    path: "node_modules/a".into(),
+                    direct: true,
+                    dev: false,
+                    optional: false,
+                },
+                DependencyNode {
+                    name: "b".into(),
+                    version: "1".into(),
+                    path: "node_modules/b".into(),
+                    direct: false,
+                    dev: false,
+                    optional: false,
+                },
+                DependencyNode {
+                    name: "c".into(),
+                    version: "1".into(),
+                    path: "node_modules/c".into(),
+                    direct: false,
+                    dev: false,
+                    optional: false,
+                },
+            ],
+            edges: vec![
+                DependencyEdge {
+                    from: "node_modules/a".into(),
+                    to: "node_modules/b".into(),
+                    name: "b".into(),
+                    kind: EdgeKind::Normal,
+                },
+                DependencyEdge {
+                    from: "node_modules/b".into(),
+                    to: "node_modules/c".into(),
+                    name: "c".into(),
+                    kind: EdgeKind::Normal,
+                },
+                DependencyEdge {
+                    from: "node_modules/c".into(),
+                    to: "node_modules/a".into(),
+                    name: "a".into(),
+                    kind: EdgeKind::Peer,
+                },
+            ],
+            roots: vec!["node_modules/a".into()],
+            unresolved: vec![],
+        };
+        let paths = paths_to(&graph, "node_modules/c", 3, 20);
+        assert_eq!(
+            paths,
+            vec![vec![
+                "a@1".to_string(),
+                "b@1".to_string(),
+                "c@1".to_string()
+            ]]
+        );
     }
 
     #[test]
