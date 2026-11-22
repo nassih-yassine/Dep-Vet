@@ -121,30 +121,71 @@ pub fn inspect_archive(
     })
 }
 
+/// Archive downloads retry transient failures the same way metadata requests
+/// do, because a rate-limited tarball is not a missing package.
+const DOWNLOAD_ATTEMPTS: u32 = 3;
+
 fn get_bytes(
     http: &HttpClient,
     ecosystem: Ecosystem,
     url: &str,
     limit: u64,
 ) -> Result<Vec<u8>, InspectError> {
-    let mut response = http.get_raw(url).map_err(|error| match error {
-        HttpError::Status { status: 404, .. } => {
-            InspectError::Unavailable(ecosystem, format!("{url} returned 404"))
+    let mut last_error = None;
+    for attempt in 0..DOWNLOAD_ATTEMPTS {
+        match http.get_raw(url) {
+            Ok(mut response) => {
+                let declared = response
+                    .headers()
+                    .get("content-length")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok());
+                if declared.is_some_and(|length| length > limit) {
+                    return Err(InspectError::Archive(format!(
+                        "archive is larger than {limit} bytes"
+                    )));
+                }
+                match response
+                    .body_mut()
+                    .with_config()
+                    .limit(limit + 1)
+                    .read_to_vec()
+                {
+                    Ok(body) if body.len() as u64 <= limit => return Ok(body),
+                    Ok(_) => {
+                        return Err(InspectError::Archive(format!(
+                            "archive is larger than {limit} bytes"
+                        )));
+                    }
+                    Err(error) => {
+                        // A truncated body is usually a network interruption.
+                        last_error = Some(InspectError::Http(error.to_string()));
+                    }
+                }
+            }
+            Err(HttpError::Status { status: 404, .. }) => {
+                return Err(InspectError::Unavailable(
+                    ecosystem,
+                    format!("{url} returned 404"),
+                ));
+            }
+            Err(error) if error.is_transient() && attempt + 1 < DOWNLOAD_ATTEMPTS => {
+                std::thread::sleep(crate::http::retry_delay_jittered(
+                    attempt,
+                    error.retry_after(),
+                ));
+                last_error = Some(InspectError::Http(error.to_string()));
+                continue;
+            }
+            Err(error) => return Err(InspectError::Http(error.to_string())),
         }
-        other => InspectError::Http(other.to_string()),
-    })?;
-    let body = response
-        .body_mut()
-        .with_config()
-        .limit(limit + 1)
-        .read_to_vec()
-        .map_err(|error| InspectError::Http(error.to_string()))?;
-    if body.len() as u64 > limit {
-        return Err(InspectError::Archive(format!(
-            "archive is larger than {limit} bytes"
-        )));
+        if attempt + 1 < DOWNLOAD_ATTEMPTS {
+            std::thread::sleep(crate::http::retry_delay_jittered(attempt, None));
+        }
     }
-    Ok(body)
+    Err(last_error.unwrap_or_else(|| {
+        InspectError::Http(format!("{url} failed after {DOWNLOAD_ATTEMPTS} attempts"))
+    }))
 }
 
 /// Compare the registry-published digest with the bytes we received.

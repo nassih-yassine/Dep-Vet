@@ -12,6 +12,65 @@ pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 pub const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// One newline-delimited message, or a refusal for a line over the limit.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReadLine {
+    Message(Vec<u8>),
+    TooLong,
+    Eof,
+}
+
+/// Read one line with a hard cap. The buffer never grows past `limit`; an
+/// oversized line is drained to its newline and reported as `TooLong`.
+pub fn read_line_bounded(input: &mut impl BufRead, limit: usize) -> std::io::Result<ReadLine> {
+    let mut line = Vec::new();
+    // Read at most `limit` content bytes plus a newline, and one byte to detect
+    // an oversized line. The allocation is bounded even without a newline.
+    let mut limited = std::io::Read::take(&mut *input, (limit + 2) as u64);
+    let read = limited.read_until(b'\n', &mut line)?;
+    if read == 0 {
+        return Ok(ReadLine::Eof);
+    }
+    let newline = line.last() == Some(&b'\n');
+    let content = if newline {
+        &line[..line.len() - 1]
+    } else {
+        &line[..]
+    };
+    if content.len() > limit {
+        if !newline {
+            drain_to_newline(input)?;
+        }
+        return Ok(ReadLine::TooLong);
+    }
+    if newline || read < limit + 2 {
+        // A complete line, or a final unterminated line at EOF.
+        return Ok(ReadLine::Message(content.to_vec()));
+    }
+    // No newline and the capped read was full: the line is longer than the cap.
+    drain_to_newline(input)?;
+    Ok(ReadLine::TooLong)
+}
+
+fn drain_to_newline(input: &mut impl BufRead) -> std::io::Result<()> {
+    loop {
+        let buffer = input.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(());
+        }
+        match buffer.iter().position(|byte| *byte == b'\n') {
+            Some(position) => {
+                input.consume(position + 1);
+                return Ok(());
+            }
+            None => {
+                let length = buffer.len();
+                input.consume(length);
+            }
+        }
+    }
+}
+
 /// A tool call. `Err` is a JSON-RPC error code plus message.
 pub type ToolResult = Result<Value, (i64, String)>;
 
@@ -22,31 +81,28 @@ pub fn serve(
 ) -> std::io::Result<()> {
     let mut input = input;
     loop {
-        let mut line = Vec::new();
-        match input.read_until(b'\n', &mut line) {
-            Ok(0) => return Ok(()),
-            Ok(_) => {}
-            Err(error) => return Err(error),
-        }
-        let line = String::from_utf8_lossy(&line);
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let response = if line.len() > MAX_LINE_BYTES {
-            Some(error_response(
+        let response = match read_line_bounded(&mut input, MAX_LINE_BYTES)? {
+            ReadLine::Eof => return Ok(()),
+            ReadLine::TooLong => Some(error_response(
                 Value::Null,
                 -32600,
                 "request line is too large",
-            ))
-        } else {
-            match serde_json::from_str::<Value>(line) {
-                Ok(request) => handle(&request, &mut call_tool),
-                Err(error) => Some(error_response(
-                    Value::Null,
-                    -32700,
-                    &format!("invalid JSON: {error}"),
-                )),
+            )),
+            ReadLine::Message(bytes) => {
+                let line = String::from_utf8_lossy(&bytes);
+                let line = line.trim();
+                if line.is_empty() {
+                    None
+                } else {
+                    match serde_json::from_str::<Value>(line) {
+                        Ok(request) => handle(&request, &mut call_tool),
+                        Err(error) => Some(error_response(
+                            Value::Null,
+                            -32700,
+                            &format!("invalid JSON: {error}"),
+                        )),
+                    }
+                }
             }
         };
         if let Some(response) = response {
@@ -243,6 +299,67 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response["result"], json!({}));
+    }
+
+    #[test]
+    fn bounded_reader_accepts_a_line_exactly_at_the_limit() {
+        let line = format!("{}\n", "a".repeat(64));
+        let mut input = std::io::Cursor::new(line.into_bytes());
+        assert_eq!(
+            read_line_bounded(&mut input, 64).unwrap(),
+            ReadLine::Message(vec![b'a'; 64])
+        );
+        assert_eq!(read_line_bounded(&mut input, 64).unwrap(), ReadLine::Eof);
+    }
+
+    #[test]
+    fn bounded_reader_rejects_an_oversized_line_and_recovers() {
+        let mut bytes = "a".repeat(65).into_bytes();
+        bytes.push(b'\n');
+        bytes.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+        let mut input = std::io::Cursor::new(bytes);
+        assert_eq!(
+            read_line_bounded(&mut input, 64).unwrap(),
+            ReadLine::TooLong
+        );
+        match read_line_bounded(&mut input, 64).unwrap() {
+            ReadLine::Message(message) => {
+                assert!(String::from_utf8(message).unwrap().contains("ping"))
+            }
+            other => panic!("expected the next message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bounded_reader_handles_a_huge_line_without_newline() {
+        let mut bytes = vec![b'a'; 8 * MAX_LINE_BYTES];
+        bytes.push(b'\n');
+        bytes.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"ping\"}\n");
+        let mut input = std::io::Cursor::new(bytes);
+        assert_eq!(
+            read_line_bounded(&mut input, MAX_LINE_BYTES).unwrap(),
+            ReadLine::TooLong
+        );
+        assert!(matches!(
+            read_line_bounded(&mut input, MAX_LINE_BYTES).unwrap(),
+            ReadLine::Message(_)
+        ));
+    }
+
+    #[test]
+    fn bounded_reader_accepts_a_final_unterminated_line() {
+        let mut input = std::io::Cursor::new(b"{\"jsonrpc\":\"2.0\"}".to_vec());
+        assert_eq!(
+            read_line_bounded(&mut input, 64).unwrap(),
+            ReadLine::Message(b"{\"jsonrpc\":\"2.0\"}".to_vec())
+        );
+        assert_eq!(read_line_bounded(&mut input, 64).unwrap(), ReadLine::Eof);
+    }
+
+    #[test]
+    fn bounded_reader_reports_eof_with_nothing_buffered() {
+        let mut input = std::io::Cursor::new(Vec::new());
+        assert_eq!(read_line_bounded(&mut input, 64).unwrap(), ReadLine::Eof);
     }
 
     #[test]

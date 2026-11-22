@@ -49,7 +49,7 @@ const RETRY_BASE_MS: u64 = 150;
 const RETRY_CAP_SECONDS: u64 = 5;
 
 impl HttpError {
-    fn retry_after(&self) -> Option<u64> {
+    pub(crate) fn retry_after(&self) -> Option<u64> {
         match self {
             Self::Status { retry_after, .. } => *retry_after,
             Self::Network { .. } => None,
@@ -58,7 +58,7 @@ impl HttpError {
 
     /// Server-side problems may be papered over with a stale cache entry;
     /// a 404 must never be, or deleted packages would look alive.
-    fn is_transient(&self) -> bool {
+    pub(crate) fn is_transient(&self) -> bool {
         match self {
             Self::Network { .. } => true,
             // 429 is a rate limit: a stale entry beats failing the check.
@@ -278,6 +278,18 @@ fn parse_retry_after(value: &str) -> Option<u64> {
 
 /// Bounded exponential backoff. A server-provided Retry-After wins, capped so
 /// one registry cannot stall a whole audit.
+/// Same policy, with jitter so parallel clients do not retry in lockstep.
+pub(crate) fn retry_delay_jittered(attempt: u32, retry_after: Option<u64>) -> Duration {
+    let base = retry_delay(attempt, retry_after);
+    let jitter = u64::from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.subsec_nanos() % 100)
+            .unwrap_or(0),
+    );
+    base + Duration::from_millis(jitter)
+}
+
 fn retry_delay(attempt: u32, retry_after: Option<u64>) -> Duration {
     if let Some(seconds) = retry_after {
         return Duration::from_secs(seconds.min(RETRY_CAP_SECONDS));
