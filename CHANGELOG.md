@@ -10,10 +10,11 @@
 - **Outbound URL policy follow-up.** IPv6 NAT64 (`64:ff9b::/96`),
   IPv4-compatible, and 6to4 addresses now inherit their embedded IPv4 verdict,
   while Teredo, discard-only `100::/64`, and `3fff::/20` are refused. Composer
-  code hosts are no longer broadly trusted: `api.github.com`,
-  `codeload.github.com`, `gitlab.com`, and `bitbucket.org` must be the exact
-  source/dist host declared by the package, and GitHub URLs must also name the
-  same owner/repo. The DNS resolver reads dev overrides once at construction
+  code hosts are no longer broadly trusted: outside Packagist, the origin comes
+  from `source.url` only, the dist host must be in the fixed
+  GitHub/GitLab/Bitbucket set, and the source host must match that provider.
+  GitHub owner/repo matching is case-insensitive, and the dist URL never
+  declares itself. The DNS resolver reads dev overrides once at construction
   instead of on every lookup. `--dev-registry` remains and is covered by an
   end-to-end test alongside the environment gate.
 - **Outbound URL policy.** Archive and provenance URLs from registry JSON now

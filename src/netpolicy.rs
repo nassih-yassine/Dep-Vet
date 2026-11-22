@@ -31,6 +31,10 @@ pub enum PolicyError {
     },
     #[error("dist host not declared by package metadata: {0}")]
     ComposerHost(String),
+    #[error("Composer dist hosted outside known code hosts: {0}")]
+    ComposerHostOutside(String),
+    #[error("Composer dist host {dist} does not match source host {source_host}")]
+    ComposerSourceMismatch { dist: String, source_host: String },
     #[error("dist URL repository does not match package metadata: {0}")]
     ComposerRepo(String),
     #[error("dev registry overrides require DEPVET_ALLOW_INSECURE_BASES=1: {0}")]
@@ -96,48 +100,44 @@ fn allowed_hosts(ecosystem: Ecosystem) -> &'static [&'static str] {
     }
 }
 
-/// Composer package metadata: the source/dist hosts this package declared.
-/// Code hosts (GitHub, GitLab, Bitbucket) are only accepted for the package
-/// that named them, and GitHub URLs must also name the same owner/repo.
+/// Composer package metadata: only the package's source URL is trusted.
+/// The dist URL is what we are validating, so it must never declare itself.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ComposerOrigin {
-    hosts: Vec<String>,
+    source_host: Option<String>,
     source_path: Option<String>,
 }
 
 impl ComposerOrigin {
-    pub fn from_metadata(source: Option<&str>, dist: Option<&str>) -> Self {
-        let mut hosts = Vec::new();
-        for raw in [source, dist].into_iter().flatten() {
-            if let Ok(url) = Url::parse(raw)
-                && let Some(host) = url.host_str()
-            {
-                let host = host.trim_end_matches('.').to_ascii_lowercase();
-                if !hosts.contains(&host) {
-                    hosts.push(host);
-                }
-            }
-        }
-        let source_path = source
-            .and_then(|raw| Url::parse(raw).ok())
+    pub fn from_metadata(source: Option<&str>) -> Self {
+        let parsed = source.and_then(|raw| Url::parse(raw).ok());
+        let source_host = parsed
+            .as_ref()
+            .and_then(Url::host_str)
+            .map(|host| host.trim_end_matches('.').to_ascii_lowercase());
+        let source_path = parsed
+            .as_ref()
             .map(|url| url.path().trim_start_matches('/').to_string())
             .filter(|path| !path.is_empty());
-        Self { hosts, source_path }
+        Self {
+            source_host,
+            source_path,
+        }
     }
 
-    fn declares(&self, host: &str) -> bool {
-        self.hosts.iter().any(|declared| declared == host)
-            // GitHub's API redirects zipballs to codeload; both are the same
-            // declared source, and the owner/repo check still applies.
-            || (host == "codeload.github.com" && self.hosts.iter().any(|h| h == "github.com"))
+    fn source_host(&self) -> Option<&str> {
+        self.source_host.as_deref()
     }
 
-    fn github_owner_repo(&self) -> Option<(&str, &str)> {
+    fn github_owner_repo(&self) -> Option<(String, String)> {
         let path = self.source_path.as_deref()?.trim_end_matches(".git");
         let mut parts = path.split('/');
         let owner = parts.next()?;
         let repo = parts.next()?;
-        (!owner.is_empty() && !repo.is_empty()).then_some((owner, repo))
+        if owner.is_empty() || repo.is_empty() {
+            return None;
+        }
+        Some((owner.to_ascii_lowercase(), repo.to_ascii_lowercase()))
     }
 }
 
@@ -199,8 +199,20 @@ pub fn validate_composer_with(
     if host == "repo.packagist.org" || host == "dist.packagist.org" {
         return Ok(url);
     }
-    if !origin.declares(&host) {
+    let provider = match host.as_str() {
+        "github.com" | "api.github.com" | "codeload.github.com" => "github.com",
+        "gitlab.com" => "gitlab.com",
+        "bitbucket.org" => "bitbucket.org",
+        _ => return Err(PolicyError::ComposerHostOutside(host)),
+    };
+    let Some(source_host) = origin.source_host() else {
         return Err(PolicyError::ComposerHost(host));
+    };
+    if source_host != provider {
+        return Err(PolicyError::ComposerSourceMismatch {
+            dist: host,
+            source_host: source_host.to_string(),
+        });
     }
     if is_github_host(&host) {
         let Some((owner, repo)) = origin.github_owner_repo() else {
@@ -208,7 +220,7 @@ pub fn validate_composer_with(
                 "{host} URL has no owner/repo in the package source"
             )));
         };
-        let path = url.path();
+        let path = url.path().to_ascii_lowercase();
         let api = format!("/repos/{owner}/{repo}/");
         let plain = format!("/{owner}/{repo}/");
         if !path.starts_with(&api) && !path.starts_with(&plain) {
@@ -595,49 +607,55 @@ mod tests {
     }
 
     #[test]
-    fn composer_code_hosts_need_metadata_and_the_same_github_repo() {
-        let origin = ComposerOrigin::from_metadata(
-            Some("https://github.com/acme/pkg.git"),
-            Some("https://api.github.com/repos/acme/pkg/zipball/abc"),
-        );
+    fn composer_code_hosts_need_a_fixed_provider_from_the_source_url() {
         let overrides = Overrides::default();
-        assert!(
-            validate_composer_with(
-                "https://api.github.com/repos/acme/pkg/zipball/abc",
-                &origin,
-                &overrides
-            )
-            .is_ok()
-        );
-        assert!(
-            validate_composer_with(
-                "https://codeload.github.com/acme/pkg/legacy.zip/abc",
-                &origin,
-                &overrides
-            )
-            .is_ok()
-        );
+        let github = ComposerOrigin::from_metadata(Some("https://github.com/acme/pkg.git"));
+        for url in [
+            "https://github.com/acme/pkg/archive/1.0.zip",
+            "https://api.github.com/repos/acme/pkg/zipball/abc",
+            "https://codeload.github.com/acme/pkg/legacy.zip/abc",
+        ] {
+            assert!(
+                validate_composer_with(url, &github, &overrides).is_ok(),
+                "{url}"
+            );
+        }
         assert!(matches!(
             validate_composer_with(
                 "https://api.github.com/repos/evil/pkg/zipball/abc",
-                &origin,
+                &github,
                 &overrides
             ),
             Err(PolicyError::ComposerRepo(_))
         ));
         assert!(matches!(
-            validate_composer_with("https://evil.gitlab.com/acme/pkg.zip", &origin, &overrides),
-            Err(PolicyError::ComposerHost(_))
+            validate_composer_with(
+                "https://api.github.com/repos/acme/pkg/zipball/abc",
+                &ComposerOrigin::from_metadata(Some("https://github.com/evil/pkg")),
+                &overrides
+            ),
+            Err(PolicyError::ComposerRepo(_))
         ));
-        assert!(matches!(
-            validate_composer_with("https://evil.example/acme/pkg.zip", &origin, &overrides),
-            Err(PolicyError::ComposerHost(_))
-        ));
-
-        let gitlab = ComposerOrigin::from_metadata(
-            Some("https://gitlab.com/acme/pkg"),
-            Some("https://gitlab.com/acme/pkg/-/archive/1.0/pkg.zip"),
+        assert!(
+            validate_composer_with(
+                "https://api.github.com/repos/acme/pkg/zipball/abc",
+                &ComposerOrigin::from_metadata(Some("https://github.com/AcMe/PkG.git")),
+                &overrides
+            )
+            .is_ok()
         );
+
+        let bitbucket = ComposerOrigin::from_metadata(Some("https://bitbucket.org/acme/pkg"));
+        assert!(
+            validate_composer_with(
+                "https://bitbucket.org/acme/pkg/get/1.0.zip",
+                &bitbucket,
+                &overrides
+            )
+            .is_ok()
+        );
+
+        let gitlab = ComposerOrigin::from_metadata(Some("https://gitlab.com/acme/pkg"));
         assert!(
             validate_composer_with(
                 "https://gitlab.com/acme/pkg/-/archive/1.0/pkg.zip",
@@ -646,6 +664,27 @@ mod tests {
             )
             .is_ok()
         );
+
+        assert!(matches!(
+            validate_composer_with(
+                "https://evil.example/acme/pkg.zip",
+                &ComposerOrigin::from_metadata(Some("https://evil.example/acme/pkg")),
+                &overrides
+            ),
+            Err(PolicyError::ComposerHostOutside(_))
+        ));
+        assert!(matches!(
+            validate_composer_with(
+                "https://gitlab.com/acme/pkg/-/archive/1.0/pkg.zip",
+                &github,
+                &overrides
+            ),
+            Err(PolicyError::ComposerSourceMismatch { .. })
+        ));
+        assert!(matches!(
+            validate_composer_with("https://evil.gitlab.com/acme/pkg.zip", &gitlab, &overrides),
+            Err(PolicyError::ComposerHostOutside(_))
+        ));
     }
 
     #[test]
