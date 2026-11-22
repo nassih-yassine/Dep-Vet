@@ -22,6 +22,7 @@ pub mod mcp;
 pub mod model;
 pub mod nuget;
 pub mod osv;
+pub mod plan;
 pub mod progress;
 pub mod provenance;
 pub mod pypi;

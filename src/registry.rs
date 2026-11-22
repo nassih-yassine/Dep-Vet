@@ -160,6 +160,39 @@ impl RegistryClient {
         parse_packument(spec, &body, &url, Some(&self.http))
     }
 
+    /// The version and dependency maps `plan` needs, without parsing a
+    /// report. The packument is the same document `fetch` reads, so the cache
+    /// and retry policy apply unchanged.
+    pub fn plan_packument(&self, name: &str) -> Result<PlanPackument, RegistryError> {
+        let url = self.package_url(name);
+        let body = match self.http.get(&url) {
+            Ok(body) => body,
+            Err(HttpError::Status {
+                status: 404 | 403, ..
+            }) => return Err(RegistryError::PackageNotFound(name.to_string())),
+            Err(error) => return Err(RegistryError::Http(error.to_string())),
+        };
+        let packument: Packument = serde_json::from_str(&body)
+            .map_err(|error| RegistryError::Decode(format!("{url}: {error}")))?;
+        Ok(PlanPackument {
+            dist_tags: packument.dist_tags,
+            versions: packument
+                .versions
+                .into_iter()
+                .map(|(version, doc)| {
+                    (
+                        version,
+                        PlanVersion {
+                            dependencies: doc.dependencies,
+                            optional_dependencies: doc.optional_dependencies,
+                            peer_dependencies: doc.peer_dependencies,
+                        },
+                    )
+                })
+                .collect(),
+        })
+    }
+
     /// Best effort: download counts are a nice-to-have, never a reason to fail.
     pub fn weekly_downloads(&self, name: &str) -> Option<u64> {
         let names = [name.to_string()];
@@ -467,12 +500,30 @@ struct VersionDoc {
     scripts: BTreeMap<String, String>,
     #[serde(default)]
     dependencies: BTreeMap<String, String>,
+    #[serde(default, rename = "optionalDependencies")]
+    optional_dependencies: BTreeMap<String, String>,
+    #[serde(default, rename = "peerDependencies")]
+    peer_dependencies: BTreeMap<String, String>,
     #[serde(default)]
     deprecated: Option<serde_json::Value>,
     #[serde(default)]
     repository: Option<RepoField>,
     #[serde(rename = "_npmUser", default)]
     npm_user: Option<User>,
+}
+
+/// Version and dependency information from one packument, for `plan`.
+#[derive(Debug, Clone)]
+pub struct PlanPackument {
+    pub dist_tags: BTreeMap<String, String>,
+    pub versions: BTreeMap<String, PlanVersion>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PlanVersion {
+    pub dependencies: BTreeMap<String, String>,
+    pub optional_dependencies: BTreeMap<String, String>,
+    pub peer_dependencies: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
