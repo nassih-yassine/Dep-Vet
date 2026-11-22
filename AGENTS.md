@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 543 unit + 162 end-to-end tests
+cargo test --locked                      # 546 unit + 166 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -79,6 +79,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/registry.rs` | npm packument fetch + parsing, download counts, repo URL normalization |
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
 | `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |
+| `src/graph.rs` | npm dependency graph from `package-lock.json`: nodes, edges, direct flags, tree renderer |
 | `src/go.rs` | deps.dev Go module index, versions, publish times, deprecation |
 | `src/jsr.rs` | JSR meta/package APIs, repository, archived flag |
 | `src/rubygems.rs` | RubyGems versions, timestamps, source URL, yank flag |
@@ -415,6 +416,14 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **`lock` exits 3 when any added package could not be checked**, even if the
   rest is clean. An incomplete audit is not a pass. Per-package failures are
   collected in `LockReport.errors`.
+- **`tree` graphs, it does not resolve.** Only `package-lock.json` v2/v3 is
+  accepted; v1 is refused with upgrade advice instead of approximated. Edges
+  come from each entry's `dependencies`/`devDependencies`/
+  `optionalDependencies`/`peerDependencies`, and a name resolves to the nearest
+  `node_modules` then walks up to the root (`graph::resolve`). Root dependencies
+  are marked direct. A name the lockfile lists but does not contain goes to
+  `unresolved`, never silently dropped. Cycles are cut with a visited stack,
+  and rendering is capped at 2,000 lines and 20 levels.
 - **`lock` diffs `name@version` pairs**, so a version bump is "new" and gets
   audited. The parser is chosen by file name (`package-lock.json`,
   `requirements*.txt`, `Cargo.lock`, `go.mod`, `poetry.lock`, `uv.lock`,

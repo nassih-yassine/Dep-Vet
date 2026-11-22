@@ -197,6 +197,25 @@ What each format contributes, and what it cannot:
 | `composer.lock` | `packages` and `packages-dev` | dev-only advisories are still reported |
 | `gradle.lockfile` | `group:artifact:version` lines, including `buildscript-`/`settings-` variants | unlocked configurations; Gradle without dependency locking |
 
+### See the dependency graph
+
+```sh
+dep-vet tree package-lock.json        # human tree
+dep-vet tree package-lock.json --json # nodes, edges, unresolved names
+```
+
+`tree` reads the graph npm already resolved; it does not resolve versions,
+download anything, or run scripts. Each node carries its install path, version,
+and whether it is direct, dev, or optional. A dependency starts next to the
+package that names it and walks up through `node_modules`, so nested versions
+keep their real parent. Dependencies named in the lockfile but absent from it
+are listed under `unresolved` instead of being dropped. A cycle is printed once
+and marked, and output is capped at 2,000 lines and 20 levels of depth.
+
+Only `package-lock.json` v2/v3 is graphed today; other formats exit `3` rather
+than approximate a graph. `tree` is offline, so it is safe in CI and in a
+sandbox.
+
 ### What to do about a finding
 
 Reports with advisories end with the fix, not just the problem:

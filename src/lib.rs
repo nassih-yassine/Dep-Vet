@@ -9,6 +9,7 @@ pub mod composer;
 pub mod crates;
 pub mod date;
 pub mod go;
+pub mod graph;
 pub mod guard;
 pub mod hook;
 pub mod http;

@@ -172,6 +172,16 @@ pub enum Command {
         lockfile: Option<std::path::PathBuf>,
     },
 
+    /// Show the dependency graph a lockfile already resolved
+    Tree {
+        /// Lockfile to read (default: nearest package-lock.json)
+        lockfile: Option<std::path::PathBuf>,
+
+        /// Print machine-readable JSON instead of a human tree
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Vet a JSR package before adding it
     Jsr {
         /// Scoped package with optional exact version: @std/assert@1.0.19

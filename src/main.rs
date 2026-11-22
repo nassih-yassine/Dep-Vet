@@ -303,6 +303,36 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             unreachable!("watch only returns on error")
         }
 
+        Command::Tree {
+            lockfile: path,
+            json,
+        } => {
+            let path = match path {
+                Some(path) => path.clone(),
+                None => lockfile::nearest(std::path::Path::new(".")).ok_or_else(|| {
+                    anyhow::anyhow!("no package-lock.json found; pass a lockfile path")
+                })?,
+            };
+            if lockfile::detect(&path)? != lockfile::Format::Npm {
+                anyhow::bail!(
+                    "tree currently reads package-lock.json only; {} is not supported yet",
+                    path.display()
+                );
+            }
+            let body = std::fs::read_to_string(&path)?;
+            let graph = dep_vet::graph::npm_from_package_lock(&body)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&graph)?);
+            } else {
+                print!(
+                    "{}",
+                    dep_vet::graph::render_tree(&graph, &path.display().to_string())
+                );
+            }
+            Ok(0)
+        }
+
         Command::Lock {
             lockfile: path,
             base,

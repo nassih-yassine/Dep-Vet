@@ -1270,6 +1270,141 @@ fn mcp_print_config_is_ready_to_paste() {
     assert!(output.contains(" mcp"), "{output}");
 }
 
+fn write_lockfile(directory: &tempfile::TempDir, body: &str) -> std::path::PathBuf {
+    let path = directory.path().join("package-lock.json");
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn tree_builds_nested_npm_edges_and_reports_json() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = write_lockfile(
+        &directory,
+        r#"{
+          "lockfileVersion": 3,
+          "packages": {
+            "": {"dependencies": {"a": "^1"}, "devDependencies": {"d": "^1"}},
+            "node_modules/a": {"version": "1.0.0", "dependencies": {"b": "^1"}},
+            "node_modules/a/node_modules/b": {"version": "2.0.0"},
+            "node_modules/b": {"version": "1.0.0"},
+            "node_modules/d": {"version": "1.0.0", "dev": true}
+          }
+        }"#,
+    );
+
+    let output = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["tree", lock.to_str().unwrap(), "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let edges = value["edges"].as_array().unwrap();
+    assert!(
+        edges.iter().any(|edge| {
+            edge["from"] == "node_modules/a"
+                && edge["to"] == "node_modules/a/node_modules/b"
+                && edge["kind"] == "normal"
+        }),
+        "{value}"
+    );
+    assert!(
+        edges
+            .iter()
+            .any(|edge| edge["from"] == "" && edge["to"] == "node_modules/a"),
+        "{value}"
+    );
+    assert!(
+        edges
+            .iter()
+            .any(|edge| edge["kind"] == "dev" && edge["to"] == "node_modules/d"),
+        "{value}"
+    );
+    let root_b = value["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["path"] == "node_modules/b")
+        .unwrap();
+    assert_eq!(root_b["version"], "1.0.0");
+}
+
+#[test]
+fn tree_notes_optional_dependencies_that_are_absent() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = write_lockfile(
+        &directory,
+        r#"{
+          "lockfileVersion": 3,
+          "packages": {
+            "": {"dependencies": {"a": "^1"}},
+            "node_modules/a": {
+              "version": "1.0.0",
+              "optionalDependencies": {"native": "^1"}
+            }
+          }
+        }"#,
+    );
+
+    let output = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["tree", lock.to_str().unwrap(), "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str().unwrap().contains("native")),
+        "{value}"
+    );
+}
+
+#[test]
+fn tree_prints_a_human_graph_without_network() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = write_lockfile(
+        &directory,
+        r#"{
+          "lockfileVersion": 3,
+          "packages": {
+            "": {"dependencies": {"a": "^1"}},
+            "node_modules/a": {"version": "1.0.0", "dependencies": {"b": "^1"}},
+            "node_modules/b": {"version": "1.0.0"}
+          }
+        }"#,
+    );
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["tree", lock.to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("a@1.0.0"))
+        .stdout(predicate::str::contains("b@1.0.0"));
+}
+
+#[test]
+fn tree_refuses_a_lockfile_it_cannot_graph_yet() {
+    let directory = tempfile::tempdir().unwrap();
+    let lock = directory.path().join("Cargo.lock");
+    std::fs::write(&lock, "version = 3\n").unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["tree", lock.to_str().unwrap()])
+        .assert()
+        .code(3);
+}
+
 #[test]
 fn clean_package_exits_zero() {
     let package = PackageFixture::clean("clean-pkg");
