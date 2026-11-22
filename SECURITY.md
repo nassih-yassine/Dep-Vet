@@ -60,11 +60,16 @@ provenance document, the URL must pass `src/netpolicy.rs`:
 - Composer code hosts are context-bound: a GitHub, GitLab, or Bitbucket host
   must be exactly the package's declared source or dist host, never a
   subdomain, and GitHub archive paths must contain the source owner/repo.
+  GitHub's `codeload.github.com` redirect from a declared GitHub source is
+  allowed under the same owner/repo check.
 - IP-literal hosts must be globally routable. Loopback, RFC 1918, link-local
   (`169.254.0.0/16`, `fe80::/10`), CGNAT (`100.64.0.0/10`), ULA (`fc00::/7`),
-  unspecified, multicast, broadcast, documentation, reserved, and IPv4-mapped
-  IPv6 forms of all of these are refused. This blocks the cloud metadata
-  address (`169.254.169.254`) and local services.
+  unspecified, multicast, broadcast, documentation (`2001:db8::/32`,
+  `3fff::/20`), reserved, Teredo (`2001::/32`), discard-only (`100::/64`), and
+  IPv4-mapped IPv6 forms of all of these are refused. NAT64 (`64:ff9b::/96`),
+  IPv4-compatible, and 6to4 (`2002::/16`) addresses are judged by their
+  embedded IPv4 address. This blocks the cloud metadata address
+  (`169.254.169.254`) and local services.
 - Archive fetches do not follow redirects automatically. dep-vet follows at
   most three, resolves relative `Location` values, revalidates every hop, and
   refuses an `https` to `http` downgrade. It never attaches an `Authorization`

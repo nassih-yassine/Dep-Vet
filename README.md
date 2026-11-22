@@ -644,9 +644,12 @@ outputs are validated against the official CycloneDX 1.5 and SPDX 2.3 schemas.
 
 Archive and provenance URLs come from registry JSON, so they are treated as
 untrusted. dep-vet only fetches `https` URLs from the ecosystem's known hosts
-(npm's `registry.npmjs.org`, PyPI's `files.pythonhosted.org`, and so on; Composer code hosts must be the package's declared source/dist host),
+(npm's `registry.npmjs.org`, PyPI's `files.pythonhosted.org`, and so on;
+Composer code hosts must be the package's declared source/dist host),
 refuses credentials, non-default ports, private/loopback/link-local IP
-literals, and cloud metadata addresses, and returns exit `3` with the host named
+literals, cloud metadata addresses, and IPv6 transition forms that embed a
+non-public IPv4 address (NAT64, IPv4-compatible, 6to4), and returns exit `3`
+with the host named
 when a URL is refused. Redirects are followed manually, at most three, with the
 same checks on every hop and no `https`-to-`http` downgrade. DNS answers are
 filtered before connecting, so a hostname that suddenly resolves to a private
@@ -858,6 +861,11 @@ DEPVET_REGISTRY_BASE=https://registry.npmjs.org dep-vet npm express
 DEPVET_DOWNLOADS_BASE=https://api.npmjs.org/downloads/point dep-vet npm express
 DEPVET_OSV_BASE=https://api.osv.dev dep-vet npm express
 ```
+
+These are development overrides, not a mirror feature: they require
+`DEPVET_ALLOW_INSECURE_BASES=1` or `--dev-registry`. Without the gate the run
+exits `3`; with it, the override applies only to that exact host and port and
+the report says `unofficial_registry`.
 
 ## Signals
 
