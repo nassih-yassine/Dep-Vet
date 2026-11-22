@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 570 unit + 179 end-to-end tests
+cargo test --locked                      # 574 unit + 183 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -80,6 +80,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
 | `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |
 | `src/graph.rs` | npm dependency graph from `package-lock.json`: nodes, edges, direct flags, tree renderer |
+| `src/plan.rs` | npm range resolver from packuments: nodes, typed edges, conflicts, unresolved bounds |
 | `src/go.rs` | deps.dev Go module index, versions, publish times, deprecation |
 | `src/jsr.rs` | JSR meta/package APIs, repository, archived flag |
 | `src/rubygems.rs` | RubyGems versions, timestamps, source URL, yank flag |
@@ -468,6 +469,14 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   empty when no root reaches the node. `audit` and `lock` attach paths only for
   npm; a graph failure never fails the audit. The human report prints the
   shortest chain as `via`, and only when it is transitive.
+- **`plan` resolves ranges but never installs or audits.** It reads packuments
+  only (no tarballs), follows dependencies/optional/peer edges, and allows
+  multiple versions of one name. Bounds are `MAX_NODES` (2,000) and
+  `MAX_DEPTH` (50). A required unresolved edge or truncation exits `3`;
+  optional/peer misses do not. Non-semver (`git+`, `file:`, URL), `||`
+  alternatives, and npm hoisting are handled as documented: alternatives are
+  tried; the rest is listed as unresolved, never approximated. `plan` is npm
+  only and never changes the audit verdict path.
 - **`tree` graphs, it does not resolve.** Only `package-lock.json` v2/v3 is
   accepted; v1 is refused with upgrade advice instead of approximated. Edges
   come from each entry's `dependencies`/`devDependencies`/

@@ -7,6 +7,12 @@
   and direct flags, as a human tree or `--json`. Nested versions resolve to the
   nearest `node_modules`; cycles are cut; a dependency named but absent from the
   lockfile is listed, never dropped. No network, no install, no execution.
+- **`plan` for npm ranges.** `dep-vet plan npm express@5` resolves the
+  dependency tree from packuments without downloading tarballs or running
+  scripts, with normal/optional/peer edges, multiple-version reporting, cycle
+  termination, and a 2,000-package/50-level cap. Required unresolved edges and
+  truncation exit `3`; optional and peer misses do not. Non-semver specs and
+  npm's hoisting algorithm are reported as limits, not guessed at.
 - **Differential trust analysis in `diff`.** npm publisher accounts, verified
   attestation status and signer identity, declared dependency additions and
   removals, and checksum regressions are compared alongside file changes.

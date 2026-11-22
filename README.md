@@ -197,6 +197,29 @@ What each format contributes, and what it cannot:
 | `composer.lock` | `packages` and `packages-dev` | dev-only advisories are still reported |
 | `gradle.lockfile` | `group:artifact:version` lines, including `buildscript-`/`settings-` variants | unlocked configurations; Gradle without dependency locking |
 
+### Plan an npm tree
+
+```sh
+dep-vet plan npm express@5          # resolve a range, print the tree
+dep-vet plan npm express@^4.18 --json
+```
+
+`plan` reads npm packuments to pick the highest version that satisfies each
+range, then follows `dependencies`, `optionalDependencies`, and
+`peerDependencies`. It never downloads a tarball, runs a lifecycle script, or
+installs anything. `||` alternatives are tried separately. Each node records
+whether it is direct, optional, or a peer, and the same name may appear at more
+than one version; those versions are listed under `multiple versions resolved`.
+Cycles terminate at the existing node.
+
+The resolver is deliberately bounded: 2,000 packages and 50 levels. Anything
+left unresolved is listed with the range and reason, and an incomplete plan
+exits `3` when a required dependency could not be resolved or a cap was hit.
+A missing optional or peer dependency does not fail the plan. Non-semver specs
+(`git+…`, `file:`, URLs), `devDependencies`, and npm's hoisting algorithm are
+not modeled; use an actual lockfile and `audit` for the installed tree. Only npm
+is supported today.
+
 ### See the dependency graph
 
 ```sh

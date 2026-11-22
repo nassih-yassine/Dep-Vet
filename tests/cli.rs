@@ -1454,6 +1454,347 @@ fn sbom_supports_a_non_npm_lockfile_without_claiming_edges() {
     );
 }
 
+fn plan_version(
+    dependencies: &[(&str, &str)],
+    optional: &[(&str, &str)],
+    peer: &[(&str, &str)],
+) -> String {
+    let map = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(name, range)| format!("\"{name}\":\"{range}\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    format!(
+        r#"{{"dependencies":{{{}}},"optionalDependencies":{{{}}},"peerDependencies":{{{}}}}}"#,
+        map(dependencies),
+        map(optional),
+        map(peer)
+    )
+}
+
+fn plan_doc(latest: &str, versions: &[(&str, String)]) -> String {
+    let body = versions
+        .iter()
+        .map(|(version, document)| format!("\"{version}\":{document}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(r#"{{"dist-tags":{{"latest":"{latest}"}},"versions":{{{body}}}}}"#)
+}
+
+#[test]
+fn plan_resolves_ranges_dependencies_and_optional_peers() {
+    let registry = MockRegistry::start_with(|_base| {
+        let mut routes = HashMap::new();
+        routes.insert(
+            "/root".to_string(),
+            (
+                200,
+                plan_doc(
+                    "2.0.0",
+                    &[
+                        ("1.0.0", plan_version(&[("a", "^1")], &[], &[])),
+                        (
+                            "1.1.0",
+                            plan_version(&[("a", "^1")], &[("native", "^1")], &[("peer", "^1")]),
+                        ),
+                        ("2.0.0", plan_version(&[], &[], &[])),
+                    ],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/a".to_string(),
+            (
+                200,
+                plan_doc(
+                    "1.2.0",
+                    &[
+                        ("1.0.0", plan_version(&[("b", "^1")], &[], &[])),
+                        ("1.2.0", plan_version(&[("b", "^1")], &[], &[])),
+                    ],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/b".to_string(),
+            (
+                200,
+                plan_doc("1.0.0", &[("1.0.0", plan_version(&[], &[], &[]))]).into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/native".to_string(),
+            (
+                200,
+                plan_doc("1.0.0", &[("1.0.0", plan_version(&[], &[], &[]))]).into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/peer".to_string(),
+            (
+                200,
+                plan_doc("1.0.0", &[("1.0.0", plan_version(&[], &[], &[]))]).into_bytes(),
+            ),
+        );
+        routes
+    });
+
+    let output = registry
+        .command()
+        .args(["plan", "npm", "root@^1", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["root"], "root@1.1.0");
+    let nodes = value["nodes"].as_array().unwrap();
+    assert!(nodes.iter().any(|node| node["id"] == "a@1.2.0"));
+    assert!(nodes.iter().any(|node| node["id"] == "b@1.0.0"));
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node["id"] == "native@1.0.0" && node["optional"] == true)
+    );
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node["id"] == "peer@1.0.0" && node["peer"] == true)
+    );
+    assert!(value["conflicts"].as_array().unwrap().is_empty());
+    let edges = value["edges"].as_array().unwrap();
+    assert!(edges.iter().any(|edge| edge["kind"] == "optional"));
+    assert!(edges.iter().any(|edge| edge["kind"] == "peer"));
+    assert!(
+        registry
+            .requests()
+            .iter()
+            .all(|path| !path.contains(".tgz")),
+        "plan must not download tarballs: {:?}",
+        registry.requests()
+    );
+
+    registry
+        .command()
+        .args(["plan", "npm", "root@^1"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("plan: npm/root@1.1.0"))
+        .stdout(predicate::str::contains("a@1.2.0"));
+}
+
+#[test]
+fn plan_reports_multiple_versions_without_failing() {
+    let registry = MockRegistry::start_with(|_base| {
+        let mut routes = HashMap::new();
+        routes.insert(
+            "/root".to_string(),
+            (
+                200,
+                plan_doc(
+                    "1.0.0",
+                    &[("1.0.0", plan_version(&[("a", "^1"), ("c", "^1")], &[], &[]))],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/a".to_string(),
+            (
+                200,
+                plan_doc(
+                    "1.0.0",
+                    &[("1.0.0", plan_version(&[("b", "^1")], &[], &[]))],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/c".to_string(),
+            (
+                200,
+                plan_doc(
+                    "1.0.0",
+                    &[("1.0.0", plan_version(&[("b", "^2")], &[], &[]))],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/b".to_string(),
+            (
+                200,
+                plan_doc(
+                    "2.0.0",
+                    &[
+                        ("1.0.0", plan_version(&[], &[], &[])),
+                        ("2.0.0", plan_version(&[], &[], &[])),
+                    ],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes
+    });
+
+    let output = registry
+        .command()
+        .args(["plan", "npm", "root", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["conflicts"][0]["name"], "b");
+    assert_eq!(
+        value["conflicts"][0]["versions"],
+        serde_json::json!(["1.0.0", "2.0.0"])
+    );
+    assert!(
+        value["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["id"] == "b@1.0.0")
+    );
+    assert!(
+        value["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["id"] == "b@2.0.0")
+    );
+}
+
+#[test]
+fn plan_discloses_unresolved_required_and_optional_edges() {
+    let registry = MockRegistry::start_with(|_base| {
+        let mut routes = HashMap::new();
+        routes.insert(
+            "/root".to_string(),
+            (
+                200,
+                plan_doc(
+                    "1.0.0",
+                    &[(
+                        "1.0.0",
+                        plan_version(
+                            &[("a", "^1"), ("gitdep", "git+https://example.test/repo.git")],
+                            &[("native", "^1")],
+                            &[],
+                        ),
+                    )],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/a".to_string(),
+            (
+                200,
+                plan_doc("1.0.0", &[("1.0.0", plan_version(&[], &[], &[]))]).into_bytes(),
+            ),
+        );
+        routes
+    });
+
+    let output = registry
+        .command()
+        .args(["plan", "npm", "root", "--json"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let unresolved = value["unresolved"].as_array().unwrap();
+    assert!(
+        unresolved
+            .iter()
+            .any(|entry| entry["name"] == "gitdep" && entry["required"] == true)
+    );
+    assert!(
+        unresolved
+            .iter()
+            .any(|entry| entry["name"] == "native" && entry["required"] == false)
+    );
+    assert_eq!(value["exit_code"], 3);
+    assert_eq!(value["truncated"], false);
+}
+
+#[test]
+fn plan_survives_a_dependency_cycle() {
+    let registry = MockRegistry::start_with(|_base| {
+        let mut routes = HashMap::new();
+        routes.insert(
+            "/root".to_string(),
+            (
+                200,
+                plan_doc(
+                    "1.0.0",
+                    &[("1.0.0", plan_version(&[("a", "^1")], &[], &[]))],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/a".to_string(),
+            (
+                200,
+                plan_doc(
+                    "1.0.0",
+                    &[("1.0.0", plan_version(&[("b", "^1")], &[], &[]))],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes.insert(
+            "/b".to_string(),
+            (
+                200,
+                plan_doc(
+                    "1.0.0",
+                    &[("1.0.0", plan_version(&[("a", "^1")], &[], &[]))],
+                )
+                .into_bytes(),
+            ),
+        );
+        routes
+    });
+
+    let output = registry
+        .command()
+        .args(["plan", "npm", "root", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|node| node["id"] == "a@1.0.0")
+            .count(),
+        1
+    );
+    assert!(
+        value["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| edge["from"] == "b@1.0.0" && edge["to"] == "a@1.0.0")
+    );
+}
+
 #[test]
 fn tree_builds_nested_npm_edges_and_reports_json() {
     let directory = tempfile::tempdir().unwrap();

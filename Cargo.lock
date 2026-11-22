@@ -452,6 +452,7 @@ dependencies = [
  "predicates",
  "regex",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "sha1",

@@ -189,6 +189,19 @@ pub enum Command {
         output: Option<std::path::PathBuf>,
     },
 
+    /// Resolve an npm dependency tree without installing it
+    Plan {
+        /// Ecosystem (npm only today)
+        ecosystem: String,
+
+        /// Package with optional version or range: express@5
+        package: String,
+
+        /// Print machine-readable JSON instead of a human tree
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Write a CycloneDX or SPDX inventory from a lockfile
     Sbom {
         /// Lockfile to read (default: nearest package-lock.json)
@@ -491,6 +504,23 @@ mod tests {
                 assert!(output.is_none());
             }
             _ => panic!("expected audit command"),
+        }
+    }
+
+    #[test]
+    fn parses_plan_command() {
+        let cli = Cli::try_parse_from(["dep-vet", "plan", "npm", "express@^5"]).unwrap();
+        match cli.command {
+            Command::Plan {
+                ecosystem,
+                package,
+                json,
+            } => {
+                assert_eq!(ecosystem, "npm");
+                assert_eq!(package, "express@^5");
+                assert!(!json);
+            }
+            _ => panic!("expected plan command"),
         }
     }
 

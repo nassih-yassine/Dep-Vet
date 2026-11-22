@@ -197,6 +197,27 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             Ok(report.exit_code())
         }
 
+        Command::Plan {
+            ecosystem,
+            package,
+            json,
+        } => {
+            let ecosystem = inspect_ecosystem(ecosystem)?;
+            if ecosystem != Ecosystem::Npm {
+                anyhow::bail!("plan supports npm only today");
+            }
+            let http = Arc::new(HttpClient::from_env(cli.no_cache));
+            let registry = RegistryClient::from_env(http);
+            let report =
+                dep_vet::plan::plan(&registry, package).map_err(|error| anyhow::anyhow!(error))?;
+            let output = if *json {
+                dep_vet::plan::render_json(&report)?
+            } else {
+                dep_vet::plan::render(&report)
+            };
+            emit(&output, report.exit_code())
+        }
+
         Command::Inspect {
             ecosystem,
             package,
