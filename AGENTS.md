@@ -48,7 +48,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 538 unit + 156 end-to-end tests
+cargo test --locked                      # 543 unit + 162 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -497,7 +497,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   (sibling temp file then rename). The settings `command` is a shell string; the
   binary path must be absolute and quoted when it has spaces.
 - **MCP stdio is newline-delimited JSON, not LSP framing.** `src/mcp.rs` reads
-  one line per message, rejects lines over 1 MiB, and writes only JSON-RPC
+  with `read_line_bounded`, which never allocates past `MAX_LINE_BYTES` plus a
+  two-byte lookahead, drains an oversized line to its newline, and recovers for
+  the next request. A final unterminated line at EOF is processed; a partial
+  JSON line becomes `-32700`. Lines over 1 MiB get `-32600`. It writes only JSON-RPC
   objects to stdout; logs and panics go to stderr. Notifications get no
   response, unknown methods `-32601`, bad arguments `-32602`, tool failures an
   `isError` result. `serve` takes a `call_tool` closure; tool logic in `main.rs`

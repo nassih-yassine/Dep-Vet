@@ -782,7 +782,8 @@ clean.
   when one exists, and `--no-local` turns that off. Either way the seed list is
   also consulted.
 - **Network failures are retried with backoff.** Network errors, 429, and 5xx
-  get up to three attempts with exponential backoff, and a registry's
+  get up to three attempts with exponential backoff (plus jitter for archive
+  downloads), and a registry's
   `Retry-After` is honoured up to five seconds. Advisories are cached for five
   minutes, not the 24 hours used for registry metadata.
 - **Findings carry confidence.** JSON findings include `confidence`

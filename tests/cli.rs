@@ -3,7 +3,7 @@
 //! Nothing here touches the public npm registry. The server records the paths
 //! it was asked for, so encoding and retry behaviour are observable.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -37,6 +37,62 @@ impl MockRegistry {
         Self::serve(listener, base, routes)
     }
 
+    /// A scripted registry: each path pops the next response, so retries and
+    /// rate limits can be tested deterministically.
+    fn start_scripted(build: impl FnOnce(&str) -> HashMap<String, Vec<(u16, Vec<u8>)>>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
+        let port = listener.local_addr().unwrap().port();
+        let base = format!("http://127.0.0.1:{port}");
+        let script = build(&base);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&requests);
+        let state = Arc::new(Mutex::new(
+            script
+                .into_iter()
+                .map(|(path, responses)| (path, VecDeque::from(responses)))
+                .collect::<HashMap<String, VecDeque<(u16, Vec<u8>)>>>(),
+        ));
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let Some((path, body)) = read_request(&mut stream) else {
+                    continue;
+                };
+                recorded.lock().unwrap().push(RecordedRequest {
+                    path: path.clone(),
+                    body,
+                });
+                let (status, body) = {
+                    let mut state = state.lock().unwrap();
+                    match state.get_mut(&path).and_then(|queue| queue.pop_front()) {
+                        Some(response) => response,
+                        None => (404, b"{\"error\":\"Not found\"}".to_vec()),
+                    }
+                };
+                // status 0 is a 200 whose Content-Length promises more bytes
+                // than the server sends, to simulate an interrupted download.
+                let (wire_status, declared) = if status == 0 {
+                    (200, body.len() + 16)
+                } else {
+                    (status, body.len())
+                };
+                let reason = if wire_status == 200 { "OK" } else { "Error" };
+                let retry_after = if status == 429 {
+                    "Retry-After: 0\r\n"
+                } else {
+                    ""
+                };
+                let header = format!(
+                    "HTTP/1.1 {wire_status} {reason}\r\nContent-Type: application/octet-stream\r\nContent-Length: {declared}\r\n{retry_after}Connection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        Self { base, requests }
+    }
+
     fn start_binary(routes: HashMap<String, (u16, Vec<u8>)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind local port");
         let port = listener.local_addr().unwrap().port();
@@ -62,8 +118,13 @@ impl MockRegistry {
                     .cloned()
                     .unwrap_or_else(|| (404, b"{\"error\":\"Not found\"}".to_vec()));
                 let reason = if status == 200 { "OK" } else { "Not Found" };
+                let retry_after = if status == 429 {
+                    "Retry-After: 0\r\n"
+                } else {
+                    ""
+                };
                 let header = format!(
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n{retry_after}Connection: close\r\n\r\n",
                     body.len()
                 );
                 let _ = stream.write_all(header.as_bytes());
@@ -3562,6 +3623,186 @@ fn inspect_rejects_a_zip_that_expands_past_the_configured_cap() {
             .any(|item| item.as_str().unwrap_or("").contains("decompression")),
         "{value}"
     );
+}
+
+fn inspect_npm_routes(
+    base: &str,
+    archive: &[u8],
+    tarball_responses: Vec<(u16, Vec<u8>)>,
+) -> HashMap<String, Vec<(u16, Vec<u8>)>> {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let digest = base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(archive));
+    let doc = format!(
+        r#"{{"name":"retry-pkg","version":"1.0.0","dist":{{"tarball":"{base}/retry.tgz","integrity":"sha512-{digest}"}}}}"#
+    );
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/retry-pkg/1.0.0".to_string(),
+        vec![(200, doc.into_bytes())],
+    );
+    routes.insert("/retry.tgz".to_string(), tarball_responses);
+    routes
+}
+
+fn tarball_requests(registry: &MockRegistry) -> usize {
+    registry
+        .requests()
+        .iter()
+        .filter(|path| path.as_str() == "/retry.tgz")
+        .count()
+}
+
+#[test]
+fn inspect_retries_transient_tarball_failures() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_scripted(|base| {
+        inspect_npm_routes(
+            base,
+            &archive,
+            vec![
+                (500, b"boom".to_vec()),
+                (500, b"boom".to_vec()),
+                (200, archive.clone()),
+            ],
+        )
+    });
+
+    registry
+        .command()
+        .args(["inspect", "npm", "retry-pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(0);
+    assert_eq!(tarball_requests(&registry), 3);
+}
+
+#[test]
+fn inspect_honours_retry_after_for_rate_limits() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_scripted(|base| {
+        inspect_npm_routes(
+            base,
+            &archive,
+            vec![(429, b"slow down".to_vec()), (200, archive.clone())],
+        )
+    });
+
+    registry
+        .command()
+        .args(["inspect", "npm", "retry-pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(0);
+    assert_eq!(tarball_requests(&registry), 2);
+}
+
+#[test]
+fn inspect_retries_an_interrupted_download() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_scripted(|base| {
+        inspect_npm_routes(
+            base,
+            &archive,
+            vec![
+                (0, archive[..archive.len() / 2].to_vec()),
+                (200, archive.clone()),
+            ],
+        )
+    });
+
+    registry
+        .command()
+        .args(["inspect", "npm", "retry-pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(0);
+    assert_eq!(tarball_requests(&registry), 2);
+}
+
+#[test]
+fn a_failed_download_is_not_cached() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let archive = tar_gz(&[("index.js", format!("const a = {unique};\n").as_bytes())]);
+    let failing = MockRegistry::start_scripted(|base| {
+        inspect_npm_routes(
+            base,
+            &archive,
+            vec![
+                (500, b"boom".to_vec()),
+                (500, b"boom".to_vec()),
+                (500, b"boom".to_vec()),
+            ],
+        )
+    });
+    failing
+        .command()
+        .args(["inspect", "npm", "retry-pkg@1.0.0"])
+        .assert()
+        .code(3);
+
+    let missing = MockRegistry::start_scripted(|base| {
+        inspect_npm_routes(base, &archive, vec![(404, b"gone".to_vec())])
+    });
+    missing
+        .command()
+        .args(["inspect", "npm", "retry-pkg@1.0.0"])
+        .assert()
+        .code(3);
+}
+
+#[test]
+fn inspect_does_not_retry_a_missing_tarball() {
+    let archive = tar_gz(&[("index.js", b"const a = 1;\n")]);
+    let registry = MockRegistry::start_scripted(|base| {
+        inspect_npm_routes(base, &archive, vec![(404, b"gone".to_vec())])
+    });
+
+    registry
+        .command()
+        .args(["inspect", "npm", "retry-pkg@1.0.0", "--no-cache"])
+        .assert()
+        .code(3);
+    assert_eq!(tarball_requests(&registry), 1);
+}
+
+#[test]
+fn inspect_rejects_an_archive_over_the_configured_download_cap() {
+    // Incompressible bytes, so gzip cannot hide the size.
+    let mut state = 0x1234_5678_u32;
+    let mut payload = Vec::with_capacity(2 * 1024 * 1024);
+    for _ in 0..2 * 1024 * 1024 {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        payload.push(state as u8);
+    }
+    let archive = tar_gz(&[("index.js", &payload)]);
+    let registry = MockRegistry::start_scripted(|base| {
+        inspect_npm_routes(
+            base,
+            &archive,
+            vec![(200, archive.clone()), (200, archive.clone())],
+        )
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join(".depvet.toml");
+    std::fs::write(&config, "[inspect]\nmax_download_mb = 1\n").unwrap();
+
+    registry
+        .command()
+        .args([
+            "inspect",
+            "npm",
+            "retry-pkg@1.0.0",
+            "--no-cache",
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("larger than"));
+    assert_eq!(tarball_requests(&registry), 1);
 }
 
 #[test]
