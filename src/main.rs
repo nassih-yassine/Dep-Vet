@@ -364,6 +364,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 audit_packages(&auditor, Ecosystem::Jsr, &added_jsr, &[], now);
             new_packages.extend(jsr_reports);
             errors.extend(jsr_errors);
+            attach_dependency_paths(format, path, &mut new_packages);
             errors.extend(skipped_errors(&current));
             for report in &mut new_packages {
                 allowlist.apply(report);
@@ -1322,6 +1323,7 @@ fn run_audit(
     reports.extend(jsr_reports);
     errors.extend(jsr_errors);
     errors.extend(skipped_errors(&contents));
+    attach_dependency_paths(format, path, &mut reports);
     for report in &mut reports {
         allowlist.apply(report);
     }
@@ -1337,6 +1339,26 @@ fn run_audit(
         render_audit_human(&report, use_color(cli))
     };
     emit(&output, report.exit_code())
+}
+
+/// Add the root-to-package chains the lockfile already encodes. A format with
+/// no graph, or a graph that cannot be read, leaves reports without paths
+/// rather than inventing one.
+fn attach_dependency_paths(
+    format: lockfile::Format,
+    path: &std::path::Path,
+    reports: &mut [PackageReport],
+) {
+    if format != lockfile::Format::Npm || reports.is_empty() {
+        return;
+    }
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(graph) = dep_vet::graph::npm_from_package_lock(&body) else {
+        return;
+    };
+    dep_vet::graph::attach_dependency_paths(&graph, reports);
 }
 
 fn skipped_errors(contents: &lockfile::LockContents) -> Vec<LockFetchError> {

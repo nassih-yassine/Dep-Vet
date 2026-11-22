@@ -580,6 +580,12 @@ dep-vet npm crossenv --json
 `hidden_advisories` is non-zero when the advisory list was truncated at the
 25-per-package cap; the report also carries an INFO finding saying so.
 
+For npm lockfile audits, each package may also carry `dependency_paths`: up to
+three root-to-package chains, shortest first, with entries as `name@version`.
+The field is omitted when the format has no graph or no root reaches the
+package, so it is never guessed. The human report shows the shortest transitive
+path as `via express@5.1.0 > body-parser@2.2.0`.
+
 Timestamps are Unix seconds. `verdict` and `exit_code` are derived from the
 findings, so consumers do not re-implement the severity rules. JSON output never
 contains the wordmark or ANSI colors.

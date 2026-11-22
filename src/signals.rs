@@ -119,6 +119,7 @@ pub fn report(
         registry_url: meta.registry_url,
         review_url: meta.review_url,
         upgrades,
+        dependency_paths: Vec::new(),
         findings,
     }
 }

@@ -90,6 +90,10 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
     if let Some(repository) = &report.repository {
         push_field(&mut out, "repository", repository);
     }
+    // A direct dependency needs no path; its header already names it.
+    if let Some(path) = report.dependency_paths.iter().find(|path| path.len() > 1) {
+        push_field(&mut out, "via", &path.join(" > "));
+    }
     if !report.not_checked.is_empty() {
         push_field(&mut out, "not checked", &report.not_checked.join(", "));
     }
@@ -744,6 +748,7 @@ mod tests {
             registry_url: "https://registry.npmjs.org/evil-pkg".to_string(),
             review_url: None,
             upgrades: Vec::new(),
+            dependency_paths: Vec::new(),
             findings,
         }
     }
@@ -773,6 +778,22 @@ mod tests {
         assert!(text.contains("-> https://registry.npmjs.org/evil-pkg"));
         assert!(text.contains("1,234/week"));
         assert!(text.contains("https://www.npmjs.com/package/evil-pkg/v/1.0.0"));
+    }
+
+    #[test]
+    fn human_report_shows_a_transitive_path_but_not_a_direct_one() {
+        let mut direct = report(Vec::new());
+        direct.dependency_paths = vec![vec!["evil-pkg@1.0.0".to_string()]];
+        assert!(!render_human(&direct, false).contains("via"));
+
+        let mut transitive = report(Vec::new());
+        transitive.dependency_paths =
+            vec![vec!["app@1.0.0".to_string(), "evil-pkg@1.0.0".to_string()]];
+        let text = render_human(&transitive, false);
+        assert!(
+            text.contains("app@1.0.0 > evil-pkg@1.0.0"),
+            "the shortest transitive path is shown: {text}"
+        );
     }
 
     fn report_with_upgrades(upgrades: Vec<crate::model::Upgrade>, version: &str) -> PackageReport {
