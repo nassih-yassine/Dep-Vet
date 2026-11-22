@@ -5166,8 +5166,8 @@ fn dev_overrides_require_the_gate_and_are_marked_in_reports() {
         MockRegistry::start(HashMap::from([(package.route(), (200, package.to_json()))]));
     let output = registry
         .command()
-        .env_remove("DEPVET_ALLOW_INSECURE_BASES")
-        .args(["--dev-registry", "npm", "pkg-a", "--json"])
+        .env("DEPVET_ALLOW_INSECURE_BASES", "1")
+        .args(["npm", "pkg-a", "--json"])
         .assert()
         .code(0)
         .stderr(predicate::str::contains("unofficial registry"))
@@ -5179,8 +5179,8 @@ fn dev_overrides_require_the_gate_and_are_marked_in_reports() {
     let stderr = String::from_utf8(
         registry
             .command()
-            .env_remove("DEPVET_ALLOW_INSECURE_BASES")
-            .args(["--dev-registry", "npm", "pkg-a"])
+            .env("DEPVET_ALLOW_INSECURE_BASES", "1")
+            .args(["npm", "pkg-a"])
             .assert()
             .code(0)
             .get_output()
@@ -5192,11 +5192,19 @@ fn dev_overrides_require_the_gate_and_are_marked_in_reports() {
 
     registry
         .command()
-        .env_remove("DEPVET_ALLOW_INSECURE_BASES")
-        .args(["--dev-registry", "npm", "pkg-a"])
+        .env("DEPVET_ALLOW_INSECURE_BASES", "1")
+        .args(["npm", "pkg-a"])
         .assert()
         .code(0)
         .stdout(predicate::str::contains("UNOFFICIAL REGISTRY"));
+
+    registry
+        .command()
+        .env_remove("DEPVET_ALLOW_INSECURE_BASES")
+        .args(["--dev-registry", "npm", "pkg-a", "--json"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"unofficial_registry\": true"));
 }
 
 fn inspect_npm_routes(

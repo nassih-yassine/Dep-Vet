@@ -57,6 +57,7 @@ struct ArchiveRef {
     /// npm's attestation endpoint, when the version publishes one.
     provenance_url: Option<String>,
     publisher: Option<String>,
+    composer_origin: Option<crate::netpolicy::ComposerOrigin>,
 }
 
 /// Downloaded archives are kept only when their checksum is known, so a cached
@@ -87,7 +88,13 @@ pub fn inspect_archive(
     let bytes = match cached {
         Some(bytes) => bytes,
         None => {
-            let bytes = get_bytes(http, ecosystem, &source.url, limits.max_compressed)?;
+            let bytes = get_bytes(
+                http,
+                ecosystem,
+                &source.url,
+                limits.max_compressed,
+                source.composer_origin.as_ref(),
+            )?;
             if let Some(checksum) = &source.checksum
                 && verify(checksum, &bytes) == Integrity::Verified
             {
@@ -146,10 +153,11 @@ fn get_bytes(
     ecosystem: Ecosystem,
     url: &str,
     limit: u64,
+    composer_origin: Option<&crate::netpolicy::ComposerOrigin>,
 ) -> Result<Vec<u8>, InspectError> {
     let mut last_error = None;
     for attempt in 0..DOWNLOAD_ATTEMPTS {
-        match http.get_raw(ecosystem, url) {
+        match http.get_raw_with_origin(ecosystem, url, composer_origin) {
             Ok(mut response) => {
                 let declared = response
                     .headers()
@@ -351,6 +359,7 @@ fn resolve_npm(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveRe
             .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
             .map(str::to_string),
         publisher: doc["_npmUser"]["name"].as_str().map(str::to_string),
+        composer_origin: None,
     })
 }
 
@@ -381,6 +390,7 @@ fn resolve_pypi(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveR
         checksum: sha,
         provenance_url: None,
         publisher: None,
+        composer_origin: None,
     })
 }
 
@@ -400,6 +410,7 @@ fn resolve_crates(
         checksum,
         provenance_url: None,
         publisher: None,
+        composer_origin: None,
     })
 }
 
@@ -426,6 +437,7 @@ fn resolve_go(name: &str, version: &str) -> ArchiveRef {
         checksum: None,
         provenance_url: None,
         publisher: None,
+        composer_origin: None,
     }
 }
 
@@ -447,6 +459,7 @@ fn resolve_gem(http: &HttpClient, name: &str, version: &str) -> Result<ArchiveRe
         checksum,
         provenance_url: None,
         publisher: None,
+        composer_origin: None,
     })
 }
 
@@ -459,6 +472,7 @@ fn resolve_nuget(name: &str, version: &str) -> ArchiveRef {
         checksum: None,
         provenance_url: None,
         publisher: None,
+        composer_origin: None,
     }
 }
 
@@ -486,6 +500,7 @@ fn resolve_maven(name: &str, version: &str) -> Result<ArchiveRef, InspectError> 
         checksum: None,
         provenance_url: None,
         publisher: None,
+        composer_origin: None,
     })
 }
 
@@ -514,12 +529,17 @@ fn resolve_composer(
         .as_str()
         .filter(|value| !value.is_empty())
         .map(|value| Checksum::Sha1Hex(value.to_string()));
+    let composer_origin = Some(crate::netpolicy::ComposerOrigin::from_metadata(
+        entry["source"]["url"].as_str(),
+        Some(url),
+    ));
     Ok(ArchiveRef {
         url: url.to_string(),
         kind: ArchiveKind::Zip,
         checksum,
         provenance_url: None,
         publisher: None,
+        composer_origin,
     })
 }
 

@@ -29,6 +29,10 @@ pub enum PolicyError {
         ecosystem: &'static str,
         host: String,
     },
+    #[error("dist host not declared by package metadata: {0}")]
+    ComposerHost(String),
+    #[error("dist URL repository does not match package metadata: {0}")]
+    ComposerRepo(String),
     #[error("dev registry overrides require DEPVET_ALLOW_INSECURE_BASES=1: {0}")]
     OverrideGate(String),
     #[error("no public address remains for {0}")]
@@ -87,16 +91,61 @@ fn allowed_hosts(ecosystem: Ecosystem) -> &'static [&'static str] {
         Ecosystem::RubyGems => &["rubygems.org"],
         Ecosystem::NuGet => &["api.nuget.org", "globalcdn.nuget.org"],
         Ecosystem::Maven => &["repo.maven.apache.org", "dl.google.com"],
-        Ecosystem::Composer => &[
-            "repo.packagist.org",
-            "dist.packagist.org",
-            "api.github.com",
-            "codeload.github.com",
-            "gitlab.com",
-            "bitbucket.org",
-        ],
+        Ecosystem::Composer => &["repo.packagist.org", "dist.packagist.org"],
         Ecosystem::Jsr => &[],
     }
+}
+
+/// Composer package metadata: the source/dist hosts this package declared.
+/// Code hosts (GitHub, GitLab, Bitbucket) are only accepted for the package
+/// that named them, and GitHub URLs must also name the same owner/repo.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComposerOrigin {
+    hosts: Vec<String>,
+    source_path: Option<String>,
+}
+
+impl ComposerOrigin {
+    pub fn from_metadata(source: Option<&str>, dist: Option<&str>) -> Self {
+        let mut hosts = Vec::new();
+        for raw in [source, dist].into_iter().flatten() {
+            if let Ok(url) = Url::parse(raw)
+                && let Some(host) = url.host_str()
+            {
+                let host = host.trim_end_matches('.').to_ascii_lowercase();
+                if !hosts.contains(&host) {
+                    hosts.push(host);
+                }
+            }
+        }
+        let source_path = source
+            .and_then(|raw| Url::parse(raw).ok())
+            .map(|url| url.path().trim_start_matches('/').to_string())
+            .filter(|path| !path.is_empty());
+        Self { hosts, source_path }
+    }
+
+    fn declares(&self, host: &str) -> bool {
+        self.hosts.iter().any(|declared| declared == host)
+            // GitHub's API redirects zipballs to codeload; both are the same
+            // declared source, and the owner/repo check still applies.
+            || (host == "codeload.github.com" && self.hosts.iter().any(|h| h == "github.com"))
+    }
+
+    fn github_owner_repo(&self) -> Option<(&str, &str)> {
+        let path = self.source_path.as_deref()?.trim_end_matches(".git");
+        let mut parts = path.split('/');
+        let owner = parts.next()?;
+        let repo = parts.next()?;
+        (!owner.is_empty() && !repo.is_empty()).then_some((owner, repo))
+    }
+}
+
+fn is_github_host(host: &str) -> bool {
+    matches!(
+        host,
+        "github.com" | "api.github.com" | "codeload.github.com"
+    )
 }
 
 /// Validate one outbound URL against the ecosystem allowlist and address rules.
@@ -109,6 +158,90 @@ pub fn validate_with(
     raw: &str,
     overrides: &Overrides,
 ) -> Result<Url, PolicyError> {
+    let url = validate_common(raw, overrides)?;
+    if overrides.allows(&url) {
+        return Ok(url);
+    }
+    let host = url.host_str().unwrap_or_default().trim_end_matches('.');
+    if allowed_hosts(ecosystem)
+        .iter()
+        .any(|allowed| allowed_host(host, allowed))
+    {
+        Ok(url)
+    } else {
+        Err(PolicyError::Untrusted {
+            ecosystem: ecosystem.cli_name(),
+            host: host.to_string(),
+        })
+    }
+}
+
+/// Composer archives may live on code hosts, but only when the package's own
+/// metadata declared that exact host. GitHub additionally needs owner/repo.
+pub fn validate_composer_url(raw: &str, origin: &ComposerOrigin) -> Result<Url, PolicyError> {
+    validate_composer_with(raw, origin, &Overrides::from_env())
+}
+
+pub fn validate_composer_with(
+    raw: &str,
+    origin: &ComposerOrigin,
+    overrides: &Overrides,
+) -> Result<Url, PolicyError> {
+    let url = validate_common(raw, overrides)?;
+    if overrides.allows(&url) {
+        return Ok(url);
+    }
+    let host = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host == "repo.packagist.org" || host == "dist.packagist.org" {
+        return Ok(url);
+    }
+    if !origin.declares(&host) {
+        return Err(PolicyError::ComposerHost(host));
+    }
+    if is_github_host(&host) {
+        let Some((owner, repo)) = origin.github_owner_repo() else {
+            return Err(PolicyError::ComposerRepo(format!(
+                "{host} URL has no owner/repo in the package source"
+            )));
+        };
+        let path = url.path();
+        let api = format!("/repos/{owner}/{repo}/");
+        let plain = format!("/{owner}/{repo}/");
+        if !path.starts_with(&api) && !path.starts_with(&plain) {
+            return Err(PolicyError::ComposerRepo(format!(
+                "{host} path does not match {owner}/{repo}"
+            )));
+        }
+    }
+    Ok(url)
+}
+
+/// Choose the Composer-aware validator when metadata is available.
+pub fn validate_archive_with(
+    ecosystem: Ecosystem,
+    raw: &str,
+    origin: Option<&ComposerOrigin>,
+    overrides: &Overrides,
+) -> Result<Url, PolicyError> {
+    match (ecosystem, origin) {
+        (Ecosystem::Composer, Some(origin)) => validate_composer_with(raw, origin, overrides),
+        _ => validate_with(ecosystem, raw, overrides),
+    }
+}
+
+pub fn validate_archive_url(
+    ecosystem: Ecosystem,
+    raw: &str,
+    origin: Option<&ComposerOrigin>,
+) -> Result<Url, PolicyError> {
+    validate_archive_with(ecosystem, raw, origin, &Overrides::from_env())
+}
+
+fn validate_common(raw: &str, overrides: &Overrides) -> Result<Url, PolicyError> {
     let url = Url::parse(raw).map_err(|error| PolicyError::Invalid(error.to_string()))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(PolicyError::Scheme(raw.to_string()));
@@ -121,8 +254,6 @@ pub fn validate_with(
     };
     let host = host.trim_end_matches('.');
     if !host.is_ascii() {
-        // The url crate normalizes IDNs to punycode; a non-ASCII host here
-        // means the parser did not, so refuse rather than guess.
         return Err(PolicyError::HostEncoding(host.to_string()));
     }
     let override_ok = overrides.allows(&url);
@@ -140,15 +271,6 @@ pub fn validate_with(
         return Err(PolicyError::Address(host.to_string()));
     }
     if !override_ok {
-        let trusted = allowed_hosts(ecosystem)
-            .iter()
-            .any(|allowed| allowed_host(host, allowed));
-        if !trusted {
-            return Err(PolicyError::Untrusted {
-                ecosystem: ecosystem.cli_name(),
-                host: host.to_string(),
-            });
-        }
         let expected = if url.scheme() == "https" { 443 } else { 80 };
         if url.port_or_known_default() != Some(expected) {
             return Err(PolicyError::Port(raw.to_string()));
@@ -180,14 +302,47 @@ pub fn is_public_ip(address: IpAddr) -> bool {
                 return is_public_ip(IpAddr::V4(mapped));
             }
             let segments = address.segments();
-            !(address.is_loopback()
+            // Refuse transition/documentation ranges even if an embedded
+            // address looks public: Teredo, discard-only, and 3fff::/20.
+            if (segments[0] == 0x2001 && segments[1] == 0)
+                || (segments[0] == 0x0100
+                    && segments[1] == 0
+                    && segments[2] == 0
+                    && segments[3] == 0)
+                || (segments[0] == 0x3fff && (segments[1] & 0xf000) == 0)
+            {
+                return false;
+            }
+            if segments[0] == 0x2001 && segments[1] == 0x0db8 {
+                return false;
+            }
+            if address.is_loopback()
                 || address.is_unspecified()
                 || address.is_multicast()
                 || (segments[0] & 0xfe00) == 0xfc00
                 || (segments[0] & 0xffc0) == 0xfe80
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8))
+            {
+                return false;
+            }
+            // NAT64 64:ff9b::/96.
+            if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
+                return is_public_ip(IpAddr::V4(embedded_ipv4(segments[6], segments[7])));
+            }
+            // IPv4-compatible ::a.b.c.d (mapped forms were handled above).
+            if segments[..6].iter().all(|segment| *segment == 0) {
+                return is_public_ip(IpAddr::V4(embedded_ipv4(segments[6], segments[7])));
+            }
+            // 6to4 2002:V4ADDR::/48.
+            if segments[0] == 0x2002 {
+                return is_public_ip(IpAddr::V4(embedded_ipv4(segments[1], segments[2])));
+            }
+            true
         }
     }
+}
+
+fn embedded_ipv4(high: u16, low: u16) -> std::net::Ipv4Addr {
+    std::net::Ipv4Addr::new((high >> 8) as u8, high as u8, (low >> 8) as u8, low as u8)
 }
 
 /// Keep only addresses that may be connected to. Used after one DNS lookup.
@@ -309,7 +464,7 @@ mod tests {
             ),
             (
                 Ecosystem::Composer,
-                "https://api.github.com/repos/x/y/zipball/abc",
+                "https://repo.packagist.org/p2/vendor/pkg.json",
             ),
         ] {
             assert!(
@@ -406,6 +561,91 @@ mod tests {
                 "{host}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn embedded_ipv4_and_transition_ranges_follow_their_embedded_address() {
+        for private in [
+            "64:ff9b::a9fe:a9fe",
+            "::7f00:1",
+            "2002:c0a8:0101::",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "100::1",
+            "3fff::1",
+            "2001:db8::1",
+            "::",
+            "::1",
+        ] {
+            assert!(
+                !is_public_ip(private.parse().unwrap()),
+                "{private} must not be public"
+            );
+        }
+        for public in [
+            "64:ff9b::0808:0808",
+            "::0808:0808",
+            "2002:0808:0808::",
+            "2606:4700:4700::1111",
+        ] {
+            assert!(
+                is_public_ip(public.parse().unwrap()),
+                "{public} must stay public"
+            );
+        }
+    }
+
+    #[test]
+    fn composer_code_hosts_need_metadata_and_the_same_github_repo() {
+        let origin = ComposerOrigin::from_metadata(
+            Some("https://github.com/acme/pkg.git"),
+            Some("https://api.github.com/repos/acme/pkg/zipball/abc"),
+        );
+        let overrides = Overrides::default();
+        assert!(
+            validate_composer_with(
+                "https://api.github.com/repos/acme/pkg/zipball/abc",
+                &origin,
+                &overrides
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_composer_with(
+                "https://codeload.github.com/acme/pkg/legacy.zip/abc",
+                &origin,
+                &overrides
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_composer_with(
+                "https://api.github.com/repos/evil/pkg/zipball/abc",
+                &origin,
+                &overrides
+            ),
+            Err(PolicyError::ComposerRepo(_))
+        ));
+        assert!(matches!(
+            validate_composer_with("https://evil.gitlab.com/acme/pkg.zip", &origin, &overrides),
+            Err(PolicyError::ComposerHost(_))
+        ));
+        assert!(matches!(
+            validate_composer_with("https://evil.example/acme/pkg.zip", &origin, &overrides),
+            Err(PolicyError::ComposerHost(_))
+        ));
+
+        let gitlab = ComposerOrigin::from_metadata(
+            Some("https://gitlab.com/acme/pkg"),
+            Some("https://gitlab.com/acme/pkg/-/archive/1.0/pkg.zip"),
+        );
+        assert!(
+            validate_composer_with(
+                "https://gitlab.com/acme/pkg/-/archive/1.0/pkg.zip",
+                &gitlab,
+                &overrides
+            )
+            .is_ok()
+        );
     }
 
     #[test]

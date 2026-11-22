@@ -54,9 +54,12 @@ provenance document, the URL must pass `src/netpolicy.rs`:
   | RubyGems | `rubygems.org` |
   | NuGet | `api.nuget.org`, `globalcdn.nuget.org` |
   | Maven | `repo.maven.apache.org`, `dl.google.com` |
-  | Composer | `repo.packagist.org`, `dist.packagist.org`, `api.github.com`, `codeload.github.com`, `gitlab.com`, `bitbucket.org` |
+  | Composer | `repo.packagist.org`, `dist.packagist.org`, plus the exact source/dist host declared by the package (GitHub, GitLab, or Bitbucket); GitHub URLs must name the same owner/repo |
   | JSR | no archive URL is supported |
 
+- Composer code hosts are context-bound: a GitHub, GitLab, or Bitbucket host
+  must be exactly the package's declared source or dist host, never a
+  subdomain, and GitHub archive paths must contain the source owner/repo.
 - IP-literal hosts must be globally routable. Loopback, RFC 1918, link-local
   (`169.254.0.0/16`, `fe80::/10`), CGNAT (`100.64.0.0/10`), ULA (`fc00::/7`),
   unspecified, multicast, broadcast, documentation, reserved, and IPv4-mapped
