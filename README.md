@@ -101,9 +101,7 @@ and Windows x86_64.
 Callers name a package or an install command. dep-vet queries the registry and
 OSV, applies local rules, and returns findings with evidence and an exit code.
 The diagram covers the metadata path; `inspect` adds the archive download and
-Sigstore verification step. Built with
-[stack-diagram](https://github.com/caru-ini/stack-diagram); logos remain the
-trademarks of their owners.
+Sigstore verification step. Logos remain the trademarks of their owners.
 
 ## Usage
 
