@@ -1,11 +1,13 @@
-FROM debian:bookworm-slim
+# syntax=docker/dockerfile:1
+# Static musl binary on distroless: no shell, no package manager, no libc
+# dependency, and the same image definition builds for every CPU architecture.
+FROM gcr.io/distroless/static-debian12:nonroot
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 depvet
+ARG TARGETARCH
+COPY bin/${TARGETARCH}/dep-vet /usr/local/bin/dep-vet
 
-COPY dep-vet /usr/local/bin/dep-vet
-USER depvet
+# The binary needs no HOME; this only gives it a writable cache directory.
+ENV XDG_CACHE_HOME=/tmp/dep-vet-cache
+
 WORKDIR /work
 ENTRYPOINT ["dep-vet"]
