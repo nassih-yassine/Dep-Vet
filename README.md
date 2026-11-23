@@ -69,20 +69,22 @@ single dependency whose only job was a `postinstall` hook — invisible in
 
 ## Install
 
-Linux and macOS:
+Choose one.
+
+**Linux and macOS — prebuilt binary**
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/nassih-yassine/Dep-Vet/releases/latest/download/dep-vet-installer.sh | sh
 ```
 
-Windows (PowerShell):
+**Windows — prebuilt binary**
 
 ```powershell
 irm https://github.com/nassih-yassine/Dep-Vet/releases/latest/download/dep-vet-installer.ps1 | iex
 ```
 
-With a Rust toolchain:
+**Rust / Cargo**
 
 ```sh
 cargo install dep-vet
@@ -90,9 +92,28 @@ cargo install dep-vet
 
 Crate: https://crates.io/crates/dep-vet
 
-Releases are checksummed (`sha256.sum`), carry SLSA provenance attestations,
-and are built for Linux (glibc and static musl), macOS (aarch64 and x86_64),
-and Windows x86_64.
+**Direct download**
+
+Every release includes archives for Linux (glibc and static musl), macOS
+(aarch64 and x86_64), and Windows x86_64:
+
+https://github.com/nassih-yassine/Dep-Vet/releases
+
+Verify the install:
+
+```sh
+dep-vet --version
+```
+
+Then try it:
+
+```sh
+dep-vet npm express@5.3.0
+dep-vet audit package-lock.json
+```
+
+Releases are checksummed (`sha256.sum`) and carry SLSA provenance
+attestations. The binary has no runtime dependency: no Node, Python, or JVM.
 
 ## How it works
 
