@@ -28,7 +28,7 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Unit-test the launcher
         shell: bash
-        run: node --test npm/dep-vet/test/
+        run: node --test npm/dep-vet/test/*.test.js
       - name: Build the package from the latest release
         shell: bash
         env:
