@@ -18,6 +18,7 @@ an error rather than a coin flip.
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -97,6 +98,16 @@ def extract(asset: pathlib.Path, binary_name: str, output: pathlib.Path) -> None
     output.write_bytes(matches[0][1])
 
 
+def npm_command(*arguments: str) -> list[str]:
+    """npm is a .cmd shim on Windows, which CreateProcess cannot start directly."""
+    npm = shutil.which("npm")
+    if npm is None:
+        raise SystemExit("npm is required to pack the package")
+    if os.name == "nt":
+        return ["cmd", "/c", npm, *arguments]
+    return [npm, *arguments]
+
+
 def npm_tarball_stem(name: str) -> str:
     """npm names scoped tarballs ``scope-name``, without the leading ``@``."""
     return name.lstrip("@").replace("/", "-")
@@ -151,7 +162,7 @@ def main() -> None:
         binary.chmod(0o755)
 
     subprocess.run(
-        ["npm", "pack", "--pack-destination", str(args.output)],
+        npm_command("pack", "--pack-destination", str(args.output)),
         cwd=package,
         check=True,
         stdout=subprocess.DEVNULL,
