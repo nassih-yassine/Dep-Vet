@@ -588,10 +588,15 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `x86_64-unknown-linux-musl` asset and pushes `ghcr.io/<owner>/dep-vet` with
   the tag and `latest`. `workflow_dispatch` takes a tag for backfills; the tag
   must start with `v<digit>`.
-- **The Homebrew tap is `nassih-yassine/homebrew-tap`.** `Formula/dep-vet.rb`
-  pins each platform's release URL and sha256 by hand, so a new version needs a
-  formula commit with the new checksums. Homebrew strips the single top-level
-  directory in each archive.
+- **The Homebrew tap updates itself.** `nassih-yassine/homebrew-tap` runs
+  `scripts/update_formula.py` daily (and on dispatch) to rewrite
+  `Formula/dep-vet.rb` from the public release API, then validates it with
+  `ruby -c` and commits only when the version moved. The tap pulls, so it needs
+  no token with write access to this repo. The script picks the four platform
+  tarballs, reads each `.sha256` asset, rejects a non-`vX.Y.Z` tag, and is
+  idempotent. Do not hand-edit the formula; change the template in that script.
+  Homebrew strips the single top-level directory in each archive, so `install`
+  is `bin.install "dep-vet"`.
 - **npm packaging has no install script.** `npm/dep-vet` bundles all five
   platform binaries and selects one at runtime; it never downloads at install
   time and has no platform-package dependencies. `scripts/build-npm-packages.py`
