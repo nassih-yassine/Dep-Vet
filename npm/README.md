@@ -34,7 +34,7 @@ Publishing runs in CI (`.github/workflows/npm-publish.yml`) with
 3. Test the launcher and the packaged modes:
 
    ```sh
-   node --test npm/dep-vet/test/
+   node --test npm/dep-vet/test/*.test.js
    node dist-npm/dep-vet/bin/dep-vet.js --version
    ```
 
