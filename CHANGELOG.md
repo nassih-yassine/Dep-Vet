@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.13.1 — 2026-11-24
 
 - **RUSTSEC-2026-0594 fixed.** Bumped the transitive `cookie` crate from 0.18.2
   to 0.18.3 for the private nonce fork advisory. Dogfood and `cargo audit` are
   clean again.
 - **crates.io distribution.** `cargo install dep-vet` is now the Rust install
-  path; version 0.13.0 is published on crates.io.
+  path; `cargo install dep-vet` is the Rust install path from crates.io.
 - **Recent publisher history.** npm and crates.io audit reports now remember the
   publishers from the last 10 releases (deduplicated). A different
   maintainer who is not in that window gets a clearer `publisher-changed`

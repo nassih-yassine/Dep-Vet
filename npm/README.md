@@ -8,7 +8,7 @@ install script and downloads nothing during install.
 1. Download the release assets and checksums:
 
    ```sh
-   gh release download v0.13.0 --dir /tmp/dep-vet-assets \
+   gh release download v0.13.1 --dir /tmp/dep-vet-assets \
      --pattern 'dep-vet-*.tar.xz' \
      --pattern 'dep-vet-*.tar.xz.sha256' \
      --pattern 'dep-vet-*.zip' \
@@ -19,7 +19,7 @@ install script and downloads nothing during install.
 
    ```sh
    python3 scripts/build-npm-packages.py \
-     --version 0.13.0 \
+     --version 0.13.1 \
      --assets /tmp/dep-vet-assets \
      --output dist-npm
    ```

@@ -1,6 +1,6 @@
 {
   "name": "@nassihyas/dep-vet",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Check a dependency's risk before it enters your lockfile. Nine ecosystems, no code execution, MCP server for AI agents.",
   "license": "MIT",
   "repository": {
