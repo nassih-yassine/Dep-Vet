@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Recent publisher history.** npm and crates.io audit reports now remember the
+  publishers from the last 10 releases (deduplicated). A different
+  maintainer who is not in that window gets a clearer `publisher-changed`
+  detail. No extra network request is made.
+
 ## 0.13.0 — 2026-11-22
 
 - **Dependency tree.** `dep-vet tree package-lock.json` shows the graph npm

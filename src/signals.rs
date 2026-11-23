@@ -849,13 +849,27 @@ pub fn assess(
         && !is_automation_publisher(publisher)
         && !publisher.eq_ignore_ascii_case(previous)
     {
+        let new_to_recent = !meta.release.recent_publishers.is_empty()
+            && !meta
+                .release
+                .recent_publishers
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(publisher));
         findings.push(Finding {
             id: "publisher-changed",
             severity: Severity::Info,
             title: "a different maintainer published this version".to_string(),
-            detail: format!(
-                "the previous release was published by '{previous}'; this one by '{publisher}', who is on the maintainer list"
-            ),
+            detail: if new_to_recent {
+                format!(
+                    "this version was published by '{publisher}', who is on the maintainer list but not among the last {} publisher(s) [{}]; the previous release was published by '{previous}'",
+                    meta.release.recent_publishers.len(),
+                    meta.release.recent_publishers.join(", ")
+                )
+            } else {
+                format!(
+                    "the previous release was published by '{previous}'; this one by '{publisher}', who is on the maintainer list"
+                )
+            },
             allowed: false,
             evidence: vec![Evidence {
                 label: "maintainers".to_string(),
@@ -1846,6 +1860,22 @@ mod tests {
         let finding = finding(&findings, "publisher-changed");
         assert_eq!(finding.severity, Severity::Info);
         assert!(!ids(&findings).contains(&"publisher-not-maintainer"));
+    }
+
+    #[test]
+    fn a_publisher_new_to_recent_history_is_called_out() {
+        let mut meta = meta();
+        meta.publisher = Some("bob".to_string());
+        meta.maintainers = vec!["alice".to_string(), "bob".to_string()];
+        meta.release.previous_publisher = Some("alice".to_string());
+        meta.release.recent_publishers = vec!["alice".to_string(), "carol".to_string()];
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "publisher-changed");
+        assert_eq!(finding.severity, Severity::Info);
+        assert!(
+            finding.detail.contains("not among the last 2 publisher"),
+            "{finding:?}"
+        );
     }
 
     #[test]

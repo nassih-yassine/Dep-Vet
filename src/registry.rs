@@ -61,6 +61,9 @@ pub struct ReleaseHistory {
     pub previous_version: Option<String>,
     pub previous_published_at: Option<i64>,
     pub previous_publisher: Option<String>,
+    /// Publishers of the most recent prior releases, newest first, deduplicated
+    /// case-insensitively. Bounded: this is recent history, not all history.
+    pub recent_publishers: Vec<String>,
     pub previous_install_scripts: Vec<InstallScript>,
     pub previous_dependencies: Vec<String>,
     pub dependencies: Vec<String>,
@@ -73,6 +76,40 @@ pub struct ReleaseHistory {
     pub previous_repository: Option<String>,
     /// Whether the previous release carried provenance, npm only.
     pub previous_provenance: Option<bool>,
+}
+
+/// How many prior releases feed the publisher history.
+pub const PUBLISHER_HISTORY: usize = 10;
+
+/// Publishers from the most recent prior releases. Timestamp ordered, not list
+/// ordered, and deduplicated so a rotation back to an older account is clear.
+pub fn recent_publishers(
+    entries: impl IntoIterator<Item = (String, Option<i64>, Option<String>)>,
+    current_version: &str,
+    current_time: Option<i64>,
+    limit: usize,
+) -> Vec<String> {
+    let Some(current_time) = current_time else {
+        return Vec::new();
+    };
+    let mut entries: Vec<_> = entries
+        .into_iter()
+        .filter(|(version, time, _)| {
+            version != current_version && time.is_some_and(|time| time < current_time)
+        })
+        .collect();
+    entries.sort_by_key(|(_, time, _)| std::cmp::Reverse(*time));
+    let mut publishers: Vec<String> = Vec::new();
+    for (_, _, publisher) in entries.into_iter().take(limit) {
+        let Some(publisher) = publisher else { continue };
+        if !publishers
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(&publisher))
+        {
+            publishers.push(publisher);
+        }
+    }
+    publishers
 }
 
 /// Releases whose timestamp falls inside the last `days` days.
@@ -630,6 +667,23 @@ fn parse_packument(
     let previous_doc = previous_version
         .as_ref()
         .and_then(|version| packument.versions.get(version));
+    let publishers = recent_publishers(
+        packument
+            .time
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "created" | "modified"))
+            .filter_map(|(key, raw)| {
+                let doc = packument.versions.get(key)?;
+                Some((
+                    key.clone(),
+                    date::parse_timestamp(raw),
+                    doc.npm_user.as_ref().and_then(|user| user.name.clone()),
+                ))
+            }),
+        &version,
+        published_at,
+        PUBLISHER_HISTORY,
+    );
 
     Ok(PackageMeta {
         name: packument.name.unwrap_or_else(|| spec.name.clone()),
@@ -663,6 +717,7 @@ fn parse_packument(
             previous_publisher: previous_doc
                 .and_then(|doc| doc.npm_user.as_ref())
                 .and_then(|user| user.name.clone()),
+            recent_publishers: publishers,
             previous_install_scripts: previous_doc.map(install_scripts).unwrap_or_default(),
             previous_dependencies: previous_doc
                 .map(|doc| doc.dependencies.keys().cloned().collect())
@@ -802,6 +857,33 @@ mod tests {
             "last-week/chalk,@types%2Fnode"
         );
         assert_eq!(MAX_DOWNLOAD_NAMES, 128);
+    }
+
+    #[test]
+    fn publisher_history_is_timestamp_ordered_deduped_and_bounded() {
+        let entries = vec![
+            ("1.0.0".to_string(), Some(100), Some("alice".to_string())),
+            ("2.0.0".to_string(), Some(300), Some("bob".to_string())),
+            ("1.5.0".to_string(), Some(200), Some("alice".to_string())),
+            ("3.0.0".to_string(), Some(400), Some("carol".to_string())),
+            ("4.0.0".to_string(), None, Some("dave".to_string())),
+        ];
+        assert_eq!(
+            recent_publishers(entries, "3.0.0", Some(350), PUBLISHER_HISTORY),
+            vec!["bob".to_string(), "alice".to_string()]
+        );
+        assert_eq!(
+            recent_publishers(
+                vec![
+                    ("1.0.0".to_string(), Some(100), Some("alice".to_string())),
+                    ("2.0.0".to_string(), Some(200), Some("bob".to_string())),
+                ],
+                "9.9.9",
+                Some(250),
+                1
+            ),
+            vec!["bob".to_string()]
+        );
     }
 
     #[test]
