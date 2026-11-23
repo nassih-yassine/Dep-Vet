@@ -6,6 +6,9 @@
   in one package and selects one at runtime, with no install script and no
   download during install. `npx @nassihyas/dep-vet` works without a Rust
   toolchain. The earlier per-platform packages are deprecated.
+- **Homebrew tap updates itself.** The tap rewrites its formula from the public
+  release API daily and commits only when the version moves, so `brew install`
+  follows a release without a manual checksum edit.
 - **Homebrew and Docker distribution.** `brew install
   nassih-yassine/tap/dep-vet` installs the prebuilt binary, and
   `ghcr.io/nassih-yassine/dep-vet:v0.13.1` carries the static Linux binary.
