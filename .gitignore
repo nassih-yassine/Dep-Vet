@@ -11,3 +11,4 @@ docs/
 # Python bytecode from the seed-refresh helper
 __pycache__/
 *.pyc
+dist-npm/
