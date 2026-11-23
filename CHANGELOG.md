@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Multi-arch Docker image.** `ghcr.io/nassih-yassine/dep-vet` now carries
+  `linux/amd64` and `linux/arm64` in one index, built from distroless static so
+  the container holds only the binary and runs as non-root. The workflow smoke
+  tests `--version` and a HIGH finding's exit code against the published image.
+
 ## 0.13.1 — 2026-11-24
 
 - **npm distribution.** `@nassihyas/dep-vet` bundles the five prebuilt binaries

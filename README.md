@@ -116,6 +116,9 @@ docker run --rm -v "$PWD:/work" -w /work \
   ghcr.io/nassih-yassine/dep-vet:v0.13.1 audit package-lock.json
 ```
 
+The image is built for `linux/amd64` and `linux/arm64`, runs as a non-root user,
+and holds only the static binary: no shell, no package manager, no libc.
+
 **Direct download**
 
 Every release includes archives for Linux (glibc and static musl), macOS

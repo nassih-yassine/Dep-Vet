@@ -584,10 +584,13 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `cargo-dist` creates the release with `GITHUB_TOKEN`, and GitHub never starts
   workflows from token-created releases, so `.github/workflows/docker.yml`
   triggers on `workflow_run` of `Release` and reads the tag from
-  `workflow_run.head_branch`. The image builds from the verified
-  `x86_64-unknown-linux-musl` asset and pushes `ghcr.io/<owner>/dep-vet` with
-  the tag and `latest`. `workflow_dispatch` takes a tag for backfills; the tag
-  must start with `v<digit>`.
+  `workflow_run.head_branch`. `workflow_dispatch` takes a tag for backfills; the
+  tag must start with `v<digit>`. Both musl assets are checksum-verified and
+  buildx pushes one index with `linux/amd64` and `linux/arm64` plus `latest`.
+  The base is `gcr.io/distroless/static-debian12:nonroot`, chosen because it has
+  no `RUN` step, so buildx needs no QEMU; it also means the container has no
+  shell. The job smoke tests the published image (`--version`, and exit 2 for a
+  HIGH finding), so a broken image fails the workflow instead of the user.
 - **The Homebrew tap updates itself.** `nassih-yassine/homebrew-tap` runs
   `scripts/update_formula.py` daily (and on dispatch) to rewrite
   `Formula/dep-vet.rb` from the public release API, then validates it with
