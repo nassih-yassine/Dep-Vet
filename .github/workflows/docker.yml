@@ -21,6 +21,8 @@ jobs:
   image:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/dep-vet
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Resolve tag
@@ -34,25 +36,44 @@ jobs:
             *) echo "::error::not a release tag: '$TAG'"; exit 1 ;;
           esac
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-      - name: Download and verify the static binary
+      - name: Download and verify both static binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "$TAG" --dir docker-assets \
-            --pattern 'dep-vet-x86_64-unknown-linux-musl.tar.xz' \
-            --pattern 'dep-vet-x86_64-unknown-linux-musl.tar.xz.sha256'
-          cd docker-assets
-          sha256sum -c dep-vet-x86_64-unknown-linux-musl.tar.xz.sha256
-          tar -xJf dep-vet-x86_64-unknown-linux-musl.tar.xz
-          find . -type f -name dep-vet -exec cp {} ../dep-vet \;
-          chmod +x ../dep-vet
-      - name: Build and push
+          gh release download "$TAG" --dir assets \
+            --pattern 'dep-vet-*-unknown-linux-musl.tar.xz' \
+            --pattern 'dep-vet-*-unknown-linux-musl.tar.xz.sha256'
+          cd assets
+          sha256sum -c ./*.sha256
+          for pair in "x86_64:amd64" "aarch64:arm64"; do
+            target="${pair%%:*}"
+            arch="${pair##*:}"
+            mkdir -p "../bin/$arch"
+            tar -xJf "dep-vet-$target-unknown-linux-musl.tar.xz"
+            cp "dep-vet-$target-unknown-linux-musl/dep-vet" "../bin/$arch/dep-vet"
+            chmod +x "../bin/$arch/dep-vet"
+          done
+          file ../bin/amd64/dep-vet ../bin/arm64/dep-vet
+      - name: Build and push both architectures
         env:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
-          IMAGE: ghcr.io/${{ github.repository_owner }}/dep-vet
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
-          docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
-          docker push "$IMAGE:$TAG"
-          docker push "$IMAGE:latest"
+          docker buildx create --use --driver docker-container --name dep-vet
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --tag "$IMAGE:$TAG" \
+            --tag "$IMAGE:latest" \
+            --push .
+      - name: Smoke test the published image
+        run: |
+          docker run --rm "$IMAGE:$TAG" --version
+          set +e
+          docker run --rm "$IMAGE:$TAG" npm crossenv
+          status=$?
+          set -e
+          if [ "$status" -ne 2 ]; then
+            echo "::error::expected exit 2 for a HIGH finding, got $status"
+            exit 1
+          fi
