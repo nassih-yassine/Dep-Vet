@@ -1,0 +1,112 @@
+name: npm publish
+
+on:
+  # A token-created release never starts workflows, so act on the Release run.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    env:
+      # Trusted publishing needs no token. A token is only a fallback for
+      # accounts that have not configured a trusted publisher yet.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || inputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.TAG }}
+      - name: Validate the tag against Cargo.toml
+        id: tag
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::not a release tag: '$TAG'"; exit 1 ;;
+          esac
+          version="${TAG#v}"
+          crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "$version" != "$crate_version" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml $crate_version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Skip when npm already has this version
+        id: check
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          if npm view "@nassihyas/dep-vet@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::npm already serves $VERSION; nothing to publish"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download the attested release assets
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p assets
+          gh release download "$TAG" --dir assets \
+            --pattern 'dep-vet-*.tar.xz' \
+            --pattern 'dep-vet-*.tar.xz.sha256' \
+            --pattern 'dep-vet-*.zip' \
+            --pattern 'dep-vet-*.zip.sha256'
+      - name: Build, checksum-verify and attestation-verify the package
+        if: steps.check.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          python3 scripts/build-npm-packages.py \
+            --version "$VERSION" \
+            --assets assets \
+            --output dist-npm
+      - name: Publish with provenance through trusted publishing
+        if: steps.check.outputs.needed == 'true' && env.NPM_TOKEN == ''
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: npm publish "dist-npm/dep-vet" --provenance --access public
+      - name: Publish with provenance through a token
+        if: steps.check.outputs.needed == 'true' && env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: npm publish "dist-npm/dep-vet" --provenance --access public
+      - name: Dogfood the published package
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          expected="$VERSION"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            got="$(npx -y "@nassihyas/dep-vet@$expected" --version 2>/dev/null || true)"
+            case "$got" in
+              *"dep-vet $expected"*) break ;;
+            esac
+            sleep 30
+          done
+          got="$(npx -y "@nassihyas/dep-vet@$expected" --version)"
+          case "$got" in
+            *"dep-vet $expected"*) echo "npm serves $expected" ;;
+            *) echo "::error::npm returned '$got'"; exit 1 ;;
+          esac
+          cargo run --quiet --locked -- \
+            inspect npm "@nassihyas/dep-vet@$expected" > inspect.txt
+          cat inspect.txt
+          grep -q "signature verified" inspect.txt || {
+            echo "::error::the published package has no verifiable provenance"
+            exit 1
+          }

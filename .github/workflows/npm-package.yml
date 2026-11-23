@@ -1,0 +1,67 @@
+name: npm package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "npm/**"
+      - "scripts/build-npm-packages.py"
+      - "scripts/test_build_npm_packages.py"
+      - ".github/workflows/npm-package.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Unit-test the packaging script
+        shell: bash
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Unit-test the launcher
+        shell: bash
+        run: node --test npm/dep-vet/test/
+      - name: Build the package from the latest release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release view --json tagName --jq .tagName)"
+          version="${tag#v}"
+          mkdir -p assets
+          gh release download "$tag" --dir assets \
+            --pattern 'dep-vet-*.tar.xz' \
+            --pattern 'dep-vet-*.tar.xz.sha256' \
+            --pattern 'dep-vet-*.zip' \
+            --pattern 'dep-vet-*.zip.sha256'
+          python3 scripts/build-npm-packages.py \
+            --version "$version" \
+            --assets assets \
+            --output dist-npm
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Install the packed tarball like a user
+        shell: bash
+        run: |
+          mkdir consumer
+          cd consumer
+          npm init --yes >/dev/null
+          npm install ../dist-npm/*.tgz
+      - name: Run the installed binary
+        shell: bash
+        run: |
+          cd consumer
+          npx --no-install dep-vet --version
+          npx --no-install dep-vet --help > /dev/null
+          version="$(npx --no-install dep-vet --version)"
+          case "$version" in
+            *"dep-vet $VERSION"*) ;;
+            *) echo "::error::expected dep-vet $VERSION, got '$version'"; exit 1 ;;
+          esac

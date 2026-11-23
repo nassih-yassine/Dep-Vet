@@ -9,42 +9,60 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to package
+        description: Release tag to package (vX.Y.Z)
         required: true
-        default: v0.13.1
 
 permissions:
   contents: read
   packages: write
+  id-token: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/dep-vet
+  COSIGN_VERSION: v3.1.4
+  COSIGN_SHA256: 424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
 
 jobs:
   image:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/dep-vet
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: Resolve tag
+      - name: Validate the tag
+        id: tag
         env:
           RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${INPUT_TAG:-$RELEASE_TAG}"
-          case "$TAG" in
-            v[0-9]*) ;;
-            *) echo "::error::not a release tag: '$TAG'"; exit 1 ;;
-          esac
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          tag="${INPUT_TAG:-$RELEASE_TAG}"
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "::error::not a release tag: '$tag'"
+            exit 1
+          fi
+          stable=false
+          if printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            stable=true
+          fi
+          {
+            echo "tag=$tag"
+            echo "stable=$stable"
+          } >> "$GITHUB_OUTPUT"
       - name: Download and verify both static binaries
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           gh release download "$TAG" --dir assets \
             --pattern 'dep-vet-*-unknown-linux-musl.tar.xz' \
             --pattern 'dep-vet-*-unknown-linux-musl.tar.xz.sha256'
           cd assets
           sha256sum -c ./*.sha256
+          for archive in ./*.tar.xz; do
+            gh attestation verify "$archive" \
+              --repo "${{ github.repository }}" \
+              --signer-workflow "${{ github.repository }}/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG"
+          done
           for pair in "x86_64:amd64" "aarch64:arm64"; do
             target="${pair%%:*}"
             arch="${pair##*:}"
@@ -53,20 +71,46 @@ jobs:
             cp "dep-vet-$target-unknown-linux-musl/dep-vet" "../bin/$arch/dep-vet"
             chmod +x "../bin/$arch/dep-vet"
           done
-          file ../bin/amd64/dep-vet ../bin/arm64/dep-vet
-      - name: Build and push both architectures
+      - name: Install cosign
+        run: |
+          curl --fail --location --silent --show-error \
+            --output cosign \
+            "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
+          echo "$COSIGN_SHA256  cosign" | sha256sum -c -
+          chmod +x cosign
+      - name: Build, attest and push both architectures
         env:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          STABLE: ${{ steps.tag.outputs.stable }}
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           docker buildx create --use --driver docker-container --name dep-vet
+          tags=(--tag "$IMAGE:$TAG")
+          if [ "$STABLE" = "true" ]; then
+            tags+=(--tag "$IMAGE:latest")
+          fi
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
-            --tag "$IMAGE:$TAG" \
-            --tag "$IMAGE:latest" \
+            "${tags[@]}" \
+            --sbom=true \
+            --provenance=mode=max \
+            --metadata-file metadata.json \
             --push .
+      - name: Sign the image by digest
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          digest="$(jq -r '."containerimage.digest"' metadata.json)"
+          echo "digest=$digest" >> "$GITHUB_STEP_SUMMARY"
+          ./cosign sign --yes "$IMAGE@$digest"
+          ./cosign verify "$IMAGE@$digest" \
+            --certificate-identity-regexp "^https://github\.com/${{ github.repository }}/\.github/workflows/docker\.yml@" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
       - name: Smoke test the published image
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           docker run --rm "$IMAGE:$TAG" --version
           set +e
