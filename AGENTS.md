@@ -49,7 +49,7 @@ Never make the job non-blocking to get a merge through.
 ## Commands
 
 ```sh
-cargo test --locked                      # 588 unit + 200 end-to-end tests
+cargo test --locked                      # 590 unit + 200 end-to-end tests
 cargo test signals::                    # one module
 cargo test --test cli fresh_package     # one end-to-end case
 cargo clippy --locked --all-targets -- -D warnings
@@ -671,6 +671,6 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Maven dependency trees (no lockfile format), SARIF/SBOM output, and publisher
-history beyond the previous release.
+Maven dependency trees beyond Gradle's lockfile format, and publisher history
+beyond the bounded recent window (the last 10 releases). SARIF/SBOM are built.
 Roadmap only: do not describe these as existing in code, README, or help text.

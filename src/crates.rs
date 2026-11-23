@@ -194,6 +194,22 @@ fn parse_crate(
         crate::registry::HISTORY_WINDOW_DAYS,
     );
 
+    let publishers = crate::registry::recent_publishers(
+        response.versions.iter().map(|release| {
+            (
+                release.num.clone(),
+                release
+                    .created_at
+                    .as_deref()
+                    .and_then(date::parse_timestamp),
+                release.published_by.as_ref().map(|user| user.login.clone()),
+            )
+        }),
+        &version,
+        published_at,
+        crate::registry::PUBLISHER_HISTORY,
+    );
+
     let deprecated = release.yanked.then(|| match &release.yank_message {
         Some(message) if !message.trim().is_empty() => {
             format!("this version is yanked: {message}")
@@ -244,6 +260,7 @@ fn parse_crate(
                 })
                 .and_then(|release| release.published_by.as_ref())
                 .map(|user| user.login.clone()),
+            recent_publishers: publishers,
             ..crate::registry::ReleaseHistory::default()
         },
     })
@@ -371,6 +388,14 @@ mod tests {
     fn records_the_previous_publisher() {
         let meta = fetch(SERDE, Some("1.0.229")).unwrap();
         assert_eq!(meta.release.previous_publisher.as_deref(), Some("oli-obk"));
+        assert!(
+            meta.release
+                .recent_publishers
+                .iter()
+                .any(|publisher| publisher == "oli-obk"),
+            "{:?}",
+            meta.release.recent_publishers
+        );
     }
 
     #[test]
