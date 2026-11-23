@@ -591,6 +591,15 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   no `RUN` step, so buildx needs no QEMU; it also means the container has no
   shell. The job smoke tests the published image (`--version`, and exit 2 for a
   HIGH finding), so a broken image fails the workflow instead of the user.
+- **The MCP Registry listing is `io.github.nassih-yassine/dep-vet`.** The
+  registry verifies npm ownership through `mcpName` in the published
+  `package.json`, so a new version must be on npm before publishing, and
+  `server.json` must name that same version. `.github/workflows/mcp-registry.yml`
+  runs on the Release workflow and skips with a notice when npm does not have
+  the version yet; dispatch it after `npm publish`. It pins
+  `mcp-publisher` to a version plus sha256 (no third-party action), validates
+  `server.json`, logs in with GitHub OIDC, and publishes. `server.json` passes
+  `mcp-publisher validate`.
 - **The Homebrew tap updates itself.** `nassih-yassine/homebrew-tap` runs
   `scripts/update_formula.py` daily (and on dispatch) to rewrite
   `Formula/dep-vet.rb` from the public release API, then validates it with
