@@ -2,6 +2,9 @@
 
 ## 0.13.1 — 2026-11-24
 
+- **Homebrew and Docker distribution.** `brew install
+  nassih-yassine/tap/dep-vet` installs the prebuilt binary, and
+  `ghcr.io/nassih-yassine/dep-vet:0.13.1` carries the static Linux binary.
 - **RUSTSEC-2026-0594 fixed.** Bumped the transitive `cookie` crate from 0.18.2
   to 0.18.3 for the private nonce fork advisory. Dogfood and `cargo audit` are
   clean again.

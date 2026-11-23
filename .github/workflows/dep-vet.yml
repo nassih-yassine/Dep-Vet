@@ -28,7 +28,7 @@ on:
       ref:
         description: Dep-Vet release tag or branch (a tag is what makes `uses:` pinning meaningful)
         type: string
-        default: v0.13.0
+        default: v0.13.1
 
 permissions:
   contents: read
