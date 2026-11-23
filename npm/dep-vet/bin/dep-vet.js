@@ -32,6 +32,9 @@ function binaryPath(platform, arch, baseDir) {
 // spawn. A read-only install is not fatal: the spawn reports the real error.
 function ensureExecutable(file) {
   try {
+    if (!fs.existsSync(file)) {
+      return false;
+    }
     if (process.platform !== "win32") {
       fs.chmodSync(file, 0o755);
     }
