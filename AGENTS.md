@@ -580,11 +580,26 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   refuses malformed JSON with exit 3 and no write. Writes are atomic
   (sibling temp file then rename). The settings `command` is a shell string; the
   binary path must be absolute and quoted when it has spaces.
+- **Docker images come from the Release workflow, not the release event.**
+  `cargo-dist` creates the release with `GITHUB_TOKEN`, and GitHub never starts
+  workflows from token-created releases, so `.github/workflows/docker.yml`
+  triggers on `workflow_run` of `Release` and reads the tag from
+  `workflow_run.head_branch`. The image builds from the verified
+  `x86_64-unknown-linux-musl` asset and pushes `ghcr.io/<owner>/dep-vet` with
+  the tag and `latest`. `workflow_dispatch` takes a tag for backfills; the tag
+  must start with `v<digit>`.
+- **The Homebrew tap is `nassih-yassine/homebrew-tap`.** `Formula/dep-vet.rb`
+  pins each platform's release URL and sha256 by hand, so a new version needs a
+  formula commit with the new checksums. Homebrew strips the single top-level
+  directory in each archive.
 - **npm packaging has no install script.** `npm/dep-vet` bundles all five
   platform binaries and selects one at runtime; it never downloads at install
   time and has no platform-package dependencies. `scripts/build-npm-packages.py`
   verifies each release archive's `.sha256`, extracts the binaries, and packs
-  the scoped `@nassihyas/dep-vet` package. `dist-npm/` is gitignored.
+  the scoped `@nassihyas/dep-vet` package. `dist-npm/` is gitignored. The
+  unscoped name `dep-vet` is rejected (too similar to `depvet`) and the
+  platform package names were flagged as spam and deprecated, so do not
+  revive the per-platform layout.
 - **MCP lockfile diffs share the CLI implementation.** `diff_lockfile` is the one
   differential audit for `lock` and `vet_lockfile_change`; it covers npm and
   JSR, attaches dependency paths, includes skipped entries as errors, and keeps
