@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **crates.io distribution.** `cargo install dep-vet` is now the Rust install
+  path; version 0.13.0 is published on crates.io.
 - **Recent publisher history.** npm and crates.io audit reports now remember the
   publishers from the last 10 releases (deduplicated). A different
   maintainer who is not in that window gets a clearer `publisher-changed`

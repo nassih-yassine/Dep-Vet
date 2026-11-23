@@ -7,6 +7,7 @@
 <p>
 <img alt="ci" src="https://github.com/nassih-yassine/Dep-Vet/actions/workflows/ci.yml/badge.svg">
 <img alt="release" src="https://img.shields.io/github/v/release/nassih-yassine/Dep-Vet">
+<img alt="crates.io" src="https://img.shields.io/crates/v/dep-vet">
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
 <img alt="no runtime" src="https://img.shields.io/badge/runtime-none%20(linux%20musl%3A%20static)-success.svg">
 <img alt="no telemetry" src="https://img.shields.io/badge/telemetry-none-success.svg">
@@ -81,10 +82,10 @@ Windows (PowerShell):
 irm https://github.com/nassih-yassine/Dep-Vet/releases/latest/download/dep-vet-installer.ps1 | iex
 ```
 
-With a Rust toolchain, from source:
+With a Rust toolchain:
 
 ```sh
-cargo install --git https://github.com/nassih-yassine/Dep-Vet.git
+cargo install dep-vet
 ```
 
 Releases are checksummed (`sha256.sum`), carry SLSA provenance attestations,
