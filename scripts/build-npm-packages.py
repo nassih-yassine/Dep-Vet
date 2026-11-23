@@ -113,8 +113,14 @@ def npm_tarball_stem(name: str) -> str:
     return name.lstrip("@").replace("/", "-")
 
 
-def verify_tarball_modes(tarball: pathlib.Path) -> None:
-    """Every bundled binary except the Windows one must be executable."""
+def verify_tarball_modes(tarball: pathlib.Path, windows: bool = False) -> None:
+    """Every bundled binary except the Windows one must be executable.
+
+    Windows cannot store a Unix mode, so a tarball packed there always has 0644
+    entries. That build is only used for the install smoke test; the published
+    package is packed on Linux, where a lost mode is fatal. The launcher also
+    restores the bit at run time.
+    """
     with tarfile.open(tarball) as archive:
         for info in archive.getmembers():
             if not info.name.startswith("package/binaries/"):
@@ -122,6 +128,12 @@ def verify_tarball_modes(tarball: pathlib.Path) -> None:
             if info.name.endswith(".exe"):
                 continue
             if not info.mode & 0o111:
+                if windows:
+                    print(
+                        f"warning: {info.name} has no executable bit on this "
+                        "platform; the launcher restores it"
+                    )
+                    continue
                 raise SystemExit(
                     f"{info.name} is not executable in {tarball} (mode {info.mode:o})"
                 )
@@ -170,7 +182,7 @@ def main() -> None:
     tarball = args.output / f"{npm_tarball_stem(data['name'])}-{args.version}.tgz"
     if not tarball.is_file():
         raise SystemExit(f"npm pack did not produce {tarball}")
-    verify_tarball_modes(tarball)
+    verify_tarball_modes(tarball, windows=os.name == "nt")
     print(f"built {tarball}")
 
 

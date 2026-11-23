@@ -120,6 +120,10 @@ class TarballModeTests(unittest.TestCase):
             self.build(0o644, "package/binaries/win32-x64/dep-vet.exe")
         )
 
+    def test_windows_build_warns_instead_of_failing(self):
+        # Windows cannot store Unix modes, so the packed tarball is 0644 there.
+        packaging.verify_tarball_modes(self.build(0o644), windows=True)
+
     def test_files_outside_binaries_are_ignored(self):
         packaging.verify_tarball_modes(self.build(0o644, "package/bin/dep-vet.js"))
 
