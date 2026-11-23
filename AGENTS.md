@@ -587,10 +587,17 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `workflow_run.head_branch`. `workflow_dispatch` takes a tag for backfills; the
   tag must start with `v<digit>`. Both musl assets are checksum-verified and
   buildx pushes one index with `linux/amd64` and `linux/arm64` plus `latest`.
-  The base is `gcr.io/distroless/static-debian12:nonroot`, chosen because it has
-  no `RUN` step, so buildx needs no QEMU; it also means the container has no
-  shell. The job smoke tests the published image (`--version`, and exit 2 for a
-  HIGH finding), so a broken image fails the workflow instead of the user.
+  The base is `gcr.io/distroless/static-debian12:nonroot@sha256:...`, pinned by
+  digest and refreshed by Dependabot's `docker` ecosystem. Distroless is chosen
+  because it has no `RUN` step, so buildx needs no QEMU; it also means the
+  container has no shell. The build carries `--sbom=true` and
+  `--provenance=mode=max`, then signs the pushed digest keyless with a
+  checksum-pinned cosign and verifies that signature. `latest` only moves for
+  `vX.Y.Z` tags; a prerelease tag produces an image with no `latest` move. The
+  dispatch tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-...)?$` before it reaches
+  `GITHUB_OUTPUT`. The job smoke tests the published image (`--version`, and
+  exit 2 for a HIGH finding), so a broken image fails the workflow instead of
+  the user.
 - **The MCP Registry listing is `io.github.nassih-yassine/dep-vet`.** The
   registry verifies npm ownership through `mcpName` in the published
   `package.json`, so a new version must be on npm before publishing, and
@@ -609,6 +616,21 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   idempotent. Do not hand-edit the formula; change the template in that script.
   Homebrew strips the single top-level directory in each archive, so `install`
   is `bin.install "dep-vet"`.
+- **npm is published from CI with provenance.** `.github/workflows/npm-publish.yml`
+  runs after the Release workflow (or by dispatch with a tag), rebuilds the
+  package from the release assets, publishes with `--provenance`, then installs
+  the published version and requires `dep-vet inspect npm` to report a verified
+  signature. It publishes with trusted publishing (OIDC) when no `NPM_TOKEN`
+  exists, and falls back to a token stored in the protected `npm-publish`
+  environment. Never publish by hand: a workstation upload carries no
+  provenance.
+- **Release assets are verified by attestation, not only checksum.**
+  `scripts/build-npm-packages.py` and the Docker workflow both run
+  `gh attestation verify` with `--signer-workflow <repo>/.github/workflows/release.yml`
+  and `--source-ref refs/tags/vX.Y.Z`. The full-URI `@refs/tags/...` form of
+  `--signer-workflow` is rejected by gh; use the `owner/repo/path` form and pin
+  the ref with `--source-ref`. `github-attestations = true` in
+  `dist-workspace.toml` is what produces them, so do not drop that line.
 - **npm packaging has no install script.** `npm/dep-vet` bundles all five
   platform binaries and selects one at runtime; it never downloads at install
   time and has no platform-package dependencies. `scripts/build-npm-packages.py`

@@ -98,6 +98,49 @@ Any refusal is a tool error (exit `3`) with the offending host named; it is
 never a clean result. The reusable GitHub Action does not set or forward these
 variables.
 
+## Verifying what you download
+
+No channel asks you to trust a download blindly. Each one exposes a check you
+can run yourself, and each proves something narrower than "this is safe".
+
+| Channel | Integrity | Authenticity |
+|---|---|---|
+| GitHub release archives | `.sha256` sidecar | SLSA provenance attestation from `release.yml` |
+| npm | registry tarball digest | npm provenance (published with `--provenance`) |
+| Docker | image digest | cosign keyless signature, plus SBOM and provenance attestations |
+| crates.io | `.crate` checksum from the registry index | none: crates.io does not sign artifacts |
+
+GitHub release archives:
+
+```sh
+sha256sum -c dep-vet-x86_64-unknown-linux-musl.tar.xz.sha256
+gh attestation verify dep-vet-x86_64-unknown-linux-musl.tar.xz \
+  --repo nassih-yassine/Dep-Vet \
+  --signer-workflow nassih-yassine/Dep-Vet/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.13.2
+```
+
+npm: the package page shows a provenance badge. Locally, dep-vet verifies the
+attestation offline against the embedded Sigstore root:
+
+```sh
+dep-vet inspect npm @nassihyas/dep-vet@0.13.2
+```
+
+Docker, by digest rather than tag:
+
+```sh
+cosign verify "ghcr.io/nassih-yassine/dep-vet@sha256:<digest>" \
+  --certificate-identity-regexp '^https://github\.com/nassih-yassine/Dep-Vet/\.github/workflows/docker\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Build provenance and SBOM attestations are attached to the same digest
+(`docker buildx imagetools inspect` lists them).
+
+An attestation says which workflow and commit produced the artifact. It does not
+say the code is free of bugs, and a valid signature is never described as trust.
+
 ## Supported versions
 
 The latest release receives fixes. Older releases are not patched; upgrade

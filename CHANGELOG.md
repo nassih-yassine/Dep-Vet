@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.13.3 — unreleased
+
+- **npm publishes with provenance from CI.** `.github/workflows/npm-publish.yml`
+  builds the package from the attested release assets and publishes with
+  `--provenance`, then dogfoods the result: it installs the published version
+  and requires `dep-vet inspect npm` to verify the signature. Trusted publishing
+  (OIDC) is used when configured; a token in the protected `npm-publish`
+  environment is the fallback.
+- **Distribution now checks authenticity, not only integrity.** The npm build
+  verifies every release archive with `gh attestation verify`, pinned to
+  `release.yml` and the tag, in addition to the `.sha256` check. Docker does the
+  same for both musl assets.
+- **Docker is signed and digest-pinned.** The image is built for amd64 and arm64
+  from a pinned distroless digest, carries buildx SBOM and provenance
+  attestations, and is signed keyless with cosign by digest. `latest` only moves
+  for stable tags, and the dispatch tag is validated before use.
+- **npm package hardening.** Archive members are matched by exact basename with
+  ambiguity treated as an error, the packed tarball is rejected unless every
+  bundled binary is executable, the launcher restores the executable bit when
+  npm drops it, and a three-OS workflow installs the packed tarball and runs it.
+
 ## 0.13.2 — 2026-11-24
 
 - **Listed in the official MCP Registry.** `server.json` describes the stdio
@@ -11,7 +32,7 @@
   the container holds only the binary and runs as non-root. The workflow smoke
   tests `--version` and a HIGH finding's exit code against the published image.
 
-## 0.13.1 — 2026-11-24
+## 0.13.1 — 2026-11-23
 
 - **npm distribution.** `@nassihyas/dep-vet` bundles the five prebuilt binaries
   in one package and selects one at runtime, with no install script and no

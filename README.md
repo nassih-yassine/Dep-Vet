@@ -139,8 +139,31 @@ dep-vet npm express@5.3.0
 dep-vet audit package-lock.json
 ```
 
-Releases are checksummed (`sha256.sum`) and carry SLSA provenance
-attestations. The binary has no runtime dependency: no Node, Python, or JVM.
+**Verify what you downloaded**
+
+Every channel has a check you can run; `SECURITY.md` lists what each one proves.
+
+```sh
+# GitHub release archive: integrity and build provenance
+sha256sum -c dep-vet-x86_64-unknown-linux-musl.tar.xz.sha256
+gh attestation verify dep-vet-x86_64-unknown-linux-musl.tar.xz \
+  --repo nassih-yassine/Dep-Vet \
+  --signer-workflow nassih-yassine/Dep-Vet/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.13.2
+
+# npm: provenance, verified offline against the embedded Sigstore root
+dep-vet inspect npm @nassihyas/dep-vet@0.13.2
+
+# Docker: cosign signature on the digest
+cosign verify "ghcr.io/nassih-yassine/dep-vet@sha256:<digest>" \
+  --certificate-identity-regexp '^https://github\.com/nassih-yassine/Dep-Vet/\.github/workflows/docker\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+crates.io publishes checksums, not signatures: `cargo install` verifies the
+crate matches the registry index, and nothing more is claimed.
+
+The binary has no runtime dependency: no Node, Python, or JVM.
 
 ## How it works
 
