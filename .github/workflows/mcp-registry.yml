@@ -1,0 +1,66 @@
+name: MCP Registry
+
+on:
+  # The npm package has to exist before the registry can verify ownership, and
+  # npm publishing is a manual step, so this usually skips on the release run
+  # and is dispatched again once npm has the version.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish (defaults to Cargo.toml)
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  MCP_PUBLISHER_VERSION: v1.8.16
+  MCP_PUBLISHER_SHA256: 6e2f799550cf843c6fd3350498d56cc49be3dc0af1e6237eb0e6435c7a9d5c05
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Check that this version can be published
+        id: check
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          version="${INPUT_VERSION:-$crate_version}"
+          json_version="$(python3 -c 'import json;print(json.load(open("server.json"))["version"])')"
+          if [ "$version" != "$json_version" ]; then
+            echo "::error::server.json says $json_version but this run targets $version"
+            exit 1
+          fi
+          if ! npm view "@nassihyas/dep-vet@$version" version >/dev/null 2>&1; then
+            if [ -n "$INPUT_VERSION" ]; then
+              echo "::error::npm does not have @nassihyas/dep-vet@$version"
+              exit 1
+            fi
+            echo "::notice::npm does not have $version yet; publish it, then dispatch this workflow"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install mcp-publisher
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          curl --fail --location --silent --show-error \
+            --output publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz"
+          echo "$MCP_PUBLISHER_SHA256  publisher.tar.gz" | sha256sum -c -
+          tar xzf publisher.tar.gz mcp-publisher
+          ./mcp-publisher validate server.json
+      - name: Publish
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish server.json

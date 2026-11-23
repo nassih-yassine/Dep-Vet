@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.13.2 — 2026-11-24
 
+- **Listed in the official MCP Registry.** `server.json` describes the stdio
+  MCP server (`npx @nassihyas/dep-vet mcp`) and `.github/workflows/mcp-registry.yml`
+  publishes it with GitHub OIDC after the npm package exists, verifying the
+  publisher binary's pinned checksum and validating `server.json` first.
 - **Multi-arch Docker image.** `ghcr.io/nassih-yassine/dep-vet` now carries
   `linux/amd64` and `linux/arm64` in one index, built from distroless static so
   the container holds only the binary and runs as non-root. The workflow smoke

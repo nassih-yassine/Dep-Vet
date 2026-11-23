@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nassih-yassine/dep-vet",
+  "title": "dep-vet",
+  "description": "Vet packages and lockfiles for CVEs, typosquats and install scripts before installing.",
+  "websiteUrl": "https://github.com/nassih-yassine/Dep-Vet",
+  "repository": {
+    "url": "https://github.com/nassih-yassine/Dep-Vet",
+    "source": "github"
+  },
+  "version": "0.13.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@nassihyas/dep-vet",
+      "version": "0.13.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "command",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}
