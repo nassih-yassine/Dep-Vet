@@ -92,6 +92,17 @@ cargo install dep-vet
 
 Crate: https://crates.io/crates/dep-vet
 
+**npm**
+
+```sh
+npx @nassihyas/dep-vet audit package-lock.json
+# or install it globally
+npm install --global @nassihyas/dep-vet
+```
+
+The npm package bundles every platform binary and picks one at runtime. It has
+no install script and downloads nothing during install.
+
 **Homebrew**
 
 ```sh

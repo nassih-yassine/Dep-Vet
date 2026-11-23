@@ -2,6 +2,10 @@
 
 ## 0.13.1 — 2026-11-24
 
+- **npm distribution.** `@nassihyas/dep-vet` bundles the five prebuilt binaries
+  in one package and selects one at runtime, with no install script and no
+  download during install. `npx @nassihyas/dep-vet` works without a Rust
+  toolchain. The earlier per-platform packages are deprecated.
 - **Homebrew and Docker distribution.** `brew install
   nassih-yassine/tap/dep-vet` installs the prebuilt binary, and
   `ghcr.io/nassih-yassine/dep-vet:0.13.1` carries the static Linux binary.
