@@ -21,7 +21,7 @@
   bundled binary is executable, the launcher restores the executable bit when
   npm drops it, and a three-OS workflow installs the packed tarball and runs it.
 
-## 0.13.2 — 2026-11-24
+## 0.13.2 — 2026-11-23
 
 - **Listed in the official MCP Registry.** `server.json` describes the stdio
   MCP server (`npx @nassihyas/dep-vet mcp`) and `.github/workflows/mcp-registry.yml`
