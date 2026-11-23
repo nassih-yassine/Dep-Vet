@@ -1,27 +1,21 @@
 {
-  "name": "dep-vet",
+  "name": "@nassihyas/dep-vet",
   "version": "0.13.0",
   "description": "Check a dependency's risk before it enters your lockfile. Nine ecosystems, no code execution, MCP server for AI agents.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nassih-yassine/Dep-Vet.git"
+    "url": "git+https://github.com/nassih-yassine/Dep-Vet.git"
   },
   "homepage": "https://github.com/nassih-yassine/Dep-Vet",
   "bin": {
     "dep-vet": "bin/dep-vet.js"
   },
   "files": [
-    "bin/dep-vet.js"
+    "bin/dep-vet.js",
+    "binaries"
   ],
   "engines": {
     "node": ">=18"
-  },
-  "optionalDependencies": {
-    "dep-vet-linux-x64": "0.13.0",
-    "dep-vet-linux-arm64": "0.13.0",
-    "dep-vet-darwin-x64": "0.13.0",
-    "dep-vet-darwin-arm64": "0.13.0",
-    "dep-vet-win32-x64": "0.13.0"
   }
 }

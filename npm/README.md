@@ -1,8 +1,7 @@
 # npm packaging
 
-The npm launcher has no install script and downloads nothing during install.
-Each platform binary is an optional dependency selected by npm's `os`/`cpu`
-fields.
+The package bundles every platform binary and selects one at runtime. It has no
+install script and downloads nothing during install.
 
 ## Build
 
@@ -16,7 +15,7 @@ fields.
      --pattern 'dep-vet-*.zip.sha256'
    ```
 
-2. Build and verify the packages:
+2. Build and verify the package:
 
    ```sh
    python3 scripts/build-npm-packages.py \
@@ -25,25 +24,18 @@ fields.
      --output dist-npm
    ```
 
-3. Test the launcher against the matching platform package:
+3. Test the launcher:
 
    ```sh
-   npm pack --pack-destination dist-npm npm/dep-vet
-   node npm/dep-vet/bin/dep-vet.js --version
+   node dist-npm/dep-vet/bin/dep-vet.js --version
+   node dist-npm/dep-vet/bin/dep-vet.js npm crossenv
    ```
 
 ## Publish
 
-Publish the platform packages first, then the launcher:
-
 ```sh
-for package in dist-npm/dep-vet-linux-x64 dist-npm/dep-vet-linux-arm64 \
-  dist-npm/dep-vet-darwin-x64 dist-npm/dep-vet-darwin-arm64 \
-  dist-npm/dep-vet-win32-x64; do
-  npm publish "$package" --access public
-done
 npm publish dist-npm/dep-vet --access public
 ```
 
-`NODE_AUTH_TOKEN` or `npm login` is required. Keep every package on the same
-version. Use npm provenance when publishing from CI.
+The package name is `@nassihyas/dep-vet`. `NODE_AUTH_TOKEN` or `npm login` is
+required. Use npm provenance when publishing from CI.

@@ -580,12 +580,11 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   refuses malformed JSON with exit 3 and no write. Writes are atomic
   (sibling temp file then rename). The settings `command` is a shell string; the
   binary path must be absolute and quoted when it has spaces.
-- **npm packaging has no install script.** `npm/dep-vet` selects a platform
-  binary through `optionalDependencies` with `os`/`cpu`; it never downloads at
-  install time. `scripts/build-npm-packages.py` verifies each release archive's
-  `.sha256`, extracts the binary, and packs platform packages before the
-  launcher. Publish platform packages first, then the launcher, all at one
-  version. `dist-npm/` is gitignored.
+- **npm packaging has no install script.** `npm/dep-vet` bundles all five
+  platform binaries and selects one at runtime; it never downloads at install
+  time and has no platform-package dependencies. `scripts/build-npm-packages.py`
+  verifies each release archive's `.sha256`, extracts the binaries, and packs
+  the scoped `@nassihyas/dep-vet` package. `dist-npm/` is gitignored.
 - **MCP lockfile diffs share the CLI implementation.** `diff_lockfile` is the one
   differential audit for `lock` and `vet_lockfile_change`; it covers npm and
   JSR, attaches dependency paths, includes skipped entries as errors, and keeps

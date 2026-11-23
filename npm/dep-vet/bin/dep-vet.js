@@ -1,23 +1,22 @@
 #!/usr/bin/env node
 "use strict";
 
-// No shell, no install-time download: the platform binary is an optional
-// dependency selected by npm's os/cpu fields.
+// No shell, no install-time download: every release binary is bundled and the
+// launcher picks the one for this platform.
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const packages = {
-  "linux-x64": "dep-vet-linux-x64",
-  "linux-arm64": "dep-vet-linux-arm64",
-  "darwin-x64": "dep-vet-darwin-x64",
-  "darwin-arm64": "dep-vet-darwin-arm64",
-  "win32-x64": "dep-vet-win32-x64",
-};
-
 const key = `${process.platform}-${process.arch}`;
-const packageName = packages[key];
-if (!packageName) {
+const supported = new Set([
+  "linux-x64",
+  "linux-arm64",
+  "darwin-x64",
+  "darwin-arm64",
+  "win32-x64",
+]);
+
+if (!supported.has(key)) {
   console.error(
     `dep-vet: unsupported platform ${process.platform}/${process.arch}. ` +
       "Install the binary from https://github.com/nassih-yassine/Dep-Vet/releases instead."
@@ -25,24 +24,16 @@ if (!packageName) {
   process.exit(3);
 }
 
-let binary;
-try {
-  const packageRoot = path.dirname(require.resolve(`${packageName}/package.json`));
-  binary = path.join(
-    packageRoot,
-    "bin",
-    process.platform === "win32" ? "dep-vet.exe" : "dep-vet"
-  );
-} catch {
-  console.error(
-    `dep-vet: the ${packageName} optional package was not installed. ` +
-      "Record the install method from https://github.com/nassih-yassine/Dep-Vet and retry."
-  );
-  process.exit(3);
-}
+const binary = path.join(
+  __dirname,
+  "..",
+  "binaries",
+  key,
+  process.platform === "win32" ? "dep-vet.exe" : "dep-vet"
+);
 
 if (!fs.existsSync(binary)) {
-  console.error(`dep-vet: missing binary at ${binary}; reinstall the package.`);
+  console.error(`dep-vet: missing bundled binary at ${binary}; reinstall the package.`);
   process.exit(3);
 }
 
