@@ -113,7 +113,7 @@ brew install nassih-yassine/tap/dep-vet
 
 ```sh
 docker run --rm -v "$PWD:/work" -w /work \
-  ghcr.io/nassih-yassine/dep-vet:v0.13.1 audit package-lock.json
+  ghcr.io/nassih-yassine/dep-vet:v0.13.2 audit package-lock.json
 ```
 
 The image is built for `linux/amd64` and `linux/arm64`, runs as a non-root user,
@@ -876,7 +876,7 @@ and emits a warning, never the report or dep-vet's exit code.
 
 `lockfile` and `base` are passed as quoted environment values, so paths with
 spaces and an explicit base revision work. The action installs the prebuilt
-binary for the `ref` input (default `v0.13.1`) and falls back to a source build
+binary for the `ref` input (default `v0.13.2`) and falls back to a source build
 when that ref has no release; a `vX.Y.Z` ref is installed with `--tag`, other
 refs with `--branch`. Pinning `uses:` alone does not pin the binary: set `ref`
 to the tag you reviewed.
