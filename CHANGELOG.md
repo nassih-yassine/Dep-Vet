@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Invisible characters and prompt-injection text are flagged.** `inspect` and
+  `diff` now read every extracted text file, not just code, and report zero-width
+  and bidi control characters (`TEXT-INVISIBLE-001`) plus phrases addressed to a
+  model rather than a person (`TEXT-INJECTION-001`). Both are WARN with medium
+  confidence, capped at five hits per archive, and can be disabled with
+  `disabled_rules`. This closes the gap where a readme could hide text from a
+  reviewer or instruct an agent reading the report.
+
 ## 0.13.5 — 2026-11-24
 
 - **Findable on npm.** The package now carries search keywords (`security`,
