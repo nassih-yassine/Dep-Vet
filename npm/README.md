@@ -11,7 +11,7 @@ Publishing runs in CI (`.github/workflows/npm-publish.yml`) with
 1. Download the release assets and checksums:
 
    ```sh
-   gh release download v0.13.5 --dir /tmp/dep-vet-assets \
+   gh release download v0.13.6 --dir /tmp/dep-vet-assets \
      --pattern 'dep-vet-*.tar.xz' \
      --pattern 'dep-vet-*.tar.xz.sha256' \
      --pattern 'dep-vet-*.zip' \
@@ -23,7 +23,7 @@ Publishing runs in CI (`.github/workflows/npm-publish.yml`) with
 
    ```sh
    python3 scripts/build-npm-packages.py \
-     --version 0.13.5 \
+     --version 0.13.6 \
      --assets /tmp/dep-vet-assets \
      --output dist-npm
    ```
@@ -44,7 +44,7 @@ CI publishes `@nassihyas/dep-vet`, normally right after the Release workflow.
 Dispatch it once npm has nothing to do with it:
 
 ```sh
-gh workflow run npm-publish.yml -f tag=v0.13.5
+gh workflow run npm-publish.yml -f tag=v0.13.6
 ```
 
 Trusted publishing (OIDC) is preferred and needs no secret: configure a trusted
