@@ -605,7 +605,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   packages install `/usr/bin/dep-vet` and documentation, and carry **no**
   maintainer scripts: an installer for a supply-chain tool must not run code of
   its own. `packaging/nfpm.yaml` reads `DEPVET_VERSION`/`DEPVET_ARCH`, so keep it
-  free of absolute paths and run it from a staging directory. AUR
+  free of absolute paths and run it from a staging directory. The packages are
+  attested by `actions/attest-build-provenance`, but the claim names
+  `refs/heads/main`: GitHub's OIDC token describes the dispatch ref, not the tag
+  the job checks out, so verification uses `--source-ref refs/heads/main`. AUR
   (`packaging/aur/PKGBUILD`, `dep-vet-bin`) is published by hand with the
   release checksums; `.SRCINFO` is generated, never edited.
 - **`update` is guidance, never a verdict or an installer.** `src/update.rs`
