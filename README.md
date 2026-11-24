@@ -8,13 +8,15 @@
 <img alt="ci" src="https://github.com/nassih-yassine/Dep-Vet/actions/workflows/ci.yml/badge.svg">
 <img alt="release" src="https://img.shields.io/github/v/release/nassih-yassine/Dep-Vet">
 <a href="https://crates.io/crates/dep-vet"><img alt="crates.io" src="https://img.shields.io/crates/v/dep-vet"></a>
+<a href="https://www.npmjs.com/package/@nassihyas/dep-vet"><img alt="npm" src="https://img.shields.io/npm/v/@nassihyas/dep-vet"></a>
+<a href="https://registry.modelcontextprotocol.io/v0.1/servers?search=dep-vet"><img alt="MCP Registry" src="https://img.shields.io/badge/MCP%20Registry-listed-success.svg"></a>
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
 <img alt="no runtime" src="https://img.shields.io/badge/runtime-none%20(linux%20musl%3A%20static)-success.svg">
 <img alt="no telemetry" src="https://img.shields.io/badge/telemetry-none-success.svg">
 <img alt="9 ecosystems" src="https://img.shields.io/badge/ecosystems-9-success.svg">
 </p>
 
-<code>dep-vet npm express@5.3.0</code><br>
+<code>npx @nassihyas/dep-vet npm express@5.3.0</code><br>
 <code>dep-vet pypi requests==2.31.0</code><br>
 <code>dep-vet audit package-lock.json</code><br>
 <code>dep-vet guard --check -- npm i express</code>
