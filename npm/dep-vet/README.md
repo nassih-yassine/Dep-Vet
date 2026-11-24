@@ -61,13 +61,13 @@ npm install --global @nassihyas/dep-vet
 ```
 
 Other channels: `cargo install dep-vet`, `brew install nassih-yassine/tap/dep-vet`,
-`docker run --rm -v "$PWD:/work" -w /work ghcr.io/nassih-yassine/dep-vet:v0.13.2`,
+`docker run --rm -v "$PWD:/work" -w /work ghcr.io/nassih-yassine/dep-vet:v0.13.3`,
 and prebuilt archives on the releases page.
 
 ## Verify what you downloaded
 
 ```sh
-dep-vet inspect npm @nassihyas/dep-vet@0.13.2
+dep-vet inspect npm @nassihyas/dep-vet@0.13.3
 ```
 
 GitHub release archives carry a `.sha256` sidecar and a SLSA attestation
