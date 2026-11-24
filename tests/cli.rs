@@ -459,6 +459,14 @@ fn guard_audits_named_packages() {
         .code(0)
         .stdout(predicate::str::contains("\"guard-clean\""))
         .stdout(predicate::str::contains("\"verdict\":\"info\""));
+    assert!(
+        registry
+            .requests()
+            .iter()
+            .all(|path| !path.starts_with("/v3alpha/")),
+        "guard must not spend its 8s budget on repository scores: {:?}",
+        registry.requests()
+    );
 }
 
 #[test]

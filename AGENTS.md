@@ -178,7 +178,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   applicable" and must render `n/a`, never 0. Parsing keeps only the five
   displayed checks. The 7-day TTL matches deps.dev's rebuild cadence.
   `DEPVET_SCORECARD_BASE` obeys `DEPVET_ALLOW_INSECURE_BASES`, and the hook test
-  seam points it at the mock so a child never reaches the real API.
+  seam points it at the mock so a child never reaches the real API. `guard`
+  skips the lookup on purpose: its 8-second budget belongs to the install
+  decision, and repository reputation is context.
 - **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
   uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
   they show as `not checked`. The `PackageSource` trait is still deferred: two

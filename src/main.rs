@@ -118,7 +118,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         };
     }
     let http = Arc::new(HttpClient::from_env(cli.no_cache));
-    let auditor = Auditor::new(&http);
+    let mut auditor = Auditor::new(&http);
     let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
 
     match &cli.command {
@@ -144,6 +144,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             if command.is_empty() {
                 anyhow::bail!("pass a command after `--`, or use --stdin");
             }
+            auditor.skip_scorecard();
             run_guard(&auditor, &allowlist, *check, *json, &command)
         }
 
@@ -488,7 +489,7 @@ struct Auditor {
     maven: MavenClient,
     composer: ComposerClient,
     osv: OsvClient,
-    scorecard: dep_vet::scorecard::ScorecardClient,
+    scorecard: Option<dep_vet::scorecard::ScorecardClient>,
 }
 
 impl Auditor {
@@ -504,16 +505,27 @@ impl Auditor {
             maven: MavenClient::from_env(Arc::clone(http)),
             composer: ComposerClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
-            scorecard: dep_vet::scorecard::ScorecardClient::from_env(Arc::clone(http)),
+            scorecard: Some(dep_vet::scorecard::ScorecardClient::from_env(Arc::clone(
+                http,
+            ))),
         }
     }
 
     /// Attach the OpenSSF Scorecard for the repository, when deps.dev has one.
     /// A miss stays `None`, which the report shows as not checked.
     fn attach_scorecard(&self, meta: &mut PackageMeta) {
+        let Some(client) = &self.scorecard else {
+            return;
+        };
         if let Some(repository) = meta.repository.as_deref() {
-            meta.scorecard = self.scorecard.lookup(repository);
+            meta.scorecard = client.lookup(repository);
         }
+    }
+
+    /// The hook budget is 8 seconds; repository reputation is context, not the
+    /// install decision, so `guard` does not spend that budget on it.
+    fn skip_scorecard(&mut self) {
+        self.scorecard = None;
     }
 
     fn audit_npm(
