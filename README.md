@@ -108,7 +108,9 @@ no install script and downloads nothing during install.
 **Homebrew**
 
 ```sh
-brew install nassih-yassine/tap/dep-vet
+brew tap nassih-yassine/tap
+brew trust nassih-yassine/tap   # newer Homebrew refuses untrusted taps
+brew install dep-vet
 ```
 
 **Windows — Scoop**
