@@ -109,6 +109,13 @@ no install script and downloads nothing during install.
 brew install nassih-yassine/tap/dep-vet
 ```
 
+**Windows — Scoop**
+
+```powershell
+scoop bucket add nassih-yassine https://github.com/nassih-yassine/scoop-bucket
+scoop install nassih-yassine/dep-vet
+```
+
 **Docker**
 
 ```sh
