@@ -1,0 +1,59 @@
+name: cargo publish
+
+on:
+  # A token-created release never starts workflows, so act on the Release run.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    # Required reviewers on this environment gate every publish.
+    environment: crates-io
+    env:
+      TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || inputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.TAG }}
+      - name: Validate the tag against Cargo.toml
+        id: tag
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::not a release tag: '$TAG'"
+            exit 1
+          fi
+          version="${TAG#v}"
+          crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "$version" != "$crate_version" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml $crate_version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Skip when crates.io already has this version
+        id: check
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          if curl --silent --fail --user-agent "dep-vet-release" \
+              "https://crates.io/api/v1/crates/dep-vet/$VERSION" > /dev/null; then
+            echo "::notice::crates.io already serves $VERSION; nothing to publish"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish
+        if: steps.check.outputs.needed == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
