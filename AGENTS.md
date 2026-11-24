@@ -335,6 +335,12 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   extension and decodes it lossily, so a trailing `0xFF` or NUL cannot hide
   code; only non-source files with NUL/invalid UTF-8 become binary. Findings
   sort by (file, line, rule) for reproducible output.
+  Two text rules run over **every** extracted text file, not only code:
+  `TEXT-INVISIBLE-001` (zero-width and bidi controls, with the code point) and
+  `TEXT-INJECTION-001` (phrases aimed at a model). Both are WARN with medium
+  confidence, capped at five hits per archive, and appear in `TEXT_RULES` so
+  `disabled_rules` accepts them. Keep the phrase list narrow: a false positive
+  reads as an accusation. Do not raise either to HIGH; they are heuristics.
   `diff` compares two extracted releases by content: added/removed/modified
   paths, findings matched by (rule, file) because line numbers shift, and a
   `DIFF-NEW-SCRIPT-001` WARN for added shell/shebang files, and
