@@ -90,6 +90,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/composer.rs` | Packagist p2 versions, maintainers, abandoned flag |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping, EPSS/KEV enrichment |
 | `src/exploit.rs` | EPSS and CISA KEV parsing, CVE extraction, the two feeds' client |
+| `src/scorecard.rs` | deps.dev project lookup, repository URL → project key, displayed checks |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
 | `src/archive/` | bounded in-memory tar.gz/zip/gem extraction, caps and skipped-path reasons |
@@ -169,6 +170,17 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `DEPVET_ALLOW_INSECURE_BASES`, and the `guard` hook strips them like every
   other override. `tests/cli.rs` answers empty EPSS/KEV documents by default;
   override the exact path to test a failure.
+- **Scorecard is repository context, never a verdict.** `main` looks it up after
+  metadata is fetched, only for GitHub, GitLab, and Bitbucket repositories;
+  a miss, 404, malformed answer, or network failure is `not checked`, never a
+  clean score. `low-scorecard` is INFO and fires only below 5.0 **and** when a
+  publisher finding exists in the same report. `-1` is Scorecard's "not
+  applicable" and must render `n/a`, never 0. Parsing keeps only the five
+  displayed checks. The 7-day TTL matches deps.dev's rebuild cadence.
+  `DEPVET_SCORECARD_BASE` obeys `DEPVET_ALLOW_INSECURE_BASES`, and the hook test
+  seam points it at the mock so a child never reaches the real API. `guard`
+  skips the lookup on purpose: its 8-second budget belongs to the install
+  decision, and repository reputation is context.
 - **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
   uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
   they show as `not checked`. The `PackageSource` trait is still deferred: two

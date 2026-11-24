@@ -201,6 +201,8 @@ fn parse_metadata(
         attestation: None,
         registry_url: url.to_string(),
         review_url: None,
+
+        scorecard: None,
     })
 }
 

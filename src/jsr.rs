@@ -180,6 +180,8 @@ fn parse_package(
             recent_releases,
             ..crate::registry::ReleaseHistory::default()
         },
+
+        scorecard: None,
     })
 }
 

@@ -236,6 +236,8 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
             recent_releases,
             ..crate::registry::ReleaseHistory::default()
         },
+
+        scorecard: None,
     })
 }
 

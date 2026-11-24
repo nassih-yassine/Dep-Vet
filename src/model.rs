@@ -448,6 +448,8 @@ pub struct Profile {
     pub freshness: bool,
     /// Whether the registry exposes dependency history for a release.
     pub dependencies: bool,
+    /// Whether a source repository can be looked up for an OpenSSF Scorecard.
+    pub scorecard: bool,
 }
 
 impl Profile {
@@ -461,6 +463,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: true,
+        scorecard: true,
     };
 
     /// PyPI exposes no maintainer set or download figure through its JSON API
@@ -475,6 +478,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: true,
+        scorecard: true,
     };
 
     /// crates.io does not expose `build.rs` in its metadata and reports
@@ -489,6 +493,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: true,
+        scorecard: true,
     };
 
     /// Go modules carry no install hooks, owner list, download figure, or
@@ -503,6 +508,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: false,
+        scorecard: false,
     };
 
     /// JSR exposes no owner list, download figure, execution surface, or OSV
@@ -517,6 +523,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: false,
+        scorecard: true,
     };
 
     /// RubyGems exposes no owner list, weekly downloads, or install-time file
@@ -531,6 +538,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: false,
+        scorecard: true,
     };
 
     /// NuGet exposes no owner list, download figure, repository, or build-time
@@ -545,6 +553,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: true,
+        scorecard: false,
     };
 
     /// Maven Central exposes no owners, download figure, source repository, or
@@ -559,6 +568,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: false,
+        scorecard: false,
     };
 
     /// Packagist exposes maintainers, repository metadata, and an abandoned
@@ -573,6 +583,7 @@ impl Profile {
         typosquat: true,
         freshness: true,
         dependencies: true,
+        scorecard: true,
     };
 
     pub fn not_checked(&self) -> Vec<&'static str> {
@@ -603,6 +614,9 @@ impl Profile {
         }
         if !self.dependencies {
             missing.push("dependency history");
+        }
+        if !self.scorecard {
+            missing.push("scorecard");
         }
         missing
     }
@@ -727,6 +741,10 @@ pub struct PackageReport {
     /// The SLSA predicate's claims, when published. Not verified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attestation: Option<AttestationClaims>,
+    /// OpenSSF Scorecard, when deps.dev knows the repository. Absent means
+    /// not checked, never a clean score.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scorecard: Option<crate::scorecard::Scorecard>,
     pub advisories: Vec<Advisory>,
     /// Advisories skipped after the per-run cap.
     pub hidden_advisories: usize,
@@ -825,6 +843,7 @@ impl Finding {
             | "maintainer-check-unavailable"
             | "attestation-source-mismatch"
             | "advisories-stale"
+            | "low-scorecard"
             | "no-repository" => Confidence::Medium,
             _ => Confidence::Medium,
         }
@@ -1273,6 +1292,7 @@ mod tests {
             upgrades: Vec::new(),
             dependency_paths: Vec::new(),
             findings,
+            scorecard: None,
         }
     }
 

@@ -263,6 +263,8 @@ fn parse_crate(
             recent_publishers: publishers,
             ..crate::registry::ReleaseHistory::default()
         },
+
+        scorecard: None,
     })
 }
 

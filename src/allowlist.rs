@@ -20,6 +20,7 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "advisory-coverage-partial",
     "known-exploited",
     "threat-data-unavailable",
+    "low-scorecard",
     "install-scripts",
     "build-from-source",
     "typosquat",
@@ -376,6 +377,7 @@ mod tests {
             upgrades: Vec::new(),
             dependency_paths: Vec::new(),
             findings,
+            scorecard: None,
         }
     }
 

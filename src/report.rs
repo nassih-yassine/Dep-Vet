@@ -101,6 +101,37 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
     if let Some(repository) = &report.repository {
         push_field(&mut out, "repository", repository);
     }
+    if let Some(scorecard) = &report.scorecard {
+        let date: String = scorecard.date.chars().take(10).collect();
+        push_field(
+            &mut out,
+            "scorecard",
+            &format!(
+                "{:.1}/10 (OpenSSF, {})",
+                scorecard.overall,
+                if date.is_empty() {
+                    "date unknown"
+                } else {
+                    &date
+                }
+            ),
+        );
+        if !scorecard.checks.is_empty() {
+            let checks = scorecard
+                .checks
+                .iter()
+                .map(|check| {
+                    if check.score < 0 {
+                        format!("{} n/a", check.name)
+                    } else {
+                        format!("{} {}", check.name, check.score)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            push_field(&mut out, "scorecard checks", &checks);
+        }
+    }
     // A direct dependency needs no path; its header already names it.
     if let Some(path) = report.dependency_paths.iter().find(|path| path.len() > 1) {
         push_field(&mut out, "via", &path.join(" > "));
@@ -845,6 +876,7 @@ mod tests {
             upgrades: Vec::new(),
             dependency_paths: Vec::new(),
             findings,
+            scorecard: None,
         }
     }
 

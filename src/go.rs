@@ -212,6 +212,8 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
             recent_releases,
             ..crate::registry::ReleaseHistory::default()
         },
+
+        scorecard: None,
     })
 }
 
