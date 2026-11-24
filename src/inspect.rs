@@ -648,6 +648,8 @@ mod tests {
             url: format!("https://osv.dev/vulnerability/{id}"),
             fixed_versions: Vec::new(),
             details_missing: false,
+            epss: None,
+            kev: None,
         }
     }
 

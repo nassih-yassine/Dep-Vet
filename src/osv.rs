@@ -31,7 +31,7 @@ const MAX_CONCURRENT_FETCHES: usize = 8;
 
 /// What one query produced: the advisories we could read, and how many were
 /// skipped once the cap was reached.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AdvisoryList {
     pub advisories: Vec<Advisory>,
     pub hidden: usize,
@@ -40,7 +40,7 @@ pub struct AdvisoryList {
     pub stale_seconds: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Advisory {
     pub id: String,
     pub summary: String,
@@ -55,6 +55,12 @@ pub struct Advisory {
     /// is unknown rather than absent.
     #[serde(skip)]
     pub details_missing: bool,
+    /// EPSS probability for the CVE behind this advisory, when one exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epss: Option<crate::exploit::EpssScore>,
+    /// CISA KEV record for the CVE behind this advisory, when listed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kev: Option<crate::exploit::KevEntry>,
 }
 
 impl Advisory {
@@ -71,6 +77,8 @@ impl Advisory {
             aliases: Vec::new(),
             url: format!("{OSV_VULN_URL}/{id}"),
             fixed_versions: Vec::new(),
+            epss: None,
+            kev: None,
             details_missing: true,
         }
     }
@@ -391,6 +399,8 @@ fn merge_group(mut group: Vec<Advisory>) -> Advisory {
         aliases,
         url: group[0].url.clone(),
         fixed_versions,
+        epss: None,
+        kev: None,
         details_missing: group.iter().any(|advisory| advisory.details_missing),
     }
 }
@@ -421,6 +431,8 @@ fn parse_advisory(body: &str, ecosystem: Ecosystem, name: &str) -> Result<Adviso
         aliases: vuln.aliases,
         id: vuln.id,
         details_missing: false,
+        epss: None,
+        kev: None,
     })
 }
 
@@ -785,6 +797,8 @@ mod tests {
             url: format!("https://osv.dev/vulnerability/{id}"),
             fixed_versions: Vec::new(),
             details_missing: false,
+            epss: None,
+            kev: None,
         }
     }
 
