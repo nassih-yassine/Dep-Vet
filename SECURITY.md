@@ -109,6 +109,7 @@ can run yourself, and each proves something narrower than "this is safe".
 | npm | registry tarball digest | npm provenance (published with `--provenance`) |
 | Docker | image digest | cosign keyless signature, plus SBOM and provenance attestations |
 | crates.io | `.crate` checksum from the registry index | none: crates.io does not sign artifacts |
+| `.deb`, `.rpm`, `.apk`, pacman | package contents, built in CI from the attested musl archives | none: the packages are not GPG-signed |
 
 GitHub release archives:
 
@@ -137,6 +138,12 @@ cosign verify "ghcr.io/nassih-yassine/dep-vet@sha256:<digest>" \
 
 Build provenance and SBOM attestations are attached to the same digest
 (`docker buildx imagetools inspect` lists them).
+
+Linux packages are built by `packaging.yml` from the same two attestation-verified
+musl archives, and they contain no maintainer scripts, so installing one runs no
+code before the binary starts. The packages themselves carry no signature; if you
+need a signed channel, use the GitHub release archives with `gh attestation
+verify`, or AUR, which checks the published checksums.
 
 An attestation says which workflow and commit produced the artifact. It does not
 say the code is free of bugs, and a valid signature is never described as trust.

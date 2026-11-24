@@ -1,0 +1,29 @@
+# Maintainer: nassih-yassine <https://github.com/nassih-yassine>
+pkgname=dep-vet-bin
+pkgver=0.13.3
+pkgrel=1
+pkgdesc="Check a dependency's risk before it enters your lockfile"
+arch=('x86_64' 'aarch64')
+url="https://github.com/nassih-yassine/Dep-Vet"
+license=('MIT')
+provides=('dep-vet')
+conflicts=('dep-vet')
+options=('!strip' '!debug')
+source_x86_64=("${url}/releases/download/v${pkgver}/dep-vet-x86_64-unknown-linux-musl.tar.xz")
+source_aarch64=("${url}/releases/download/v${pkgver}/dep-vet-aarch64-unknown-linux-musl.tar.xz")
+sha256sums_x86_64=('450d880cb481106f2ac45627683bdb70b07055982e31c0f480161841454ee478')
+sha256sums_aarch64=('b167eb193cf5434e662f605336e952489287399319e6b72e8ae2f585040f986d')
+
+package() {
+  local target
+  case "$CARCH" in
+    x86_64) target="x86_64-unknown-linux-musl" ;;
+    aarch64) target="aarch64-unknown-linux-musl" ;;
+    *) return 1 ;;
+  esac
+
+  install -Dm755 "${srcdir}/dep-vet-${target}/dep-vet" "${pkgdir}/usr/bin/dep-vet"
+  install -Dm644 "${srcdir}/dep-vet-${target}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 "${srcdir}/dep-vet-${target}/README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+  install -Dm644 "${srcdir}/dep-vet-${target}/CHANGELOG.md" "${pkgdir}/usr/share/doc/${pkgname}/CHANGELOG.md"
+}

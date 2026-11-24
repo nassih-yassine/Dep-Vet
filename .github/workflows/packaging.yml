@@ -1,0 +1,135 @@
+name: Linux packages
+
+on:
+  # A token-created release never starts workflows, so act on the Release run.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to package (vX.Y.Z)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  NFPM_VERSION: v2.49.0
+  NFPM_SHA256: 2afaa5ffb5e3493402e31e7c67a5a1fb42133e3f66fc315ca0051934125561c7
+
+jobs:
+  packages:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Validate the tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-$RELEASE_TAG}"
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::only stable tags are packaged: '$tag'"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Download and verify the static binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release download "$TAG" --dir assets \
+            --pattern 'dep-vet-*-unknown-linux-musl.tar.xz' \
+            --pattern 'dep-vet-*-unknown-linux-musl.tar.xz.sha256'
+          cd assets
+          sha256sum -c ./*.sha256
+          for archive in ./*.tar.xz; do
+            gh attestation verify "$archive" \
+              --repo "${{ github.repository }}" \
+              --signer-workflow "${{ github.repository }}/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG"
+          done
+      - name: Install nfpm
+        run: |
+          curl --fail --location --silent --show-error \
+            --output nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/$NFPM_VERSION/nfpm_${NFPM_VERSION#v}_Linux_x86_64.tar.gz"
+          echo "$NFPM_SHA256  nfpm.tar.gz" | sha256sum -c -
+          tar xzf nfpm.tar.gz nfpm
+      - name: Build deb, rpm, apk and pacman packages
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          mkdir -p dist-pkg
+          for pair in "x86_64:amd64" "aarch64:arm64"; do
+            target="${pair%%:*}"
+            arch="${pair##*:}"
+            stage="stage-$arch"
+            rm -rf "$stage"
+            mkdir -p "$stage"
+            tar -xJf "assets/dep-vet-$target-unknown-linux-musl.tar.xz" -C "$stage" --strip-components=1
+            ( cd "$stage" && DEPVET_VERSION="$VERSION" DEPVET_ARCH="$arch" \
+                ../nfpm package --config ../packaging/nfpm.yaml --packager deb --target ../dist-pkg )
+            ( cd "$stage" && DEPVET_VERSION="$VERSION" DEPVET_ARCH="$arch" \
+                ../nfpm package --config ../packaging/nfpm.yaml --packager rpm --target ../dist-pkg )
+            ( cd "$stage" && DEPVET_VERSION="$VERSION" DEPVET_ARCH="$arch" \
+                ../nfpm package --config ../packaging/nfpm.yaml --packager apk --target ../dist-pkg )
+            ( cd "$stage" && DEPVET_VERSION="$VERSION" DEPVET_ARCH="$arch" \
+                ../nfpm package --config ../packaging/nfpm.yaml --packager archlinux --target ../dist-pkg )
+          done
+          ls -l dist-pkg
+      - name: Inspect the packages
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -eu
+          shopt -s nullglob
+          debs=(dist-pkg/*.deb)
+          rpms=(dist-pkg/*.rpm)
+          apks=(dist-pkg/*.apk)
+          arch=(dist-pkg/*.pkg.tar.zst)
+          [ "${#debs[@]}" -eq 2 ] && [ "${#rpms[@]}" -eq 2 ] && \
+            [ "${#apks[@]}" -eq 2 ] && [ "${#arch[@]}" -eq 2 ] || {
+            echo "::error::expected two packages per format"; exit 1; }
+          for deb in "${debs[@]}"; do
+            dpkg-deb --info "$deb" | grep -qx "Package: dep-vet"
+            dpkg-deb --info "$deb" | grep -qx "Version: ${VERSION}-1"
+            # No maintainer scripts: an installer for a supply-chain tool must
+            # not run code of its own.
+            if dpkg-deb --ctrl-tarfile "$deb" | tar -t | grep -Eq '(pre|post)(inst|rm)|^(\./)?(config|triggers)$'; then
+              echo "::error::$deb carries a maintainer script"
+              exit 1
+            fi
+            dpkg-deb --contents "$deb" | grep -q '/usr/bin/dep-vet$'
+          done
+          for rpm in "${rpms[@]}"; do
+            bsdtar -tf "$rpm" 2>/dev/null | grep -q '/usr/bin/dep-vet$' || \
+              { echo "::error::$rpm lacks the binary"; exit 1; }
+          done
+          for apk in "${apks[@]}"; do
+            bsdtar -tf "$apk" | grep -q '^usr/bin/dep-vet$'
+          done
+          for pkg in "${arch[@]}"; do
+            bsdtar -tf "$pkg" | grep -q '^usr/bin/dep-vet$'
+          done
+      - name: Smoke test the amd64 package
+        run: |
+          set -eu
+          deb=$(ls dist-pkg/*amd64.deb)
+          mkdir -p smoke
+          dpkg-deb -x "$deb" smoke
+          version="$(smoke/usr/bin/dep-vet --version)"
+          case "$version" in
+            *"dep-vet 0.13"*) echo "$version" ;;
+            *) echo "::error::unexpected version '$version'"; exit 1 ;;
+          esac
+      - name: Attach the packages to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: gh release upload "$TAG" dist-pkg/*.deb dist-pkg/*.rpm dist-pkg/*.apk dist-pkg/*.pkg.tar.zst --clobber

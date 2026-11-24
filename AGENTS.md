@@ -598,6 +598,16 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `GITHUB_OUTPUT`. The job smoke tests the published image (`--version`, and
   exit 2 for a HIGH finding), so a broken image fails the workflow instead of
   the user.
+- **Linux packages come from the attested musl archives.** `.github/workflows/packaging.yml`
+  triggers on `workflow_run` of `Release` and rebuilds `.deb`, `.rpm`, `.apk`, and
+  pacman packages with a checksum-pinned nfpm, then uploads them with
+  `gh release upload --clobber`. Only stable `vX.Y.Z` tags are packaged. The
+  packages install `/usr/bin/dep-vet` and documentation, and carry **no**
+  maintainer scripts: an installer for a supply-chain tool must not run code of
+  its own. `packaging/nfpm.yaml` reads `DEPVET_VERSION`/`DEPVET_ARCH`, so keep it
+  free of absolute paths and run it from a staging directory. AUR
+  (`packaging/aur/PKGBUILD`, `dep-vet-bin`) is published by hand with the
+  release checksums; `.SRCINFO` is generated, never edited.
 - **The MCP Registry listing is `io.github.nassih-yassine/dep-vet`.** The
   registry verifies npm ownership through `mcpName` in the published
   `package.json`, so a new version must be on npm before publishing, and
