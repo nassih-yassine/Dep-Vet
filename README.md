@@ -127,6 +127,28 @@ scoop install nassih-yassine/dep-vet
 A bucket add is only needed until the manifest is accepted into the default
 `Extras` bucket, after which `scoop install dep-vet` works on its own.
 
+**Arch Linux — AUR**
+
+```sh
+yay -S dep-vet-bin        # or another AUR helper; installs the static binary
+```
+
+**Debian, Fedora, Alpine — release packages**
+
+Every release carries `.deb`, `.rpm`, `.apk`, and pacman (`pkg.tar.zst`) packages
+for amd64 and arm64, built from the static musl binary:
+
+```sh
+sudo apt install ./dep-vet_VERSION_amd64.deb
+sudo dnf install ./dep-vet-VERSION-1.x86_64.rpm
+sudo apk add --allow-untrusted ./dep-vet_VERSION-r1_x86_64.apk
+sudo pacman -U ./dep-vet-VERSION-1-x86_64.pkg.tar.zst
+```
+
+These install a single binary and carry no maintainer scripts. They are not a
+distro repository yet, so `apt install dep-vet` by name needs a repo; download
+the asset from the releases page instead.
+
 **Docker**
 
 ```sh

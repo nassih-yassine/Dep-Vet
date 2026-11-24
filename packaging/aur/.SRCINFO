@@ -1,0 +1,18 @@
+pkgbase = dep-vet-bin
+	pkgdesc = Check a dependency's risk before it enters your lockfile
+	pkgver = 0.13.3
+	pkgrel = 1
+	url = https://github.com/nassih-yassine/Dep-Vet
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	provides = dep-vet
+	conflicts = dep-vet
+	options = !strip
+	options = !debug
+	source_x86_64 = https://github.com/nassih-yassine/Dep-Vet/releases/download/v0.13.3/dep-vet-x86_64-unknown-linux-musl.tar.xz
+	sha256sums_x86_64 = 450d880cb481106f2ac45627683bdb70b07055982e31c0f480161841454ee478
+	source_aarch64 = https://github.com/nassih-yassine/Dep-Vet/releases/download/v0.13.3/dep-vet-aarch64-unknown-linux-musl.tar.xz
+	sha256sums_aarch64 = b167eb193cf5434e662f605336e952489287399319e6b72e8ae2f585040f986d
+
+pkgname = dep-vet-bin

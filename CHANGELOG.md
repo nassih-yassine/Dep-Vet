@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Linux packages.** Every release now carries `.deb`, `.rpm`, `.apk`, and
+  pacman packages for amd64 and arm64, built with nfpm from the attested musl
+  binaries. They install one binary and contain no maintainer scripts.
+- **AUR package.** `packaging/aur/PKGBUILD` builds `dep-vet-bin` from the same
+  static binaries, so Arch users install without a Rust toolchain.
+
 ## 0.13.3 — 2026-11-24
 
 - **npm publishes with provenance from CI.** `.github/workflows/npm-publish.yml`

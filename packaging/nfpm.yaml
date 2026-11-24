@@ -1,0 +1,30 @@
+name: dep-vet
+arch: ${DEPVET_ARCH}
+platform: linux
+version: ${DEPVET_VERSION}
+version_schema: semver
+release: "1"
+section: utils
+priority: optional
+maintainer: nassih-yassine <https://github.com/nassih-yassine>
+vendor: dep-vet
+homepage: https://github.com/nassih-yassine/Dep-Vet
+license: MIT
+description: |
+  Check a dependency's risk before it enters your lockfile.
+  Audits npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven and Composer for
+  advisories, typosquats, install scripts, publisher changes, provenance and
+  release history. It never executes package code.
+contents:
+  - src: ./dep-vet
+    dst: /usr/bin/dep-vet
+    file_info:
+      mode: 0755
+  - src: ./LICENSE
+    dst: /usr/share/doc/dep-vet/copyright
+  - src: ./README.md
+    dst: /usr/share/doc/dep-vet/README.md
+  - src: ./CHANGELOG.md
+    dst: /usr/share/doc/dep-vet/CHANGELOG.md
+# No pre/post-install scripts on purpose: the binary is self-contained and the
+# tool exists to stop install-time code from running.
