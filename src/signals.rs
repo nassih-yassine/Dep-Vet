@@ -61,6 +61,9 @@ pub fn report(
             if list.hidden > 0 {
                 findings.push(advisories_hidden(list.hidden));
             }
+            if let Some(error) = &list.threat_error {
+                findings.push(threat_data_unavailable(error));
+            }
             if let Some(age) = list.stale_seconds {
                 findings.push(Finding {
                     id: "advisories-stale",
@@ -274,33 +277,127 @@ pub fn is_automation_publisher(publisher: &str) -> bool {
     normalized.ends_with("[bot]") || AUTOMATION_PUBLISHERS.contains(&normalized.as_str())
 }
 
-/// One finding per advisory, each linking to its OSV record.
+/// One finding per advisory, each linking to its OSV record. An advisory the
+/// CISA KEV catalog lists also gets its own WARN finding; EPSS stays context
+/// and never changes a severity.
 pub fn advisory_findings(advisories: &[Advisory]) -> Vec<Finding> {
-    advisories
-        .iter()
-        .map(|advisory| {
-            let mut evidence = vec![Evidence {
-                label: "advisory".to_string(),
-                value: advisory.id.clone(),
-                url: Some(advisory.url.clone()),
-            }];
-            if !advisory.aliases.is_empty() {
-                evidence.push(Evidence {
-                    label: "also known as".to_string(),
-                    value: advisory.aliases.join(", "),
-                    url: None,
-                });
+    let mut findings = Vec::new();
+    for advisory in advisories {
+        let mut evidence = vec![Evidence {
+            label: "advisory".to_string(),
+            value: advisory.id.clone(),
+            url: Some(advisory.url.clone()),
+        }];
+        if !advisory.aliases.is_empty() {
+            evidence.push(Evidence {
+                label: "also known as".to_string(),
+                value: advisory.aliases.join(", "),
+                url: None,
+            });
+        }
+        if let Some(score) = &advisory.epss {
+            evidence.push(epss_evidence(score));
+        }
+        if let Some(kev) = &advisory.kev {
+            evidence.push(kev_evidence(kev));
+        }
+        findings.push(Finding {
+            id: "advisory",
+            severity: advisory.severity,
+            title: advisory.display_title(),
+            detail: advisory.summary.clone(),
+            allowed: false,
+            evidence,
+        });
+
+        if let Some(kev) = &advisory.kev {
+            let mut detail = format!(
+                "CISA lists {} as exploited in the wild (added {}; {} {}",
+                kev.cve, kev.date_added, kev.vendor, kev.product
+            );
+            detail.push_str(if kev.ransomware {
+                "; known ransomware use)"
+            } else {
+                ")"
+            });
+            detail.push('.');
+            match &advisory.epss {
+                Some(score) => detail.push_str(&format!(
+                    " EPSS {:.3} ({}th percentile).",
+                    score.epss,
+                    percentile(score)
+                )),
+                None => detail.push_str(" EPSS score unavailable."),
             }
-            Finding {
-                id: "advisory",
-                severity: advisory.severity,
-                title: advisory.display_title(),
-                detail: advisory.summary.clone(),
+            findings.push(Finding {
+                id: "known-exploited",
+                severity: Severity::Warn,
+                title: format!("{} is exploited in the wild", kev.cve),
+                detail,
                 allowed: false,
-                evidence,
+                evidence: vec![
+                    kev_evidence(kev),
+                    Evidence {
+                        label: "advisory".to_string(),
+                        value: advisory.id.clone(),
+                        url: Some(advisory.url.clone()),
+                    },
+                ],
+            });
+        }
+    }
+    findings
+}
+
+fn percentile(score: &crate::exploit::EpssScore) -> i64 {
+    (score.percentile * 100.0).round() as i64
+}
+
+fn epss_evidence(score: &crate::exploit::EpssScore) -> Evidence {
+    Evidence {
+        label: "EPSS".to_string(),
+        value: format!("{:.3} ({}th percentile)", score.epss, percentile(score)),
+        url: Some(format!(
+            "https://api.first.org/data/v1/epss?cve={}",
+            score.cve
+        )),
+    }
+}
+
+fn kev_evidence(kev: &crate::exploit::KevEntry) -> Evidence {
+    Evidence {
+        label: "exploited".to_string(),
+        value: format!(
+            "CISA KEV, added {}{}",
+            kev.date_added,
+            if kev.ransomware {
+                ", known ransomware use"
+            } else {
+                ""
             }
-        })
-        .collect()
+        ),
+        url: Some(format!(
+            "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext={}",
+            kev.cve
+        )),
+    }
+}
+
+fn threat_data_unavailable(error: &str) -> Finding {
+    Finding {
+        id: "threat-data-unavailable",
+        severity: Severity::Info,
+        title: "exploit data unavailable".to_string(),
+        detail: format!(
+            "{error}; the advisories are still reported, but exploit data is incomplete"
+        ),
+        allowed: false,
+        evidence: vec![Evidence {
+            label: "CISA KEV catalog".to_string(),
+            value: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog".to_string(),
+            url: Some("https://www.cisa.gov/known-exploited-vulnerabilities-catalog".to_string()),
+        }],
+    }
 }
 
 fn advisory_coverage_missing(ecosystem: Ecosystem) -> Finding {
@@ -979,6 +1076,7 @@ pub fn assess(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Confidence;
     use crate::model::InstallScript;
     use crate::osv::{Advisory, AdvisoryList};
 
@@ -1054,6 +1152,7 @@ mod tests {
             advisories: vec![fixed_advisory("GHSA-a", &["1.2.3", "2.0.1"])],
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         };
 
         let report = advice_report(meta, Some(&list));
@@ -1075,6 +1174,7 @@ mod tests {
             advisories: vec![fixed_advisory("GHSA-a", &[])],
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         };
 
         let report = advice_report(meta, Some(&list));
@@ -1100,6 +1200,7 @@ mod tests {
             }],
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         };
 
         let report = advice_report(meta(), Some(&list));
@@ -1127,6 +1228,7 @@ mod tests {
             ],
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         };
 
         let report = advice_report(meta(), Some(&list));
@@ -1144,6 +1246,7 @@ mod tests {
             advisories: vec![fixed_advisory("GHSA-a", &["2.0.0"])],
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         };
 
         let report = advice_report(meta, Some(&list));
@@ -1623,6 +1726,7 @@ mod tests {
             advisories: vec![fixed_advisory("GHSA-a", &["2.0.0"])],
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         };
 
         let report = advice_report(meta, Some(&list));
@@ -2160,6 +2264,7 @@ mod tests {
             advisories,
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         }
     }
 
@@ -2213,6 +2318,7 @@ mod tests {
             advisories: vec![advisory("GHSA-eeee", Severity::Warn)],
             hidden: 15,
             stale_seconds: None,
+            threat_error: None,
         };
         let report = report(
             meta(),
@@ -2255,6 +2361,92 @@ mod tests {
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].id, "advisory-check-unavailable");
         assert_eq!(report.findings[0].severity, Severity::Info);
+    }
+
+    #[test]
+    fn a_kev_listing_is_its_own_warning() {
+        let mut item = advisory("GHSA-aaaa", Severity::High);
+        item.epss = Some(crate::exploit::EpssScore {
+            cve: "CVE-2000-0001".to_string(),
+            epss: 0.42,
+            percentile: 0.94,
+        });
+        item.kev = Some(crate::exploit::KevEntry {
+            cve: "CVE-2000-0001".to_string(),
+            date_added: "2024-03-01".to_string(),
+            ransomware: true,
+            vendor: "Acme".to_string(),
+            product: "Widget".to_string(),
+        });
+        let findings = advisory_findings(&[item]);
+        let exploited = findings
+            .iter()
+            .find(|finding| finding.id == "known-exploited")
+            .expect("KEV listing must produce a finding");
+        assert_eq!(exploited.severity, Severity::Warn);
+        assert_eq!(exploited.confidence(), Confidence::High);
+        assert!(exploited.detail.contains("0.420"));
+        assert!(exploited.detail.contains("94th percentile"));
+        assert!(exploited.detail.contains("ransomware"));
+        assert!(
+            exploited
+                .evidence
+                .iter()
+                .any(|evidence| evidence.url.as_deref()
+                    == Some("https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=CVE-2000-0001"))
+        );
+        let advisory_finding = findings
+            .iter()
+            .find(|finding| finding.id == "advisory")
+            .expect("the advisory stays WARN-or-higher on its own");
+        assert_eq!(advisory_finding.severity, Severity::High);
+        assert!(
+            advisory_finding
+                .evidence
+                .iter()
+                .any(|evidence| evidence.label == "EPSS")
+        );
+    }
+
+    #[test]
+    fn epss_alone_never_escalates_an_advisory() {
+        let mut item = advisory("GHSA-bbbb", Severity::Info);
+        item.epss = Some(crate::exploit::EpssScore {
+            cve: "CVE-2000-0001".to_string(),
+            epss: 0.97,
+            percentile: 0.99,
+        });
+        let findings = advisory_findings(&[item]);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| finding.id == "known-exploited")
+        );
+    }
+
+    #[test]
+    fn failed_exploit_lookup_is_info_and_does_not_fail_the_run() {
+        let mut advisories = list(vec![advisory("GHSA-cccc", Severity::High)]);
+        advisories.threat_error = Some("CISA KEV: boom".to_string());
+        let report = report(
+            meta(),
+            Ecosystem::Npm,
+            None,
+            Some(&advisories),
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert_eq!(report.exit_code(), 2, "the advisory still decides the exit");
+        let note = report
+            .findings
+            .iter()
+            .find(|finding| finding.id == "threat-data-unavailable")
+            .expect("a failed lookup must be disclosed");
+        assert_eq!(note.severity, Severity::Info);
+        assert!(note.detail.contains("CISA KEV: boom"));
     }
 
     #[test]

@@ -161,10 +161,18 @@ impl MockRegistry {
                     body,
                     headers,
                 });
-                let (status, body) = routes
-                    .get(&path)
-                    .cloned()
-                    .unwrap_or_else(|| (404, b"{\"error\":\"Not found\"}".to_vec()));
+                let (status, body) = routes.get(&path).cloned().unwrap_or_else(|| {
+                    // Exploit feeds are optional enrichment: tests that never
+                    // mention them still get a clean, empty answer. A test that
+                    // cares about a failure overrides the exact path.
+                    if path.starts_with("/data/v1/epss") {
+                        (200, br#"{"data":[]}"#.to_vec())
+                    } else if path == "/kev.json" {
+                        (200, br#"{"vulnerabilities":[]}"#.to_vec())
+                    } else {
+                        (404, b"{\"error\":\"Not found\"}".to_vec())
+                    }
+                });
                 let reason = if status == 200 { "OK" } else { "Not Found" };
                 let retry_after = if status == 429 {
                     "Retry-After: 0\r\n"
@@ -205,6 +213,8 @@ impl MockRegistry {
             .env("DEPVET_COMPOSER_BASE", &self.base)
             .env("DEPVET_PACKAGIST_BASE", &self.base)
             .env("DEPVET_GO_BASE", &self.base)
+            .env("DEPVET_EPSS_BASE", &self.base)
+            .env("DEPVET_KEV_BASE", format!("{}/kev.json", self.base))
             .env("DEPVET_NO_CACHE", "1")
             .env("DEPVET_HOOK_TEST_BASE", &self.base)
             .env("NO_COLOR", "1");
@@ -2693,6 +2703,86 @@ fn a_high_advisory_sets_the_verdict() {
         .stdout(predicate::str::contains(
             "https://osv.dev/vulnerability/GHSA-test-0001",
         ));
+}
+
+#[test]
+fn a_kev_listing_is_reported_as_exploited() {
+    let package = PackageFixture::clean("advised-pkg");
+    let mut routes = HashMap::new();
+    routes.insert(package.route(), (200, package.to_json()));
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, HIGH_ADVISORY.to_string()),
+    );
+    routes.insert(
+        "/v1/vulns/GHSA-test-0001".to_string(),
+        (200, HIGH_ADVISORY_DETAIL.to_string()),
+    );
+    routes.insert(
+        "/data/v1/epss?cve=CVE-2026-0001".to_string(),
+        (
+            200,
+            r#"{"data":[{"cve":"CVE-2026-0001","epss":"0.97","percentile":"0.99"}]}"#.to_string(),
+        ),
+    );
+    routes.insert(
+        "/kev.json".to_string(),
+        (
+            200,
+            r#"{"vulnerabilities":[{"cveID":"CVE-2026-0001","dateAdded":"2026-03-01","knownRansomwareCampaignUse":"Known","vendorProject":"Acme","product":"Widget"}]}"#
+                .to_string(),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["npm", "advised-pkg", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(value["advisories"][0]["epss"]["epss"], 0.97);
+    assert_eq!(value["advisories"][0]["kev"]["ransomware"], true);
+    let exploited = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["id"] == "known-exploited")
+        .expect("the KEV listing must become a finding");
+    assert_eq!(exploited["severity"], "warn");
+    assert_eq!(exploited["confidence"], "high");
+}
+
+#[test]
+fn a_failed_exploit_lookup_is_disclosed_without_hiding_the_advisory() {
+    let package = PackageFixture::clean("advised-pkg");
+    let mut routes = HashMap::new();
+    routes.insert(package.route(), (200, package.to_json()));
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, HIGH_ADVISORY.to_string()),
+    );
+    routes.insert(
+        "/v1/vulns/GHSA-test-0001".to_string(),
+        (200, HIGH_ADVISORY_DETAIL.to_string()),
+    );
+    routes.insert("/kev.json".to_string(), (400, "no".to_string()));
+    let registry = MockRegistry::start(routes);
+
+    registry
+        .command()
+        .args(["npm", "advised-pkg"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "GHSA-test-0001 affects this version",
+        ))
+        .stdout(predicate::str::contains("exploit data unavailable"))
+        .stdout(predicate::str::contains("is exploited in the wild").not());
 }
 
 #[test]

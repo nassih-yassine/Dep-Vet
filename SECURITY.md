@@ -86,6 +86,10 @@ provenance document, the URL must pass `src/netpolicy.rs`:
   is discarded before the connection is made, and a hostname with no public
   answer fails with a clear error instead of falling back. This closes the
   resolve-then-rebind window.
+- Threat feeds are not registry input. EPSS (`api.first.org`) and the CISA KEV
+  catalog (`www.cisa.gov`) are fixed `https` hosts in `src/exploit.rs`; only a
+  gated `DEPVET_EPSS_BASE`/`DEPVET_KEV_BASE` dev override can change them. The
+  same resolver and public-IP filtering apply.
 
 ### Development overrides
 

@@ -811,7 +811,9 @@ impl Finding {
             | "build-from-source"
             | "advisories-truncated"
             | "advisory-check-unavailable"
-            | "advisory-coverage-partial" => Confidence::High,
+            | "advisory-coverage-partial"
+            | "known-exploited"
+            | "threat-data-unavailable" => Confidence::High,
             "typosquat"
             | "publisher-not-maintainer"
             | "publisher-changed"
