@@ -127,10 +127,14 @@ scoop install nassih-yassine/dep-vet
 A bucket add is only needed until the manifest is accepted into the default
 `Extras` bucket, after which `scoop install dep-vet` works on its own.
 
-**Arch Linux — AUR**
+**Arch Linux — pacman or AUR**
+
+Every release carries a pacman package, and `packaging/aur/PKGBUILD` builds the
+`dep-vet-bin` AUR package from the same static binaries:
 
 ```sh
-yay -S dep-vet-bin        # or another AUR helper; installs the static binary
+sudo pacman -U ./dep-vet-VERSION-1-x86_64.pkg.tar.zst
+# or, once the AUR package is pushed: yay -S dep-vet-bin
 ```
 
 **Debian, Fedora, Alpine — release packages**
