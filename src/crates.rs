@@ -265,6 +265,10 @@ fn parse_crate(
         },
 
         scorecard: None,
+        license: release
+            .license
+            .as_deref()
+            .and_then(crate::license::normalize),
     })
 }
 
@@ -304,6 +308,8 @@ struct Release {
     yank_message: Option<String>,
     #[serde(default)]
     published_by: Option<User>,
+    #[serde(default)]
+    license: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

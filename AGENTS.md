@@ -90,6 +90,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/composer.rs` | Packagist p2 versions, maintainers, abandoned flag |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping, EPSS/KEV enrichment |
 | `src/exploit.rs` | EPSS and CISA KEV parsing, CVE extraction, the two feeds' client |
+| `src/license.rs` | SPDX normalisation, alias table, allowed/denied matching |
 | `src/scorecard.rs` | deps.dev project lookup, repository URL → project key, displayed checks |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
@@ -181,6 +182,19 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   seam points it at the mock so a child never reaches the real API. `guard`
   skips the lookup on purpose: its 8-second budget belongs to the install
   decision, and repository reputation is context.
+- **Policy findings are configuration, evaluated before the allowlist.**
+  `[policy]` is parsed in `allowlist.rs`; `signals::report_with_policy`
+  evaluates it, and plain `report` passes an empty policy so existing tests are
+  unaffected. Unpublished age, downloads, provenance, or license are skipped
+  and surface as `not_checked` (`license` only when a license list is set).
+  `denied_licenses` is always HIGH and wins over `allowed_licenses`; overlap
+  after normalisation, zero thresholds, unknown keys, and bad severities are
+  exit 3. Licenses come from registry metadata only (`license.rs`); audits
+  never download an archive to look for one, so Maven, Go, and JSR normally
+  report `not checked`. Compound expressions compare member by member:
+  `all_listed` for an allowlist, `any_listed` for a denylist. npm, crates.io,
+  and Composer report a per-version license; PyPI and RubyGems only expose a
+  project-level one, which is still better than guessing.
 - **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
   uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
   they show as `not checked`. The `PackageSource` trait is still deferred: two

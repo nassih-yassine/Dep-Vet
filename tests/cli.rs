@@ -330,6 +330,7 @@ struct PackageFixture<'a> {
     scripts: &'a str,
     publisher: &'a str,
     maintainers: &'a [&'a str],
+    license: Option<&'a str>,
 }
 
 impl<'a> PackageFixture<'a> {
@@ -342,6 +343,7 @@ impl<'a> PackageFixture<'a> {
             scripts: "{}",
             publisher: "alice",
             maintainers: &["alice"],
+            license: Some("MIT"),
         }
     }
 
@@ -365,6 +367,7 @@ impl<'a> PackageFixture<'a> {
                 "versions": {{
                     "{version}": {{
                         "scripts": {scripts},
+                        "license": "{license}",
                         "_npmUser": {{ "name": "{publisher}" }}
                     }}
                 }}
@@ -376,6 +379,7 @@ impl<'a> PackageFixture<'a> {
             published = days_ago(self.published_days_ago),
             scripts = self.scripts,
             publisher = self.publisher,
+            license = self.license.unwrap_or(""),
         )
     }
 
@@ -2794,6 +2798,109 @@ fn a_failed_exploit_lookup_is_disclosed_without_hiding_the_advisory() {
         ))
         .stdout(predicate::str::contains("exploit data unavailable"))
         .stdout(predicate::str::contains("is exploited in the wild").not());
+}
+
+#[test]
+fn a_denied_license_is_high_risk() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join(".depvet.toml"),
+        "[policy]\ndenied_licenses = [\"MIT\"]\n",
+    )
+    .unwrap();
+    let package = PackageFixture::clean("licensed-pkg");
+    let registry = registry_with(&[package], None);
+
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["npm", "licensed-pkg", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["license"], "MIT");
+    let finding = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["id"] == "policy-license-denied")
+        .expect("a denied license must be a finding");
+    assert_eq!(finding["severity"], "high");
+    assert_eq!(finding["confidence"], "high");
+
+    registry
+        .command()
+        .current_dir(directory.path())
+        .args(["npm", "licensed-pkg"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("license denied by policy"));
+}
+
+#[test]
+fn an_unknown_license_is_not_checked_when_policy_needs_it() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join(".depvet.toml"),
+        "[policy]\nallowed_licenses = [\"MIT\"]\n",
+    )
+    .unwrap();
+    let package = PackageFixture {
+        license: None,
+        ..PackageFixture::clean("unlicensed-pkg")
+    };
+    let registry = registry_with(&[package], None);
+
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["npm", "unlicensed-pkg", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(
+        value["not_checked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item == "license")
+    );
+    assert!(
+        !value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("policy-")))
+    );
+}
+
+#[test]
+fn policy_download_floor_warns_below_the_minimum() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join(".depvet.toml"),
+        "[policy]\nmin_weekly_downloads = 100\n",
+    )
+    .unwrap();
+    let package = PackageFixture::clean("quiet-pkg");
+    let registry = registry_with(&[package], Some(99));
+
+    registry
+        .command()
+        .current_dir(directory.path())
+        .args(["npm", "quiet-pkg"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("downloads below the policy floor"))
+        .stdout(predicate::str::contains("99 weekly downloads"));
 }
 
 #[test]

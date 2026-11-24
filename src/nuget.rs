@@ -200,6 +200,7 @@ fn parse_versions(
         },
 
         scorecard: None,
+        license: release.and_then(|release| release.license.clone()),
     })
 }
 
@@ -209,6 +210,7 @@ struct RegVersion {
     published: Option<i64>,
     deprecated: bool,
     dependencies: Vec<String>,
+    license: Option<String>,
 }
 
 fn parse_registration(
@@ -250,6 +252,10 @@ fn collect_page(entries: Vec<Entry>, releases: &mut Vec<RegVersion>) {
             published: catalog.published.as_deref().and_then(date::parse_timestamp),
             deprecated: !catalog.listed.unwrap_or(true) || catalog.deprecation.is_some(),
             dependencies,
+            license: catalog
+                .license_expression
+                .as_deref()
+                .and_then(crate::license::normalize),
         });
     }
 }
@@ -291,6 +297,8 @@ struct Catalog {
     deprecation: Option<serde_json::Value>,
     #[serde(rename = "dependencyGroups", default)]
     dependency_groups: Vec<DependencyGroup>,
+    #[serde(rename = "licenseExpression", default)]
+    license_expression: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -352,12 +360,14 @@ mod tests {
                 published: date::parse_timestamp("1900-01-01T00:00:00Z"),
                 deprecated: false,
                 dependencies: Vec::new(),
+                license: None,
             },
             RegVersion {
                 version: "2.0.0".to_string(),
                 published: date::parse_timestamp("2024-03-01T00:00:00Z"),
                 deprecated: false,
                 dependencies: Vec::new(),
+                license: None,
             },
         ];
         let meta = parse_versions(
@@ -378,12 +388,14 @@ mod tests {
                 published: date::parse_timestamp("2020-01-01T00:00:00Z"),
                 deprecated: false,
                 dependencies: Vec::new(),
+                license: None,
             },
             RegVersion {
                 version: "13.0.1".to_string(),
                 published: date::parse_timestamp("2024-03-01T00:00:00Z"),
                 deprecated: false,
                 dependencies: Vec::new(),
+                license: None,
             },
         ];
         let meta = parse_versions(
@@ -431,12 +443,14 @@ mod tests {
                 published: date::parse_timestamp("2024-03-01T00:00:00Z"),
                 deprecated: false,
                 dependencies: Vec::new(),
+                license: None,
             },
             RegVersion {
                 version: "12.0.3".to_string(),
                 published: date::parse_timestamp("2020-01-01T00:00:00Z"),
                 deprecated: true,
                 dependencies: Vec::new(),
+                license: None,
             },
         ];
         let meta = parse_versions(&spec("x", Some("12.0.3")), FLAT, &registration, "url").unwrap();
@@ -483,12 +497,14 @@ mod tests {
                 published: date::parse_timestamp("1900-01-01T00:00:00Z"),
                 deprecated: false,
                 dependencies: Vec::new(),
+                license: None,
             },
             RegVersion {
                 version: "2.0.0".to_string(),
                 published: date::parse_timestamp("2024-01-01T00:00:00Z"),
                 deprecated: false,
                 dependencies: Vec::new(),
+                license: None,
             },
         ];
         let meta = parse_versions(

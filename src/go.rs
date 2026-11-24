@@ -214,6 +214,7 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         },
 
         scorecard: None,
+        license: None,
     })
 }
 

@@ -182,6 +182,7 @@ fn parse_package(
         },
 
         scorecard: None,
+        license: None,
     })
 }
 

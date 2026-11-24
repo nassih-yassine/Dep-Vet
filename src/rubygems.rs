@@ -242,6 +242,17 @@ fn parse_versions(
         },
 
         scorecard: None,
+        license: latest
+            .as_ref()
+            .map(|latest| {
+                latest
+                    .licenses
+                    .iter()
+                    .filter_map(|license| crate::license::normalize(license))
+                    .collect::<Vec<_>>()
+                    .join(" OR ")
+            })
+            .filter(|license| !license.is_empty()),
     })
 }
 
@@ -279,6 +290,8 @@ struct Latest {
     homepage_uri: Option<String>,
     #[serde(default)]
     yanked: bool,
+    #[serde(default)]
+    licenses: Vec<String>,
 }
 
 #[cfg(test)]

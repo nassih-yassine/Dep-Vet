@@ -101,6 +101,9 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
     if let Some(repository) = &report.repository {
         push_field(&mut out, "repository", repository);
     }
+    if let Some(license) = &report.license {
+        push_field(&mut out, "license", license);
+    }
     if let Some(scorecard) = &report.scorecard {
         let date: String = scorecard.date.chars().take(10).collect();
         push_field(
@@ -877,6 +880,7 @@ mod tests {
             dependency_paths: Vec::new(),
             findings,
             scorecard: None,
+            license: None,
         }
     }
 

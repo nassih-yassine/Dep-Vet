@@ -21,6 +21,12 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "known-exploited",
     "threat-data-unavailable",
     "low-scorecard",
+    "policy-min-age",
+    "policy-min-downloads",
+    "policy-provenance",
+    "policy-advisory-severity",
+    "policy-license",
+    "policy-license-denied",
     "install-scripts",
     "build-from-source",
     "typosquat",
@@ -54,6 +60,41 @@ pub struct Allowlist {
     provenance: ProvenancePolicyConfig,
     #[serde(default)]
     trusted_publishers: TrustedPublishersConfig,
+    #[serde(default)]
+    policy: Policy,
+}
+
+/// Thresholds for the install policy. Every field is off by default, so adding
+/// `[policy]` with one key never changes another rule.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Policy {
+    /// The package must have been first published at least this long ago.
+    pub min_age_days: Option<u64>,
+    /// A known weekly download figure must be at least this many.
+    pub min_weekly_downloads: Option<u64>,
+    /// Require a provenance attestation where the ecosystem supports one.
+    pub require_provenance: Option<bool>,
+    /// Highest advisory severity the policy tolerates.
+    pub max_advisory_severity: Option<Severity>,
+    /// If non-empty, the package license must be on this list.
+    #[serde(default)]
+    pub allowed_licenses: Vec<String>,
+    /// A license on this list is a HIGH finding.
+    #[serde(default)]
+    pub denied_licenses: Vec<String>,
+    /// Severity for threshold violations. `denied_licenses` is always HIGH.
+    pub severity: Option<Severity>,
+}
+
+impl Policy {
+    pub fn needs_license(&self) -> bool {
+        !self.allowed_licenses.is_empty() || !self.denied_licenses.is_empty()
+    }
+
+    pub fn violation_severity(&self) -> Severity {
+        self.severity.unwrap_or(Severity::Warn)
+    }
 }
 
 /// Opt-in provenance requirements. Both default to false, so adding this
@@ -162,6 +203,8 @@ pub enum AllowError {
     },
     #[error("{path}: {field} contains an empty entry")]
     EmptyPolicyValue { path: String, field: String },
+    #[error("{path}: '{license}' is both allowed and denied")]
+    PolicyLicenseConflict { path: String, license: String },
 }
 
 impl Allowlist {
@@ -271,11 +314,35 @@ impl Allowlist {
                 "trusted_publishers.workflows",
                 &list.trusted_publishers.workflows,
             ),
+            ("policy.allowed_licenses", &list.policy.allowed_licenses),
+            ("policy.denied_licenses", &list.policy.denied_licenses),
         ] {
             if values.iter().any(|value| value.trim().is_empty()) {
                 return Err(AllowError::EmptyPolicyValue {
                     path: path.display().to_string(),
                     field: field.to_string(),
+                });
+            }
+        }
+        for (field, value) in [
+            ("policy.min_age_days", list.policy.min_age_days),
+            (
+                "policy.min_weekly_downloads",
+                list.policy.min_weekly_downloads,
+            ),
+        ] {
+            if value == Some(0) {
+                return Err(AllowError::ZeroLimit {
+                    path: path.display().to_string(),
+                    field: field.to_string(),
+                });
+            }
+        }
+        for allowed in &list.policy.allowed_licenses {
+            if crate::license::any_listed(&list.policy.denied_licenses, allowed) {
+                return Err(AllowError::PolicyLicenseConflict {
+                    path: path.display().to_string(),
+                    license: allowed.clone(),
                 });
             }
         }
@@ -286,6 +353,9 @@ impl Allowlist {
         &self.inspect
     }
 
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
     /// Combine the two opt-in sections into the policy `inspect` evaluates.
     pub fn trust_policy(&self) -> crate::provenance::TrustPolicy {
         crate::provenance::TrustPolicy {
@@ -378,6 +448,7 @@ mod tests {
             dependency_paths: Vec::new(),
             findings,
             scorecard: None,
+            license: None,
         }
     }
 
@@ -559,6 +630,49 @@ mod tests {
             assert!(
                 KNOWN_FINDINGS.contains(&id),
                 "{id} is emitted by signals but missing from KNOWN_FINDINGS"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_section_parses_with_defaults_and_aliases() {
+        let list = Allowlist::parse(
+            Path::new(".depvet.toml"),
+            r#"
+[policy]
+min_age_days = 30
+min_weekly_downloads = 100
+require_provenance = true
+max_advisory_severity = "medium"
+severity = "high"
+allowed_licenses = ["MIT", "Apache-2.0"]
+"#,
+        )
+        .unwrap();
+        let policy = list.policy();
+        assert_eq!(policy.min_age_days, Some(30));
+        assert_eq!(policy.max_advisory_severity, Some(Severity::Warn));
+        assert_eq!(policy.violation_severity(), Severity::High);
+        assert!(policy.needs_license());
+
+        let empty = Allowlist::parse(Path::new(".depvet.toml"), "").unwrap();
+        assert_eq!(empty.policy().violation_severity(), Severity::Warn);
+        assert!(!empty.policy().needs_license());
+    }
+
+    #[test]
+    fn policy_config_errors_are_tool_errors() {
+        for body in [
+            "[policy]\nmax_age_days = 30\n",
+            "[policy]\nseverity = \"nonsense\"\n",
+            "[policy]\nmin_age_days = 0\n",
+            "[policy]\nmin_weekly_downloads = 0\n",
+            "[policy]\nallowed_licenses = [\"\"]\n",
+            "[policy]\nallowed_licenses = [\"MIT\"]\ndenied_licenses = [\"mit license\"]\n",
+        ] {
+            assert!(
+                Allowlist::parse(Path::new(".depvet.toml"), body).is_err(),
+                "{body}"
             );
         }
     }

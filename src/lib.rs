@@ -17,6 +17,7 @@ pub mod http;
 pub mod inspect;
 pub mod intent;
 pub mod jsr;
+pub mod license;
 pub mod lockfile;
 pub mod maven;
 pub mod mcp;

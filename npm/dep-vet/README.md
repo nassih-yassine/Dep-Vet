@@ -19,6 +19,7 @@ crossenv 0.0.2-security
 
 - Advisories (OSV) with fixes, plus EPSS scores and CISA KEV "exploited in the wild" warnings, and typosquat names
 - OpenSSF Scorecard for the source repository, with weak checks called out
+- License and install-policy thresholds configured in `.depvet.toml`
 - Install scripts, publisher changes, deprecation, freshness, recent release history
 - Provenance: whether an attestation exists, verified offline for npm
 - Invisible characters and text aimed at an AI reader, in code and readmes

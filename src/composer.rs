@@ -203,6 +203,15 @@ fn parse_metadata(
         review_url: None,
 
         scorecard: None,
+        license: {
+            let joined = release
+                .license
+                .iter()
+                .filter_map(|license| crate::license::normalize(license))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            (!joined.is_empty()).then_some(joined)
+        },
     })
 }
 
@@ -250,6 +259,8 @@ struct Release {
     source: Option<Source>,
     #[serde(default)]
     require: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    license: Vec<String>,
 }
 
 /// Composer's `require` mixes libraries with platform packages; only libraries
