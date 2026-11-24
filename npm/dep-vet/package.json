@@ -1,6 +1,6 @@
 {
   "name": "@nassihyas/dep-vet",
-  "version": "0.13.3",
+  "version": "0.13.4",
   "mcpName": "io.github.nassih-yassine/dep-vet",
   "description": "Check a dependency's risk before it enters your lockfile. Nine ecosystems, no code execution, MCP server for AI agents.",
   "license": "MIT",
