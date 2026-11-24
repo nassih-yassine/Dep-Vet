@@ -16,6 +16,15 @@
   Signed-Releases, and Dangerous-Workflow checks. A score below 5 becomes an
   INFO `low-scorecard` finding only when the same release also changed
   publisher. A missing score is `not checked`, never a clean 10.
+- **GitHub Actions workflows are scanned for supply-chain risks.** The new
+  `dep-vet workflows [path]` command checks `.github/workflows` (one file or a
+  directory) without a YAML dependency. It flags action references that are not
+  a full commit SHA, `pull_request_target` combined with a checkout of the PR
+  head, attacker-controlled event fields inside `run:`, `permissions:
+  write-all`, `curl`/`wget` piped into a shell, and secrets echoed to the log.
+  Comments are ignored; a local `./` action is not flagged. Exit `1` for
+  warnings, `2` for a HIGH finding, `3` when the path cannot be read. Findings
+  name the file and line and are not package allowlist entries.
 - **Install policy thresholds and license rules are configurable.** A new
   `[policy]` section in `.depvet.toml` accepts `min_age_days`,
   `min_weekly_downloads`, `require_provenance`, `max_advisory_severity`,

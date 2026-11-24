@@ -101,6 +101,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/signals.rs` | the rules: `PackageMeta` + `now` in, `Vec<Finding>` out (no I/O) |
 | `src/typosquat.rs` | Levenshtein, homoglyph folding, per-ecosystem candidate lists |
 | `src/watch.rs` | `watch` command: notify watcher, target filtering, debounce |
+| `src/workflows.rs` | line-wise GitHub Actions scan: triggers, `uses`, `run`, permissions |
 | `src/report.rs` | human rendering and JSON envelope |
 | `src/cli.rs` | clap command surface |
 | `src/progress.rs` | stderr-only progress bar for `audit`/`lock` |
@@ -195,6 +196,17 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `all_listed` for an allowlist, `any_listed` for a denylist. npm, crates.io,
   and Composer report a per-version license; PyPI and RubyGems only expose a
   project-level one, which is still better than guessing.
+- **The workflow scan is text, not YAML.** `src/workflows.rs` follows `on:`,
+  `jobs:`, and `run:` indentation, strips comments with a quote-aware scanner,
+  and never executes or evaluates anything. Only a 40-character hex commit pins
+  an action; `pull_request_target` becomes HIGH only when a
+  `github.event.pull_request.head` line is also present; the injection rule
+  matches a fixed list of attacker-controlled fields (never
+  `github.event_name` or `github.repository`); a `run:` block ends at the next
+  line that is not indented deeper than the key. A missing path, unreadable file,
+  or file over 5 MB exits `3`. Findings are file-scoped and not allowlistable.
+  Running it on this repository reports its own cargo-dist and rustup
+  `curl | sh` lines as HIGH: that is the rule working, not a regression.
 - **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
   uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
   they show as `not checked`. The `PackageSource` trait is still deferred: two

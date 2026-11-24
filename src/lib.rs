@@ -41,3 +41,4 @@ pub mod typosquat;
 pub mod update;
 pub mod version;
 pub mod watch;
+pub mod workflows;

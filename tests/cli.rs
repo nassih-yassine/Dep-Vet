@@ -7711,3 +7711,110 @@ fn update_failure_exits_three_not_two() {
         .assert()
         .code(3);
 }
+
+const UNSAFE_WORKFLOW: &str = r#"name: ci
+on: pull_request_target
+jobs:
+  test:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: echo "${{ github.event.pull_request.title }}"
+"#;
+
+#[test]
+fn workflows_scan_finds_high_risk_patterns() {
+    let directory = tempfile::tempdir().unwrap();
+    let workflows = directory.path().join(".github").join("workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("ci.yml"), UNSAFE_WORKFLOW).unwrap();
+
+    let output = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["workflows", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["files"].as_array().unwrap().len(), 1);
+    assert_eq!(value["verdict"], "high");
+    let rules: Vec<&str> = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["id"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "workflow-action-unpinned",
+        "workflow-pr-target-checkout",
+        "workflow-script-injection",
+    ] {
+        assert!(rules.contains(&expected), "{rules:?}");
+    }
+    assert_eq!(value["findings"][0]["confidence"], "medium");
+    assert!(value["findings"].as_array().unwrap().iter().all(|finding| {
+        finding["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|evidence| {
+                evidence["url"]
+                    .as_str()
+                    .is_some_and(|url| url.starts_with("https://"))
+            })
+    }));
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["workflows"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "pull_request_target checks out untrusted code",
+        ))
+        .stdout(predicate::str::contains("ci.yml:8"))
+        .stdout(predicate::str::contains("verdict HIGH (exit 2)"));
+}
+
+#[test]
+fn workflows_scan_takes_an_explicit_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("release.yaml");
+    std::fs::write(&file, "- uses: some/action@main\n").unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["workflows", file.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("1 file"))
+        .stdout(predicate::str::contains("pin the full commit SHA"));
+}
+
+#[test]
+fn workflows_scan_of_a_missing_path_is_a_tool_error() {
+    let directory = tempfile::tempdir().unwrap();
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["workflows"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(".github/workflows"));
+}
+
+#[test]
+fn workflows_scan_of_an_empty_directory_is_clean() {
+    let directory = tempfile::tempdir().unwrap();
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["workflows", directory.path().to_str().unwrap()])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("no .yml or .yaml files"));
+}

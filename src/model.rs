@@ -837,7 +837,11 @@ impl Finding {
             | "advisory-check-unavailable"
             | "advisory-coverage-partial"
             | "known-exploited"
-            | "threat-data-unavailable" => Confidence::High,
+            | "threat-data-unavailable"
+            | "workflow-pr-target-checkout"
+            | "workflow-script-injection"
+            | "workflow-curl-pipe-shell"
+            | "workflow-secret-echo" => Confidence::High,
             "typosquat"
             | "publisher-not-maintainer"
             | "publisher-changed"
