@@ -157,7 +157,7 @@ the asset from the releases page instead.
 
 ```sh
 docker run --rm -v "$PWD:/work" -w /work \
-  ghcr.io/nassih-yassine/dep-vet:v0.13.3 audit package-lock.json
+  ghcr.io/nassih-yassine/dep-vet:v0.13.4 audit package-lock.json
 ```
 
 The image is built for `linux/amd64` and `linux/arm64`, runs as a non-root user,
@@ -212,10 +212,10 @@ sha256sum -c dep-vet-x86_64-unknown-linux-musl.tar.xz.sha256
 gh attestation verify dep-vet-x86_64-unknown-linux-musl.tar.xz \
   --repo nassih-yassine/Dep-Vet \
   --signer-workflow nassih-yassine/Dep-Vet/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.13.3
+  --source-ref refs/tags/v0.13.4
 
 # npm: provenance, verified offline against the embedded Sigstore root
-dep-vet inspect npm @nassihyas/dep-vet@0.13.3
+dep-vet inspect npm @nassihyas/dep-vet@0.13.4
 
 # Docker: cosign signature on the digest
 cosign verify "ghcr.io/nassih-yassine/dep-vet@sha256:<digest>" \
@@ -939,7 +939,7 @@ and emits a warning, never the report or dep-vet's exit code.
 
 `lockfile` and `base` are passed as quoted environment values, so paths with
 spaces and an explicit base revision work. The action installs the prebuilt
-binary for the `ref` input (default `v0.13.3`) and falls back to a source build
+binary for the `ref` input (default `v0.13.4`) and falls back to a source build
 when that ref has no release; a `vX.Y.Z` ref is installed with `--tag`, other
 refs with `--branch`. Pinning `uses:` alone does not pin the binary: set `ref`
 to the tag you reviewed.

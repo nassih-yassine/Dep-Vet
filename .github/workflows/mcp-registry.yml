@@ -1,9 +1,10 @@
 name: MCP Registry
 
 on:
-  # The npm package has to exist before the registry can verify ownership, and
-  # npm publishing is a manual step, so this usually skips on the release run
-  # and is dispatched again once npm has the version.
+  # The npm package has to exist before the registry can verify ownership.
+  # npm-publish.yml runs on the same Release workflow, but it can only publish
+  # once the account has 2FA or a token, so this run usually skips with a notice
+  # and is dispatched again after the version is on npm.
   workflow_run:
     workflows: ["Release"]
     types: [completed]

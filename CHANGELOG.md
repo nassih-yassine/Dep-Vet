@@ -2,6 +2,18 @@
 
 ## 0.13.4 — 2026-11-24
 
+- **Docs tell the truth about npm provenance.** No published npm version has an
+  attestation, because npm blocks trusted publishers until the account has 2FA;
+  `SECURITY.md` now says so instead of pointing at a version that cannot verify.
+- **The container is tested before it is tagged.** The workflow builds amd64
+  locally, runs `--version` and `--help` offline, and only then pushes the
+  multi-arch index, so a broken image cannot take `latest`.
+- **Linux packages are attested.** The eight package files get build provenance
+  from `actions/attest-build-provenance`, matching the release archives.
+- **`update` trusts only release URLs under this repository and re-asks GitHub
+  after five minutes**, instead of printing any `html_url` the API returns and
+  waiting a day for a fresh answer.
+
 - **`dep-vet update`.** Reports the latest release, detects the install channel
   (Homebrew, Cargo, npm, Scoop, Docker, or a distro package) and prints the
   command that updates it. `--check` exits `1` for "newer available", `0` for
