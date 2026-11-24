@@ -113,8 +113,12 @@ def npm_tarball_stem(name: str) -> str:
     return name.lstrip("@").replace("/", "-")
 
 
-def verify_tarball_modes(tarball: pathlib.Path, windows: bool = False) -> None:
-    """Every bundled binary except the Windows one must be executable.
+def verify_tarball_contents(tarball: pathlib.Path, windows: bool = False) -> None:
+    """The tarball must carry a readme and executable binaries.
+
+    npm renders the readme from the tarball root, so a package without one shows
+    an empty page. Every bundled binary except the Windows one must keep its
+    executable bit.
 
     Windows cannot store a Unix mode, so a tarball packed there always has 0644
     entries. That build is only used for the install smoke test; the published
@@ -122,6 +126,12 @@ def verify_tarball_modes(tarball: pathlib.Path, windows: bool = False) -> None:
     restores the bit at run time.
     """
     with tarfile.open(tarball) as archive:
+        names = archive.getnames()
+        readme = f"package/README.md"
+        if readme not in names:
+            raise SystemExit(f"{tarball} has no {readme}; npm would show an empty page")
+        if archive.getmember(readme).size < 200:
+            raise SystemExit(f"{readme} is too short to be a readme")
         for info in archive.getmembers():
             if not info.name.startswith("package/binaries/"):
                 continue
@@ -182,7 +192,7 @@ def main() -> None:
     tarball = args.output / f"{npm_tarball_stem(data['name'])}-{args.version}.tgz"
     if not tarball.is_file():
         raise SystemExit(f"npm pack did not produce {tarball}")
-    verify_tarball_modes(tarball, windows=os.name == "nt")
+    verify_tarball_contents(tarball, windows=os.name == "nt")
     print(f"built {tarball}")
 
 
