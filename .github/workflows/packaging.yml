@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 env:
   NFPM_VERSION: v2.49.0
@@ -140,6 +142,14 @@ jobs:
               fail "$pkg carries .INSTALL"
             fi
           done
+      - name: Attest the packages
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist-pkg/*.deb
+            dist-pkg/*.rpm
+            dist-pkg/*.apk
+            dist-pkg/*.pkg.tar.zst
       - name: Smoke test the amd64 package
         run: |
           set -eu
@@ -151,6 +161,9 @@ jobs:
             *"dep-vet 0.13"*) echo "$version" ;;
             *) echo "::error::unexpected version '$version'"; exit 1 ;;
           esac
+      # --clobber keeps a re-run of this workflow idempotent. The packages are
+      # attested above, so a replaced file still carries provenance for its own
+      # bytes; the release tarballs they were built from are attested separately.
       - name: Attach the packages to the release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -227,6 +227,15 @@ impl HttpClient {
         self.cached(url, || self.fetch_get(url))
     }
 
+    /// Fetch with a caller-chosen TTL instead of the cache-wide one. Used for
+    /// questions where a day-old answer is wrong, such as "what is the latest
+    /// release".
+    pub fn get_with_ttl(&self, url: &str, ttl_seconds: i64) -> Result<String, HttpError> {
+        self.guard()?;
+        self.cached_with_ttl(url, Some(ttl_seconds), || self.fetch_get(url))
+            .map(|(body, _)| body)
+    }
+
     /// Raw response for callers that must stream a body (archives). Statuses
     /// are checked here, so a caller still sees `HttpError::Status` on 404.
     pub fn get_raw(
@@ -322,6 +331,15 @@ impl HttpClient {
     fn cached(
         &self,
         key: &str,
+        fetch: impl FnMut() -> Result<String, HttpError>,
+    ) -> Result<(String, Source), HttpError> {
+        self.cached_with_ttl(key, None, fetch)
+    }
+
+    fn cached_with_ttl(
+        &self,
+        key: &str,
+        ttl_override: Option<i64>,
         mut fetch: impl FnMut() -> Result<String, HttpError>,
     ) -> Result<(String, Source), HttpError> {
         let now = now_seconds();
@@ -329,11 +347,11 @@ impl HttpClient {
         if let Some(cache) = &self.cache
             && let Ok(cache) = cache.lock()
         {
-            let ttl = if advisory {
+            let ttl = ttl_override.unwrap_or(if advisory {
                 ADVISORY_TTL_SECONDS
             } else {
                 cache.ttl_seconds()
-            };
+            });
             if let Ok(Some(body)) = cache.fresh_with(key, now, ttl) {
                 return Ok((body, Source::Fresh));
             }

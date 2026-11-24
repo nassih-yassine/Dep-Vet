@@ -7365,7 +7365,7 @@ fn update_reports_a_newer_release_and_exits_one_with_check() {
         "/repos/nassih-yassine/Dep-Vet/releases/latest".to_string(),
         (
             200,
-            r#"{"tag_name":"v9.9.9","html_url":"https://example.test/releases/v9.9.9"}"#
+            r#"{"tag_name":"v9.9.9","html_url":"https://github.com/nassih-yassine/Dep-Vet/releases/tag/v9.9.9"}"#
                 .to_string(),
         ),
     );
@@ -7377,7 +7377,7 @@ fn update_reports_a_newer_release_and_exits_one_with_check() {
         .code(1)
         .stdout(predicate::str::contains("latest   9.9.9"))
         .stdout(predicate::str::contains(
-            "release  https://example.test/releases/v9.9.9",
+            "release  https://github.com/nassih-yassine/Dep-Vet/releases/tag/v9.9.9",
         ));
 }
 
@@ -7389,7 +7389,9 @@ fn update_reports_current_when_the_tag_matches() {
         "/repos/nassih-yassine/Dep-Vet/releases/latest".to_string(),
         (
             200,
-            format!(r#"{{"tag_name":"v{version}","html_url":"https://example.test/releases"}}"#),
+            format!(
+                r#"{{"tag_name":"v{version}","html_url":"https://github.com/nassih-yassine/Dep-Vet/releases/tag/v{version}"}}"#
+            ),
         ),
     );
     let registry = MockRegistry::start(routes);
@@ -7408,7 +7410,8 @@ fn update_json_has_stable_fields() {
         "/repos/nassih-yassine/Dep-Vet/releases/latest".to_string(),
         (
             200,
-            r#"{"tag_name":"v9.9.9","html_url":"https://example.test"}"#.to_string(),
+            r#"{"tag_name":"v9.9.9","html_url":"https://github.com/nassih-yassine/Dep-Vet/releases/tag/v9.9.9"}"#
+                .to_string(),
         ),
     );
     let registry = MockRegistry::start(routes);

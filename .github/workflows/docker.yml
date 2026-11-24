@@ -78,6 +78,14 @@ jobs:
             "https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
           echo "$COSIGN_SHA256  cosign" | sha256sum -c -
           chmod +x cosign
+      - name: Build and test amd64 locally before publishing
+        run: |
+          docker buildx create --use --driver docker-container --name dep-vet
+          docker buildx build --platform linux/amd64 --tag "$IMAGE:smoke" --load .
+          # Offline checks only: a broken image must not reach a tag, and a test
+          # that needs the network turns a registry outage into a red release.
+          docker run --rm "$IMAGE:smoke" --version
+          docker run --rm "$IMAGE:smoke" --help > /dev/null
       - name: Build, attest and push both architectures
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,7 +94,6 @@ jobs:
           STABLE: ${{ steps.tag.outputs.stable }}
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
-          docker buildx create --use --driver docker-container --name dep-vet
           tags=(--tag "$IMAGE:$TAG")
           if [ "$STABLE" = "true" ]; then
             tags+=(--tag "$IMAGE:latest")
@@ -112,12 +119,8 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          # Pulls the pushed index and runs the amd64 manifest. The HIGH exit
+          # code is covered by the end-to-end suite, which does not need a
+          # registry or the network.
           docker run --rm "$IMAGE:$TAG" --version
-          set +e
-          docker run --rm "$IMAGE:$TAG" npm crossenv
-          status=$?
-          set -e
-          if [ "$status" -ne 2 ]; then
-            echo "::error::expected exit 2 for a HIGH finding, got $status"
-            exit 1
-          fi
+          docker run --rm "$IMAGE:$TAG" --help > /dev/null

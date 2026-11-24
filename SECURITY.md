@@ -106,7 +106,7 @@ can run yourself, and each proves something narrower than "this is safe".
 | Channel | Integrity | Authenticity |
 |---|---|---|
 | GitHub release archives | `.sha256` sidecar | SLSA provenance attestation from `release.yml` |
-| npm | registry tarball digest | npm provenance (published with `--provenance`) |
+| npm | registry tarball digest | none yet: every publish so far predates provenance |
 | Docker | image digest | cosign keyless signature, plus SBOM and provenance attestations |
 | crates.io | `.crate` checksum from the registry index | none: crates.io does not sign artifacts |
 | `.deb`, `.rpm`, `.apk`, pacman | package contents, built in CI from the attested musl archives | none: the packages are not GPG-signed |
@@ -118,15 +118,22 @@ sha256sum -c dep-vet-x86_64-unknown-linux-musl.tar.xz.sha256
 gh attestation verify dep-vet-x86_64-unknown-linux-musl.tar.xz \
   --repo nassih-yassine/Dep-Vet \
   --signer-workflow nassih-yassine/Dep-Vet/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.13.2
+  --source-ref refs/tags/v0.13.4
 ```
 
-npm: the package page shows a provenance badge. Locally, dep-vet verifies the
-attestation offline against the embedded Sigstore root:
+npm: **no published version carries provenance yet.** npm blocks trusted
+publishers and token creation until the account has 2FA, so the releases were
+uploaded with an existing session and the registry reports no attestation. The
+command below is what to run; until provenance exists it reports the absence
+rather than a signature:
 
 ```sh
-dep-vet inspect npm @nassihyas/dep-vet@0.13.2
+dep-vet inspect npm @nassihyas/dep-vet@0.13.4
 ```
+
+Once trusted publishing is configured, `npm-publish.yml` publishes with
+`--provenance` and the same command verifies the attestation offline against the
+embedded Sigstore root.
 
 Docker, by digest rather than tag:
 

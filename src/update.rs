@@ -12,6 +12,12 @@ use std::path::Path;
 /// Unauthenticated GitHub API root. `DEPVET_UPDATE_BASE` overrides it for tests.
 pub const GITHUB_API: &str = "https://api.github.com";
 const RELEASE_PATH: &str = "/repos/nassih-yassine/Dep-Vet/releases/latest";
+/// Release URLs are only trusted under this prefix; anything else falls back.
+const RELEASE_PREFIX: &str = "https://github.com/nassih-yassine/Dep-Vet/releases/";
+const DEFAULT_RELEASE_URL: &str = "https://github.com/nassih-yassine/Dep-Vet/releases";
+/// The latest release changes; a day-old answer would tell people to upgrade to
+/// something older. Five minutes keeps the hammering down without lying.
+const UPDATE_TTL_SECONDS: i64 = 5 * 60;
 
 #[derive(Debug)]
 pub enum UpdateError {
@@ -146,6 +152,20 @@ pub fn current_channel() -> Channel {
     detect_channel(&executable, docker, distro)
 }
 
+/// Accept a release URL only if it points at this repository's releases and
+/// carries no control characters; otherwise use the known landing page.
+pub fn release_url(raw: Option<&str>) -> String {
+    match raw {
+        Some(url)
+            if url.starts_with(RELEASE_PREFIX)
+                && !url.chars().any(|character| character.is_control()) =>
+        {
+            url.to_string()
+        }
+        _ => DEFAULT_RELEASE_URL.to_string(),
+    }
+}
+
 fn api_base() -> String {
     // A test seam, not a feature: another host is only honoured under the same
     // gate as every other DEPVET_*_BASE override.
@@ -163,7 +183,7 @@ fn api_base() -> String {
 pub fn check(http: &HttpClient) -> Result<Latest, UpdateError> {
     let url = format!("{}{RELEASE_PATH}", api_base().trim_end_matches('/'));
     let body = http
-        .get(&url)
+        .get_with_ttl(&url, UPDATE_TTL_SECONDS)
         .map_err(|error| UpdateError::Http(error.to_string()))?;
     let document: serde_json::Value =
         serde_json::from_str(&body).map_err(|error| UpdateError::Parse(error.to_string()))?;
@@ -174,11 +194,7 @@ pub fn check(http: &HttpClient) -> Result<Latest, UpdateError> {
         .to_string();
     let version = parse_version(&tag)
         .ok_or_else(|| UpdateError::Version(format!("tag {tag:?} is not a version")))?;
-    let url = document
-        .get("html_url")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("https://github.com/nassih-yassine/Dep-Vet/releases")
-        .to_string();
+    let url = release_url(document.get("html_url").and_then(serde_json::Value::as_str));
     Ok(Latest { version, tag, url })
 }
 
@@ -404,5 +420,35 @@ mod hint_tests {
         ));
         assert!(!should_hint(true, true, true, 0, env(&[("TERM", "dumb")])));
         assert!(should_hint(true, true, true, 0, env(&[("TERM", "xterm")])));
+    }
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::{DEFAULT_RELEASE_URL, release_url};
+
+    #[test]
+    fn keeps_release_urls_from_this_repository() {
+        let url = "https://github.com/nassih-yassine/Dep-Vet/releases/tag/v0.13.4";
+        assert_eq!(release_url(Some(url)), url);
+    }
+
+    #[test]
+    fn rejects_other_hosts_paths_and_control_characters() {
+        assert_eq!(release_url(None), DEFAULT_RELEASE_URL);
+        assert_eq!(
+            release_url(Some("https://evil.test/releases")),
+            DEFAULT_RELEASE_URL
+        );
+        assert_eq!(
+            release_url(Some("https://github.com/other/Repo/releases/tag/v1")),
+            DEFAULT_RELEASE_URL
+        );
+        assert_eq!(
+            release_url(Some(
+                "https://github.com/nassih-yassine/Dep-Vet/releases/\u{1b}[2J"
+            )),
+            DEFAULT_RELEASE_URL
+        );
     }
 }
