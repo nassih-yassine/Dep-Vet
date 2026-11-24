@@ -16,6 +16,9 @@
   from a pinned distroless digest, carries buildx SBOM and provenance
   attestations, and is signed keyless with cosign by digest. `latest` only moves
   for stable tags, and the dispatch tag is validated before use.
+- **The npm page has a readme.** The packed tarball now ships a readme, and the
+  build fails when it is missing or too short, so the package page shows install
+  and usage instead of a blank body. It lands on npm with 0.13.3.
 - **npm package hardening.** Archive members are matched by exact basename with
   ambiguity treated as an error, the packed tarball is rejected unless every
   bundled binary is executable, the launcher restores the executable bit when

@@ -95,12 +95,15 @@ class ChecksumTests(unittest.TestCase):
             self.assertIn("checksum mismatch", str(caught.exception))
 
 
-class TarballModeTests(unittest.TestCase):
+class TarballContentsTests(unittest.TestCase):
     def build(self, mode, name="package/binaries/linux-x64/dep-vet"):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         tarball = pathlib.Path(directory.name) / "pkg.tgz"
         with tarfile.open(tarball, "w:gz") as archive:
+            readme = tarfile.TarInfo("package/README.md")
+            readme.size = 300
+            archive.addfile(readme, io.BytesIO(b"x" * 300))
             info = tarfile.TarInfo(name)
             info.size = 1
             info.mode = mode
@@ -108,24 +111,47 @@ class TarballModeTests(unittest.TestCase):
         return tarball
 
     def test_executable_binary_passes(self):
-        packaging.verify_tarball_modes(self.build(0o755))
+        packaging.verify_tarball_contents(self.build(0o755))
 
     def test_non_executable_binary_fails(self):
         with self.assertRaises(SystemExit) as caught:
-            packaging.verify_tarball_modes(self.build(0o644))
+            packaging.verify_tarball_contents(self.build(0o644))
         self.assertIn("not executable", str(caught.exception))
 
     def test_windows_binary_may_be_non_executable(self):
-        packaging.verify_tarball_modes(
+        packaging.verify_tarball_contents(
             self.build(0o644, "package/binaries/win32-x64/dep-vet.exe")
         )
 
     def test_windows_build_warns_instead_of_failing(self):
         # Windows cannot store Unix modes, so the packed tarball is 0644 there.
-        packaging.verify_tarball_modes(self.build(0o644), windows=True)
+        packaging.verify_tarball_contents(self.build(0o644), windows=True)
+
+    def test_missing_readme_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tarball = pathlib.Path(directory) / "pkg.tgz"
+            with tarfile.open(tarball, "w:gz") as archive:
+                info = tarfile.TarInfo("package/binaries/linux-x64/dep-vet")
+                info.size = 1
+                info.mode = 0o755
+                archive.addfile(info, io.BytesIO(b"x"))
+            with self.assertRaises(SystemExit) as caught:
+                packaging.verify_tarball_contents(tarball)
+            self.assertIn("no package/README.md", str(caught.exception))
+
+    def test_stub_readme_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tarball = pathlib.Path(directory) / "pkg.tgz"
+            with tarfile.open(tarball, "w:gz") as archive:
+                info = tarfile.TarInfo("package/README.md")
+                info.size = 10
+                archive.addfile(info, io.BytesIO(b"x" * 10))
+            with self.assertRaises(SystemExit) as caught:
+                packaging.verify_tarball_contents(tarball)
+            self.assertIn("too short", str(caught.exception))
 
     def test_files_outside_binaries_are_ignored(self):
-        packaging.verify_tarball_modes(self.build(0o644, "package/bin/dep-vet.js"))
+        packaging.verify_tarball_contents(self.build(0o644, "package/bin/dep-vet.js"))
 
 
 if __name__ == "__main__":
