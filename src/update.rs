@@ -1,0 +1,305 @@
+//! `dep-vet update`: report the latest release and the command for the channel
+//! this binary came from.
+//!
+//! Nothing here changes a verdict. The command reads one GitHub API document,
+//! compares versions, and prints guidance. Exit `0` means current, `1` means a
+//! newer release exists (only with `--check`), `3` means the check failed.
+
+use crate::http::HttpClient;
+use semver::Version;
+use std::path::Path;
+
+/// Unauthenticated GitHub API root. `DEPVET_UPDATE_BASE` overrides it for tests.
+pub const GITHUB_API: &str = "https://api.github.com";
+const RELEASE_PATH: &str = "/repos/nassih-yassine/Dep-Vet/releases/latest";
+
+#[derive(Debug)]
+pub enum UpdateError {
+    Http(String),
+    Parse(String),
+    Version(String),
+}
+
+impl std::fmt::Display for UpdateError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpdateError::Http(message) => write!(formatter, "could not reach GitHub: {message}"),
+            UpdateError::Parse(message) => write!(formatter, "unreadable release data: {message}"),
+            UpdateError::Version(message) => write!(formatter, "unreadable version: {message}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Latest {
+    pub version: Version,
+    pub tag: String,
+    pub url: String,
+}
+
+/// Compare two versions, tolerating a leading `v` on either side.
+pub fn parse_version(raw: &str) -> Option<Version> {
+    Version::parse(raw.trim().trim_start_matches('v')).ok()
+}
+
+/// True when `latest` is strictly newer than `current`.
+pub fn is_newer(current: &str, latest: &str) -> Option<bool> {
+    let current = parse_version(current)?;
+    let latest = parse_version(latest)?;
+    Some(latest > current)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    Homebrew,
+    Cargo,
+    Npm,
+    Scoop,
+    Docker,
+    Debian,
+    Fedora,
+    Arch,
+    Alpine,
+    Unknown,
+}
+
+impl Channel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Channel::Homebrew => "homebrew",
+            Channel::Cargo => "cargo",
+            Channel::Npm => "npm",
+            Channel::Scoop => "scoop",
+            Channel::Docker => "docker",
+            Channel::Debian => "debian",
+            Channel::Fedora => "fedora",
+            Channel::Arch => "arch",
+            Channel::Alpine => "alpine",
+            Channel::Unknown => "unknown",
+        }
+    }
+
+    /// The command that updates this channel. `None` means "no single command";
+    /// print the release URL instead.
+    pub fn command(self) -> Option<&'static str> {
+        match self {
+            Channel::Homebrew => Some("brew upgrade dep-vet"),
+            Channel::Cargo => Some("cargo install dep-vet --locked --force"),
+            Channel::Npm => Some("npm install --global @nassihyas/dep-vet@latest"),
+            Channel::Scoop => Some("scoop update dep-vet"),
+            Channel::Docker => Some("docker pull ghcr.io/nassih-yassine/dep-vet:latest"),
+            Channel::Debian => Some("sudo apt update && sudo apt install --only-upgrade dep-vet"),
+            Channel::Fedora => Some("sudo dnf upgrade dep-vet"),
+            Channel::Arch => Some("yay -Syu dep-vet-bin"),
+            Channel::Alpine => Some("sudo apk upgrade dep-vet"),
+            Channel::Unknown => None,
+        }
+    }
+}
+
+/// Detect the install channel from the executable path, container marker, and
+/// distro marker. Pure so every branch is testable.
+pub fn detect_channel(executable: &Path, docker: bool, distro: Option<&str>) -> Channel {
+    if docker {
+        return Channel::Docker;
+    }
+    let path = executable.to_string_lossy().replace('\\', "/");
+    if path.contains("/Cellar/")
+        || path.contains("/home/linuxbrew/")
+        || path.contains("/linuxbrew/")
+    {
+        return Channel::Homebrew;
+    }
+    if path.contains("/node_modules/") {
+        return Channel::Npm;
+    }
+    if path.contains("/.cargo/bin/") || path.contains("/cargo/bin/") {
+        return Channel::Cargo;
+    }
+    if path.contains("/scoop/apps/") {
+        return Channel::Scoop;
+    }
+    match distro {
+        Some("debian") => Channel::Debian,
+        Some("fedora") => Channel::Fedora,
+        Some("arch") => Channel::Arch,
+        Some("alpine") => Channel::Alpine,
+        _ => Channel::Unknown,
+    }
+}
+
+/// Detected channel for the running binary.
+pub fn current_channel() -> Channel {
+    let executable = std::env::current_exe().unwrap_or_default();
+    let docker = Path::new("/.dockerenv").exists();
+    let distro = if Path::new("/etc/debian_version").exists() {
+        Some("debian")
+    } else if Path::new("/etc/fedora-release").exists() {
+        Some("fedora")
+    } else if Path::new("/etc/arch-release").exists() {
+        Some("arch")
+    } else if Path::new("/etc/alpine-release").exists() {
+        Some("alpine")
+    } else {
+        None
+    };
+    detect_channel(&executable, docker, distro)
+}
+
+fn api_base() -> String {
+    // A test seam, not a feature: another host is only honoured under the same
+    // gate as every other DEPVET_*_BASE override.
+    let allowed = std::env::var("DEPVET_ALLOW_INSECURE_BASES").is_ok_and(|value| value == "1");
+    if allowed
+        && let Ok(base) = std::env::var("DEPVET_UPDATE_BASE")
+        && !base.is_empty()
+    {
+        return base;
+    }
+    GITHUB_API.to_string()
+}
+
+/// Fetch the latest release document.
+pub fn check(http: &HttpClient) -> Result<Latest, UpdateError> {
+    let url = format!("{}{RELEASE_PATH}", api_base().trim_end_matches('/'));
+    let body = http
+        .get(&url)
+        .map_err(|error| UpdateError::Http(error.to_string()))?;
+    let document: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| UpdateError::Parse(error.to_string()))?;
+    let tag = document
+        .get("tag_name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| UpdateError::Parse("no tag_name".into()))?
+        .to_string();
+    let version = parse_version(&tag)
+        .ok_or_else(|| UpdateError::Version(format!("tag {tag:?} is not a version")))?;
+    let url = document
+        .get("html_url")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("https://github.com/nassih-yassine/Dep-Vet/releases")
+        .to_string();
+    Ok(Latest { version, tag, url })
+}
+
+/// Run the command and return the process exit code.
+pub fn run(http: &HttpClient, check_only: bool, json: bool) -> u8 {
+    let current = env!("CARGO_PKG_VERSION");
+    let channel = current_channel();
+    match check(http) {
+        Ok(latest) => {
+            let newer = is_newer(current, &latest.tag).unwrap_or(false);
+            if json {
+                let payload = serde_json::json!({
+                    "current": current,
+                    "latest": latest.version.to_string(),
+                    "update_available": newer,
+                    "channel": channel.label(),
+                    "command": channel.command(),
+                    "release_url": latest.url,
+                });
+                println!("{payload}");
+            } else if newer {
+                println!("dep-vet {current}");
+                println!("latest   {}", latest.version);
+                println!("channel  {}", channel.label());
+                if let Some(command) = channel.command() {
+                    println!("update   {command}");
+                } else {
+                    println!("update   download from {}", latest.url);
+                }
+                println!("release  {}", latest.url);
+            } else {
+                println!("dep-vet {current} is the latest release.");
+            }
+            if newer && check_only { 1 } else { 0 }
+        }
+        Err(error) => {
+            eprintln!("dep-vet: update check failed: {error}");
+            3
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_tags_with_and_without_v() {
+        assert_eq!(parse_version("v1.2.3").unwrap(), Version::new(1, 2, 3));
+        assert_eq!(parse_version("1.2.3").unwrap(), Version::new(1, 2, 3));
+        assert!(parse_version("release-1").is_none());
+        assert!(parse_version("v1.2").is_none());
+    }
+
+    #[test]
+    fn compares_versions() {
+        assert_eq!(is_newer("0.13.3", "v0.13.4"), Some(true));
+        assert_eq!(is_newer("0.13.3", "v0.13.3"), Some(false));
+        assert_eq!(is_newer("0.13.3", "v0.13.2"), Some(false));
+        assert_eq!(is_newer("0.13.3", "nonsense"), None);
+    }
+
+    #[test]
+    fn detects_channels_from_paths() {
+        let cases = [
+            (
+                "/home/linuxbrew/.linuxbrew/Cellar/dep-vet/0.1/bin/dep-vet",
+                false,
+                None,
+                Channel::Homebrew,
+            ),
+            (
+                "/opt/homebrew/Cellar/dep-vet/0.1/bin/dep-vet",
+                false,
+                None,
+                Channel::Homebrew,
+            ),
+            (
+                "/usr/lib/node_modules/@nassihyas/dep-vet/binaries/linux-x64/dep-vet",
+                false,
+                None,
+                Channel::Npm,
+            ),
+            ("/home/me/.cargo/bin/dep-vet", false, None, Channel::Cargo),
+            (
+                "C:\\Users\\me\\scoop\\apps\\dep-vet\\current\\dep-vet.exe",
+                false,
+                None,
+                Channel::Scoop,
+            ),
+            ("/usr/bin/dep-vet", false, Some("debian"), Channel::Debian),
+            ("/usr/bin/dep-vet", false, Some("fedora"), Channel::Fedora),
+            ("/usr/bin/dep-vet", false, Some("arch"), Channel::Arch),
+            ("/usr/bin/dep-vet", false, Some("alpine"), Channel::Alpine),
+            ("/usr/bin/dep-vet", true, Some("debian"), Channel::Docker),
+            ("/tmp/dep-vet", false, None, Channel::Unknown),
+        ];
+        for (path, docker, distro, expected) in cases {
+            assert_eq!(
+                detect_channel(Path::new(path), docker, distro),
+                expected,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_known_channel_but_unknown_has_a_command() {
+        for channel in [
+            Channel::Homebrew,
+            Channel::Cargo,
+            Channel::Npm,
+            Channel::Scoop,
+            Channel::Docker,
+            Channel::Debian,
+            Channel::Fedora,
+            Channel::Arch,
+            Channel::Alpine,
+        ] {
+            assert!(channel.command().is_some(), "{:?}", channel);
+        }
+        assert!(Channel::Unknown.command().is_none());
+    }
+}

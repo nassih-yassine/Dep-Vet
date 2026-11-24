@@ -7357,3 +7357,87 @@ fn maven_reads_androidx_from_google_maven() {
         value["findings"]
     );
 }
+
+#[test]
+fn update_reports_a_newer_release_and_exits_one_with_check() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/repos/nassih-yassine/Dep-Vet/releases/latest".to_string(),
+        (
+            200,
+            r#"{"tag_name":"v9.9.9","html_url":"https://example.test/releases/v9.9.9"}"#
+                .to_string(),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+    registry
+        .command_with(&[("DEPVET_UPDATE_BASE", &registry.base)])
+        .args(["update", "--check"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("latest   9.9.9"))
+        .stdout(predicate::str::contains(
+            "release  https://example.test/releases/v9.9.9",
+        ));
+}
+
+#[test]
+fn update_reports_current_when_the_tag_matches() {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/repos/nassih-yassine/Dep-Vet/releases/latest".to_string(),
+        (
+            200,
+            format!(r#"{{"tag_name":"v{version}","html_url":"https://example.test/releases"}}"#),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+    registry
+        .command_with(&[("DEPVET_UPDATE_BASE", &registry.base)])
+        .args(["update", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("is the latest release"));
+}
+
+#[test]
+fn update_json_has_stable_fields() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/repos/nassih-yassine/Dep-Vet/releases/latest".to_string(),
+        (
+            200,
+            r#"{"tag_name":"v9.9.9","html_url":"https://example.test"}"#.to_string(),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+    let output = registry
+        .command_with(&[("DEPVET_UPDATE_BASE", &registry.base)])
+        .args(["update", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let payload: serde_json::Value = serde_json::from_slice(&output).expect("json");
+    assert_eq!(payload["latest"], "9.9.9");
+    assert_eq!(payload["update_available"], true);
+    assert!(payload["release_url"].as_str().is_some());
+    assert!(payload["channel"].as_str().is_some());
+}
+
+#[test]
+fn update_failure_exits_three_not_two() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/repos/nassih-yassine/Dep-Vet/releases/latest".to_string(),
+        (500, "boom".to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+    registry
+        .command_with(&[("DEPVET_UPDATE_BASE", &registry.base)])
+        .args(["update", "--check"])
+        .assert()
+        .code(3);
+}

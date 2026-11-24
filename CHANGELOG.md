@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **`dep-vet update`.** Reports the latest release, detects the install channel
+  (Homebrew, Cargo, npm, Scoop, Docker, or a distro package) and prints the
+  command that updates it. `--check` exits `1` for "newer available", `0` for
+  current, and `3` when the check fails, so it can never be confused with a HIGH
+  verdict.
 - **Linux packages.** Every release now carries `.deb`, `.rpm`, `.apk`, and
   pacman packages for amd64 and arm64, built with nfpm from the attested musl
   binaries. They install one binary and contain no maintainer scripts.
