@@ -89,40 +89,56 @@ jobs:
         run: |
           set -eu
           shopt -s nullglob
+          fail() { echo "::error::$1"; exit 1; }
+
           if ! command -v bsdtar >/dev/null; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq libarchive-tools
           fi
-          debs=(dist-pkg/*.deb)
-          rpms=(dist-pkg/*.rpm)
-          apks=(dist-pkg/*.apk)
-          arch=(dist-pkg/*.pkg.tar.zst)
-          [ "${#debs[@]}" -eq 2 ] && [ "${#rpms[@]}" -eq 2 ] && \
-            [ "${#apks[@]}" -eq 2 ] && [ "${#arch[@]}" -eq 2 ] || {
-            echo "::error::expected two packages per format"; exit 1; }
+          if ! command -v rpm >/dev/null; then
+            sudo apt-get install -y -qq rpm
+          fi
+
+          ls -l dist-pkg
+          debs=(dist-pkg/*.deb); rpms=(dist-pkg/*.rpm)
+          apks=(dist-pkg/*.apk); arch=(dist-pkg/*.pkg.tar.zst)
+          [ "${#debs[@]}" -eq 2 ] || fail "expected two debs, found ${#debs[@]}"
+          [ "${#rpms[@]}" -eq 2 ] || fail "expected two rpms, found ${#rpms[@]}"
+          [ "${#apks[@]}" -eq 2 ] || fail "expected two apks, found ${#apks[@]}"
+          [ "${#arch[@]}" -eq 2 ] || fail "expected two pacman packages, found ${#arch[@]}"
+
           for deb in "${debs[@]}"; do
-            dpkg-deb --info "$deb" | grep -qx "Package: dep-vet"
-            dpkg-deb --info "$deb" | grep -qx "Version: ${VERSION}-1"
-            # No maintainer scripts: an installer for a supply-chain tool must
-            # not run code of its own.
-            if dpkg-deb --ctrl-tarfile "$deb" | tar -t | grep -Eq '(pre|post)(inst|rm)|^(\./)?(config|triggers)$'; then
-              echo "::error::$deb carries a maintainer script"
-              exit 1
+            name="$(dpkg-deb --field "$deb" Package)"
+            version="$(dpkg-deb --field "$deb" Version)"
+            echo "$deb: $name $version"
+            [ "$name" = "dep-vet" ] || fail "$deb is named $name"
+            [ "$version" = "${VERSION}-1" ] || fail "$deb has version $version"
+            ctrl="$(dpkg-deb --ctrl-tarfile "$deb" | tar -t)"
+            if printf '%s\n' "$ctrl" | grep -Eq '(pre|post)(inst|rm)|^(\./)?(config|triggers)$'; then
+              fail "$deb carries a maintainer script: $ctrl"
             fi
-            dpkg-deb --contents "$deb" | grep -qE '(^|/)usr/bin/dep-vet$' || \
-              { echo "::error::$deb lacks the binary"; exit 1; }
+            dpkg-deb --contents "$deb" | grep -qE '(^|/)usr/bin/dep-vet$' || fail "$deb lacks the binary"
           done
+
           for rpm in "${rpms[@]}"; do
-            bsdtar -tf "$rpm" | grep -qE '(^|/)usr/bin/dep-vet$' || \
-              { echo "::error::$rpm lacks the binary"; exit 1; }
+            echo "$rpm"
+            rpm -qlp "$rpm" | grep -qE '^/usr/bin/dep-vet$' || fail "$rpm lacks the binary"
+            if rpm -qp --scripts "$rpm" 2>/dev/null | grep -q .; then
+              fail "$rpm carries a scriptlet"
+            fi
           done
+
           for apk in "${apks[@]}"; do
-            bsdtar -tf "$apk" | grep -qE '(^|/)usr/bin/dep-vet$' || \
-              { echo "::error::$apk lacks the binary"; exit 1; }
+            echo "$apk"
+            bsdtar -tf "$apk" | grep -qE '(^|/)usr/bin/dep-vet$' || fail "$apk lacks the binary"
           done
+
           for pkg in "${arch[@]}"; do
-            bsdtar -tf "$pkg" | grep -qE '(^|/)usr/bin/dep-vet$' || \
-              { echo "::error::$pkg lacks the binary"; exit 1; }
+            echo "$pkg"
+            bsdtar -tf "$pkg" | grep -qE '(^|/)usr/bin/dep-vet$' || fail "$pkg lacks the binary"
+            if bsdtar -tf "$pkg" | grep -qE '(^|/)\.INSTALL$'; then
+              fail "$pkg carries .INSTALL"
+            fi
           done
       - name: Smoke test the amd64 package
         run: |
