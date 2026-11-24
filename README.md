@@ -128,8 +128,9 @@ scoop bucket add nassih-yassine https://github.com/nassih-yassine/scoop-bucket
 scoop install nassih-yassine/dep-vet
 ```
 
-A bucket add is only needed until the manifest is accepted into the default
-`Extras` bucket, after which `scoop install dep-vet` works on its own.
+The manifest lives in the personal bucket. Scoop's `Extras` bucket declined it on
+its popularity criteria, so the `bucket add` step is required; there is no
+`Extras` shortcut to expect.
 
 **Arch Linux — pacman or AUR**
 
