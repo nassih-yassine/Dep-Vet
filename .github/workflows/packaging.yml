@@ -89,6 +89,10 @@ jobs:
         run: |
           set -eu
           shopt -s nullglob
+          if ! command -v bsdtar >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq libarchive-tools
+          fi
           debs=(dist-pkg/*.deb)
           rpms=(dist-pkg/*.rpm)
           apks=(dist-pkg/*.apk)
@@ -105,17 +109,20 @@ jobs:
               echo "::error::$deb carries a maintainer script"
               exit 1
             fi
-            dpkg-deb --contents "$deb" | grep -q '/usr/bin/dep-vet$'
+            dpkg-deb --contents "$deb" | grep -qE '(^|/)usr/bin/dep-vet$' || \
+              { echo "::error::$deb lacks the binary"; exit 1; }
           done
           for rpm in "${rpms[@]}"; do
-            bsdtar -tf "$rpm" 2>/dev/null | grep -q '/usr/bin/dep-vet$' || \
+            bsdtar -tf "$rpm" | grep -qE '(^|/)usr/bin/dep-vet$' || \
               { echo "::error::$rpm lacks the binary"; exit 1; }
           done
           for apk in "${apks[@]}"; do
-            bsdtar -tf "$apk" | grep -q '^usr/bin/dep-vet$'
+            bsdtar -tf "$apk" | grep -qE '(^|/)usr/bin/dep-vet$' || \
+              { echo "::error::$apk lacks the binary"; exit 1; }
           done
           for pkg in "${arch[@]}"; do
-            bsdtar -tf "$pkg" | grep -q '^usr/bin/dep-vet$'
+            bsdtar -tf "$pkg" | grep -qE '(^|/)usr/bin/dep-vet$' || \
+              { echo "::error::$pkg lacks the binary"; exit 1; }
           done
       - name: Smoke test the amd64 package
         run: |
