@@ -921,6 +921,10 @@ dep-vet mcp                      # stdio JSON-RPC, one JSON object per line
 dep-vet mcp --print-config       # .mcp.json snippet + claude mcp add line
 ```
 
+The server is listed in the official MCP Registry as
+`io.github.nassih-yassine/dep-vet`, so registry-aware clients can find and
+install it from there.
+
 Tools: `vet_package {ecosystem, name, version?}`, `vet_command {command}`, and
 `vet_lockfile_change {lockfile, base?}`. Each returns structured content plus a
 text summary; tool-level failures are `isError` results, while bad arguments and
