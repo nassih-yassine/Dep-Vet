@@ -641,6 +641,13 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   idempotent. Do not hand-edit the formula; change the template in that script.
   Homebrew strips the single top-level directory in each archive, so `install`
   is `bin.install "dep-vet"`.
+- **The crate is published from CI too.** `.github/workflows/cargo-publish.yml`
+  runs on the Release workflow, checks out the tag, skips with a notice when
+  crates.io already serves the version (a plain 404-free `curl` probe), and
+  publishes `cargo publish --locked` inside the protected `crates-io`
+  environment. The token there is scoped to `publish-update` for this crate; do
+  not widen it. crates.io has no OIDC trusted publishing for cargo, so this is a
+  bearer token, never described as provenance.
 - **npm is published from CI with provenance.** `.github/workflows/npm-publish.yml`
   runs after the Release workflow (or by dispatch with a tag), rebuilds the
   package from the release assets, publishes with `--provenance`, then installs

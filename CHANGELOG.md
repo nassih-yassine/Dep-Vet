@@ -2,6 +2,9 @@
 
 ## 0.13.4 — 2026-11-24
 
+- **The crate is published from CI.** `cargo-publish.yml` runs on the Release
+  workflow, checks out the tag, skips when crates.io already has the version,
+  and publishes inside the `crates-io` environment.
 - **Docs tell the truth about npm provenance.** No published npm version has an
   attestation, because npm blocks trusted publishers until the account has 2FA;
   `SECURITY.md` now says so instead of pointing at a version that cannot verify.
