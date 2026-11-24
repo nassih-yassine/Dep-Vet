@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.13.3 — unreleased
+## 0.13.3 — 2026-11-24
 
 - **npm publishes with provenance from CI.** `.github/workflows/npm-publish.yml`
   builds the package from the attested release assets and publishes with
