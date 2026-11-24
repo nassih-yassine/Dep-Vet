@@ -1028,6 +1028,8 @@ mod tests {
             url: format!("https://osv.dev/vulnerability/{id}"),
             fixed_versions: fixed.iter().map(|version| version.to_string()).collect(),
             details_missing: false,
+            epss: None,
+            kev: None,
         }
     }
 
@@ -1093,6 +1095,8 @@ mod tests {
                 url: "https://osv.dev/vulnerability/GHSA-x".to_string(),
                 fixed_versions: Vec::new(),
                 details_missing: true,
+                epss: None,
+                kev: None,
             }],
             hidden: 0,
             stale_seconds: None,
@@ -1117,6 +1121,8 @@ mod tests {
                     url: "https://osv.dev/vulnerability/GHSA-unknown".to_string(),
                     fixed_versions: Vec::new(),
                     details_missing: true,
+                    epss: None,
+                    kev: None,
                 },
             ],
             hidden: 0,
@@ -2166,6 +2172,8 @@ mod tests {
             url: format!("https://osv.dev/vulnerability/{id}"),
             fixed_versions: Vec::new(),
             details_missing: false,
+            epss: None,
+            kev: None,
         }
     }
 
