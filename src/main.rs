@@ -63,7 +63,10 @@ fn main() -> ExitCode {
     }
     dep_vet::netpolicy::warn_once();
     match execute(&cli) {
-        Ok(code) => ExitCode::from(code),
+        Ok(code) => {
+            dep_vet::update::maybe_hint(&cli, code);
+            ExitCode::from(code)
+        }
         Err(error) => {
             eprintln!("dep-vet: {error}");
             eprintln!(

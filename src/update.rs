@@ -182,6 +182,59 @@ pub fn check(http: &HttpClient) -> Result<Latest, UpdateError> {
     Ok(Latest { version, tag, url })
 }
 
+/// Pure gate for the passive hint: a human terminal, no CI, no opt-out.
+pub fn should_hint(
+    human_report: bool,
+    stdout_tty: bool,
+    stderr_tty: bool,
+    exit_code: u8,
+    env: impl Fn(&str) -> Option<String>,
+) -> bool {
+    if !human_report || !stdout_tty || !stderr_tty || exit_code > 1 {
+        return false;
+    }
+    if env("CI").is_some()
+        || env("DEPVET_NO_UPDATE_CHECK").is_some()
+        || env("NO_UPDATE_NOTIFIER").is_some()
+    {
+        return false;
+    }
+    !env("TERM").is_some_and(|term| term == "dumb")
+}
+
+/// Print one line to stderr when a newer release exists. Never fails, never
+/// changes the exit code, and never writes to stdout.
+pub fn maybe_hint(cli: &crate::cli::Cli, exit_code: u8) {
+    use std::io::IsTerminal as _;
+
+    let human = should_hint(
+        cli.human_report(),
+        std::io::stdout().is_terminal(),
+        std::io::stderr().is_terminal(),
+        exit_code,
+        |name| std::env::var(name).ok(),
+    );
+    if !human {
+        return;
+    }
+    let http = HttpClient::from_env(false);
+    let Ok(latest) = check(&http) else {
+        return;
+    };
+    if is_newer(env!("CARGO_PKG_VERSION"), &latest.tag).unwrap_or(false) {
+        println_ignoring_errors(&format!(
+            "dep-vet: {} is available (you have {}); run `dep-vet update`",
+            latest.version,
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+}
+
+fn println_ignoring_errors(message: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "{message}");
+}
+
 /// Run the command and return the process exit code.
 pub fn run(http: &HttpClient, check_only: bool, json: bool) -> u8 {
     let current = env!("CARGO_PKG_VERSION");
@@ -301,5 +354,55 @@ mod tests {
             assert!(channel.command().is_some(), "{:?}", channel);
         }
         assert!(Channel::Unknown.command().is_none());
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::should_hint;
+
+    fn env(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        let owned: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        move |name: &str| {
+            owned
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        }
+    }
+
+    #[test]
+    fn hints_only_on_a_human_terminal() {
+        assert!(should_hint(true, true, true, 0, env(&[])));
+        assert!(should_hint(true, true, true, 1, env(&[])));
+        assert!(!should_hint(true, false, true, 0, env(&[])));
+        assert!(!should_hint(true, true, false, 0, env(&[])));
+        assert!(!should_hint(false, true, true, 0, env(&[])));
+        assert!(!should_hint(true, true, true, 2, env(&[])));
+        assert!(!should_hint(true, true, true, 3, env(&[])));
+    }
+
+    #[test]
+    fn respects_every_opt_out() {
+        assert!(!should_hint(true, true, true, 0, env(&[("CI", "1")])));
+        assert!(!should_hint(
+            true,
+            true,
+            true,
+            0,
+            env(&[("DEPVET_NO_UPDATE_CHECK", "1")])
+        ));
+        assert!(!should_hint(
+            true,
+            true,
+            true,
+            0,
+            env(&[("NO_UPDATE_NOTIFIER", "1")])
+        ));
+        assert!(!should_hint(true, true, true, 0, env(&[("TERM", "dumb")])));
+        assert!(should_hint(true, true, true, 0, env(&[("TERM", "xterm")])));
     }
 }

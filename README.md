@@ -196,6 +196,12 @@ dep-vet update --check    # exit 1 when a newer release exists, 0 when current
 `--check` never exits `2`: a failed check is `3`, so a script cannot confuse
 "newer available" with "high risk".
 
+On an interactive terminal, dep-vet also prints one line to stderr when a newer
+release exists. It is silent in CI, in `--json`/SARIF/file output, in `hook`,
+`mcp`, `guard`, and `watch`, and after a HIGH or failed check. Opt out with
+`DEPVET_NO_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1`. The lookup is cached for
+24 hours and sends no package data.
+
 **Verify what you downloaded**
 
 Every channel has a check you can run; `SECURITY.md` lists what each one proves.

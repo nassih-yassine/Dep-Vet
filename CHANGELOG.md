@@ -7,6 +7,10 @@
   command that updates it. `--check` exits `1` for "newer available", `0` for
   current, and `3` when the check fails, so it can never be confused with a HIGH
   verdict.
+- **One-line update hint.** Interactive runs print a single stderr line when a
+  newer release exists, cached for 24 hours. Never in CI, machine output,
+  hooks, MCP, guard, watch, or after a HIGH or failed check; opt out with
+  `DEPVET_NO_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1`.
 - **Linux packages.** Every release now carries `.deb`, `.rpm`, `.apk`, and
   pacman packages for amd64 and arm64, built with nfpm from the attested musl
   binaries. They install one binary and contain no maintainer scripts.
