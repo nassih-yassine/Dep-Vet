@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.4 — 2026-11-24
 
 - **`dep-vet update`.** Reports the latest release, detects the install channel
   (Homebrew, Cargo, npm, Scoop, Docker, or a distro package) and prints the
