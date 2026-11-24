@@ -113,12 +113,19 @@ brew trust nassih-yassine/tap   # newer Homebrew refuses untrusted taps
 brew install dep-vet
 ```
 
+`brew trust` is needed once per machine. The formula lives in the tap, so
+`brew search` and https://formulae.brew.sh only show it after the tap is added;
+that site only indexes `homebrew-core`.
+
 **Windows — Scoop**
 
 ```powershell
 scoop bucket add nassih-yassine https://github.com/nassih-yassine/scoop-bucket
 scoop install nassih-yassine/dep-vet
 ```
+
+A bucket add is only needed until the manifest is accepted into the default
+`Extras` bucket, after which `scoop install dep-vet` works on its own.
 
 **Docker**
 
