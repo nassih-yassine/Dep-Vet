@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.6 — 2026-11-24
 
 - **Invisible characters and prompt-injection text are flagged.** `inspect` and
   `diff` now read every extracted text file, not just code, and report zero-width

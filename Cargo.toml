@@ -1,6 +1,6 @@
 [package]
 name = "dep-vet"
-version = "0.13.5"
+version = "0.13.6"
 edition = "2024"
 rust-version = "1.88"
 description = "Check a package's risk before it enters your lockfile"
