@@ -1,7 +1,7 @@
 //! Core types: the package spec the user typed, and the evidence-backed
 //! report dep-vet prints back.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::date;
 use crate::osv::Advisory;
@@ -297,11 +297,14 @@ fn validate_version(version: &str) -> Result<String, SpecError> {
     Ok(trimmed.to_string())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
+    #[serde(alias = "low")]
     Info,
+    #[serde(alias = "medium")]
     Warn,
+    #[serde(alias = "critical")]
     High,
 }
 
@@ -745,6 +748,9 @@ pub struct PackageReport {
     /// not checked, never a clean score.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scorecard: Option<crate::scorecard::Scorecard>,
+    /// SPDX-normalised license from the registry, when it published one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
     pub advisories: Vec<Advisory>,
     /// Advisories skipped after the per-run cap.
     pub hidden_advisories: usize,
@@ -844,7 +850,13 @@ impl Finding {
             | "attestation-source-mismatch"
             | "advisories-stale"
             | "low-scorecard"
+            | "policy-min-age"
+            | "policy-min-downloads"
+            | "policy-provenance"
+            | "policy-advisory-severity"
+            | "policy-license"
             | "no-repository" => Confidence::Medium,
+            "policy-license-denied" => Confidence::High,
             _ => Confidence::Medium,
         }
     }
@@ -1293,6 +1305,7 @@ mod tests {
             dependency_paths: Vec::new(),
             findings,
             scorecard: None,
+            license: None,
         }
     }
 

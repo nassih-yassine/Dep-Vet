@@ -118,8 +118,8 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         };
     }
     let http = Arc::new(HttpClient::from_env(cli.no_cache));
-    let mut auditor = Auditor::new(&http);
     let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
+    let mut auditor = Auditor::new(&http, allowlist.policy());
 
     match &cli.command {
         Command::Hook { .. } => unreachable!("handled before config and network"),
@@ -490,10 +490,11 @@ struct Auditor {
     composer: ComposerClient,
     osv: OsvClient,
     scorecard: Option<dep_vet::scorecard::ScorecardClient>,
+    policy: dep_vet::allowlist::Policy,
 }
 
 impl Auditor {
-    fn new(http: &Arc<HttpClient>) -> Self {
+    fn new(http: &Arc<HttpClient>, policy: &dep_vet::allowlist::Policy) -> Self {
         Self {
             registry: RegistryClient::from_env(Arc::clone(http)),
             pypi: PypiClient::from_env(Arc::clone(http)),
@@ -508,6 +509,7 @@ impl Auditor {
             scorecard: Some(dep_vet::scorecard::ScorecardClient::from_env(Arc::clone(
                 http,
             ))),
+            policy: policy.clone(),
         }
     }
 
@@ -555,7 +557,7 @@ impl Auditor {
                     .ok(),
             ),
         };
-        Ok(signals::report(
+        Ok(signals::report_with_policy(
             meta,
             Ecosystem::Npm,
             downloads,
@@ -563,6 +565,7 @@ impl Auditor {
             local,
             Profile::NPM,
             now,
+            &self.policy,
         ))
     }
 
@@ -627,7 +630,7 @@ impl Auditor {
                 .query(Ecosystem::Composer, &meta.name, &meta.version)
                 .ok(),
         };
-        Ok(signals::report(
+        Ok(signals::report_with_policy(
             meta,
             Ecosystem::Composer,
             None,
@@ -635,6 +638,7 @@ impl Auditor {
             &[],
             Profile::COMPOSER,
             now,
+            &self.policy,
         ))
     }
 
@@ -656,7 +660,7 @@ impl Auditor {
                 .query(Ecosystem::Maven, &meta.name, &meta.version)
                 .ok(),
         };
-        let mut report = signals::report(
+        let mut report = signals::report_with_policy(
             meta,
             Ecosystem::Maven,
             None,
@@ -664,6 +668,7 @@ impl Auditor {
             &[],
             Profile::MAVEN,
             now,
+            &self.policy,
         );
         if google_maven {
             report.findings.push(signals::advisory_coverage_partial());
@@ -686,7 +691,7 @@ impl Auditor {
                 .query(Ecosystem::NuGet, &meta.name, &meta.version)
                 .ok(),
         };
-        Ok(signals::report(
+        Ok(signals::report_with_policy(
             meta,
             Ecosystem::NuGet,
             None,
@@ -694,6 +699,7 @@ impl Auditor {
             &[],
             Profile::NUGET,
             now,
+            &self.policy,
         ))
     }
 
@@ -712,7 +718,7 @@ impl Auditor {
                 .query(Ecosystem::RubyGems, &meta.name, &meta.version)
                 .ok(),
         };
-        Ok(signals::report(
+        Ok(signals::report_with_policy(
             meta,
             Ecosystem::RubyGems,
             None,
@@ -720,6 +726,7 @@ impl Auditor {
             &[],
             Profile::RUBYGEMS,
             now,
+            &self.policy,
         ))
     }
 
@@ -731,7 +738,7 @@ impl Auditor {
     ) -> Result<PackageReport, JsrError> {
         let mut meta = self.jsr.fetch(spec)?;
         self.attach_scorecard(&mut meta);
-        Ok(signals::report(
+        Ok(signals::report_with_policy(
             meta,
             Ecosystem::Jsr,
             None,
@@ -739,6 +746,7 @@ impl Auditor {
             &[],
             Profile::JSR,
             now,
+            &self.policy,
         ))
     }
 
@@ -757,7 +765,7 @@ impl Auditor {
                 .query(Ecosystem::Go, &meta.name, &meta.version)
                 .ok(),
         };
-        Ok(signals::report(
+        Ok(signals::report_with_policy(
             meta,
             Ecosystem::Go,
             None,
@@ -765,6 +773,7 @@ impl Auditor {
             &[],
             Profile::GO,
             now,
+            &self.policy,
         ))
     }
 
@@ -783,7 +792,7 @@ impl Auditor {
                 .query(Ecosystem::CratesIo, &meta.name, &meta.version)
                 .ok(),
         };
-        Ok(signals::report(
+        Ok(signals::report_with_policy(
             meta,
             Ecosystem::CratesIo,
             None,
@@ -791,6 +800,7 @@ impl Auditor {
             &[],
             Profile::CRATES,
             now,
+            &self.policy,
         ))
     }
 
@@ -809,7 +819,7 @@ impl Auditor {
                 .query(Ecosystem::Pypi, &meta.name, &meta.version)
                 .ok(),
         };
-        Ok(signals::report(
+        Ok(signals::report_with_policy(
             meta,
             Ecosystem::Pypi,
             None,
@@ -817,6 +827,7 @@ impl Auditor {
             &[],
             Profile::PYPI,
             now,
+            &self.policy,
         ))
     }
 }

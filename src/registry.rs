@@ -54,6 +54,8 @@ pub struct PackageMeta {
     pub release: ReleaseHistory,
     /// OpenSSF Scorecard for the repository, when deps.dev knows it.
     pub scorecard: Option<crate::scorecard::Scorecard>,
+    /// SPDX-normalised license from the registry, when it published one.
+    pub license: Option<String>,
 }
 
 /// What the previous release looked like. Empty means "no history", never
@@ -549,6 +551,8 @@ struct VersionDoc {
     repository: Option<RepoField>,
     #[serde(rename = "_npmUser", default)]
     npm_user: Option<User>,
+    #[serde(default)]
+    license: Option<serde_json::Value>,
 }
 
 /// Version and dependency information from one packument, for `plan`.
@@ -735,6 +739,7 @@ fn parse_packument(
         },
 
         scorecard: None,
+        license: doc.license.as_ref().and_then(crate::license::from_json),
     })
 }
 

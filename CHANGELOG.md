@@ -16,6 +16,13 @@
   Signed-Releases, and Dangerous-Workflow checks. A score below 5 becomes an
   INFO `low-scorecard` finding only when the same release also changed
   publisher. A missing score is `not checked`, never a clean 10.
+- **Install policy thresholds and license rules are configurable.** A new
+  `[policy]` section in `.depvet.toml` accepts `min_age_days`,
+  `min_weekly_downloads`, `require_provenance`, `max_advisory_severity`,
+  `allowed_licenses`, `denied_licenses`, and `severity`. Violations become
+  `policy-*` findings; a denied license is always HIGH. Licenses come from
+  registry metadata, normalised to SPDX ids, and an unpublished or unreadable
+  value is `not checked` instead of assumed allowed.
 
 ## 0.13.6 — 2026-11-24
 

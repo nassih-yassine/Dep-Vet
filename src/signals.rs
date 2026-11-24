@@ -35,6 +35,31 @@ pub fn report(
     profile: Profile,
     now: i64,
 ) -> PackageReport {
+    report_with_policy(
+        meta,
+        ecosystem,
+        weekly_downloads,
+        advisories,
+        local,
+        profile,
+        now,
+        &crate::allowlist::Policy::default(),
+    )
+}
+
+/// Same as [`report`] plus `.depvet.toml` `[policy]` thresholds. The default
+/// policy is empty, so callers that do not have config see no change.
+#[allow(clippy::too_many_arguments)]
+pub fn report_with_policy(
+    meta: PackageMeta,
+    ecosystem: Ecosystem,
+    weekly_downloads: Option<u64>,
+    advisories: Option<&AdvisoryList>,
+    local: &[String],
+    profile: Profile,
+    now: i64,
+    policy: &crate::allowlist::Policy,
+) -> PackageReport {
     // Age only excuses a weak resemblance. A one-edit lookalike stays
     // suspicious however old it is: crossenv is nine years old and still malware.
     let nearest = suspect_for(&meta, ecosystem, local, &profile);
@@ -96,6 +121,13 @@ pub fn report(
     {
         findings.push(low_scorecard(scorecard, meta.repository.as_deref()));
     }
+    findings.extend(policy_findings(
+        policy,
+        &meta,
+        weekly_downloads.filter(|_| profile.downloads),
+        advisories,
+        now,
+    ));
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
 
     let suspect = if established { None } else { nearest };
@@ -111,6 +143,9 @@ pub fn report(
     }
     if profile.scorecard && meta.scorecard.is_none() && !not_checked.contains(&"scorecard") {
         not_checked.push("scorecard");
+    }
+    if policy.needs_license() && meta.license.is_none() && !not_checked.contains(&"license") {
+        not_checked.push("license");
     }
 
     PackageReport {
@@ -129,6 +164,7 @@ pub fn report(
         attestation_subject_matches: meta.attestation_subject_matches,
         attestation: meta.attestation,
         scorecard: meta.scorecard,
+        license: meta.license,
         advisories: advisories
             .map(|list| list.advisories.clone())
             .unwrap_or_default(),
@@ -439,6 +475,133 @@ fn low_scorecard(scorecard: &crate::scorecard::Scorecard, repository: Option<&st
             url,
         }],
     }
+}
+
+/// Threshold violations from `.depvet.toml` `[policy]`. Every rule is off
+/// unless configured, and a value the registry did not publish is skipped, not
+/// guessed: the report already says that signal was not checked.
+fn policy_findings(
+    policy: &crate::allowlist::Policy,
+    meta: &PackageMeta,
+    weekly_downloads: Option<u64>,
+    advisories: Option<&AdvisoryList>,
+    now: i64,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let severity = policy.violation_severity();
+    let registry = || Evidence {
+        label: "registry".to_string(),
+        value: meta.registry_url.clone(),
+        url: Some(meta.registry_url.clone()),
+    };
+
+    if let Some(days) = policy.min_age_days
+        && let Some(first) = meta.first_published_at
+        && now.saturating_sub(first) < days as i64 * date::SECONDS_PER_DAY
+    {
+        let age = (now.saturating_sub(first) / date::SECONDS_PER_DAY).max(0);
+        findings.push(Finding {
+            id: "policy-min-age",
+            severity,
+            title: "younger than the policy allows".to_string(),
+            detail: format!("first published {age} days ago; the policy requires at least {days}"),
+            allowed: false,
+            evidence: vec![registry()],
+        });
+    }
+
+    if let Some(minimum) = policy.min_weekly_downloads
+        && let Some(actual) = weekly_downloads
+        && actual < minimum
+    {
+        findings.push(Finding {
+            id: "policy-min-downloads",
+            severity,
+            title: "downloads below the policy floor".to_string(),
+            detail: format!("{actual} weekly downloads; the policy requires at least {minimum}"),
+            allowed: false,
+            evidence: vec![registry()],
+        });
+    }
+
+    if policy.require_provenance == Some(true)
+        && meta.provenance == crate::model::Provenance::Missing
+    {
+        findings.push(Finding {
+            id: "policy-provenance",
+            severity,
+            title: "provenance required by policy".to_string(),
+            detail: "the registry publishes no provenance attestation for this version".to_string(),
+            allowed: false,
+            evidence: vec![registry()],
+        });
+    }
+
+    if let Some(maximum) = policy.max_advisory_severity
+        && let Some(list) = advisories
+    {
+        for advisory in &list.advisories {
+            if advisory.severity > maximum {
+                findings.push(Finding {
+                    id: "policy-advisory-severity",
+                    severity,
+                    title: format!(
+                        "{} is {} than the policy allows",
+                        advisory.id,
+                        advisory.severity.label().to_ascii_lowercase()
+                    ),
+                    detail: format!(
+                        "the policy accepts advisories up to {}; this one is {}",
+                        maximum.label().to_ascii_lowercase(),
+                        advisory.severity.label().to_ascii_lowercase()
+                    ),
+                    allowed: false,
+                    evidence: vec![Evidence {
+                        label: "advisory".to_string(),
+                        value: advisory.id.clone(),
+                        url: Some(advisory.url.clone()),
+                    }],
+                });
+            }
+        }
+    }
+
+    if let Some(license) = meta.license.as_deref() {
+        if crate::license::any_listed(&policy.denied_licenses, license) {
+            findings.push(Finding {
+                id: "policy-license-denied",
+                severity: Severity::High,
+                title: "license denied by policy".to_string(),
+                detail: format!("license '{license}' is on the denied list"),
+                allowed: false,
+                evidence: vec![Evidence {
+                    label: "license".to_string(),
+                    value: license.to_string(),
+                    url: Some(crate::license::reference(license)),
+                }],
+            });
+        } else if !policy.allowed_licenses.is_empty()
+            && !crate::license::all_listed(&policy.allowed_licenses, license)
+        {
+            findings.push(Finding {
+                id: "policy-license",
+                severity,
+                title: "license not allowed by policy".to_string(),
+                detail: format!(
+                    "license '{license}' is not on the allowed list ({})",
+                    policy.allowed_licenses.join(", ")
+                ),
+                allowed: false,
+                evidence: vec![Evidence {
+                    label: "license".to_string(),
+                    value: license.to_string(),
+                    url: Some(crate::license::reference(license)),
+                }],
+            });
+        }
+    }
+
+    findings
 }
 
 fn threat_data_unavailable(error: &str) -> Finding {
@@ -1162,6 +1325,7 @@ mod tests {
             candidate_weekly_downloads: None,
             release: crate::registry::ReleaseHistory::default(),
             scorecard: None,
+            license: None,
         }
     }
 
@@ -2570,6 +2734,229 @@ mod tests {
         let report = report(meta(), Ecosystem::Npm, None, None, &[], Profile::NPM, NOW);
         assert!(report.scorecard.is_none());
         assert!(report.not_checked.contains(&"scorecard"));
+    }
+
+    #[test]
+    fn policy_age_and_download_limits_are_inclusive() {
+        let mut policy = crate::allowlist::Policy {
+            min_age_days: Some(30),
+            min_weekly_downloads: Some(100),
+            ..crate::allowlist::Policy::default()
+        };
+        let mut old = meta();
+        old.first_published_at = Some(NOW - 30 * date::SECONDS_PER_DAY);
+        let report = report_with_policy(
+            old.clone(),
+            Ecosystem::Npm,
+            Some(100),
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.id.starts_with("policy-"))
+        );
+
+        let mut young = old;
+        young.first_published_at = Some(NOW - 29 * date::SECONDS_PER_DAY);
+        let report = report_with_policy(
+            young,
+            Ecosystem::Npm,
+            Some(99),
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        assert_eq!(
+            finding(&report.findings, "policy-min-age").severity,
+            Severity::Warn
+        );
+        let downloads = finding(&report.findings, "policy-min-downloads");
+        assert!(downloads.detail.contains("99"));
+        assert!(downloads.detail.contains("100"));
+
+        policy.severity = Some(Severity::Info);
+        let report = report_with_policy(
+            report_meta_young(),
+            Ecosystem::Npm,
+            Some(1),
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        assert_eq!(
+            finding(&report.findings, "policy-min-age").severity,
+            Severity::Info
+        );
+    }
+
+    #[test]
+    fn policy_provenance_requires_a_published_attestation() {
+        let policy = crate::allowlist::Policy {
+            require_provenance: Some(true),
+            ..crate::allowlist::Policy::default()
+        };
+        let mut missing = meta();
+        missing.provenance = crate::model::Provenance::Missing;
+        let report = report_with_policy(
+            missing,
+            Ecosystem::Npm,
+            None,
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        assert_eq!(
+            finding(&report.findings, "policy-provenance").severity,
+            Severity::Warn
+        );
+
+        let report = report_with_policy(
+            meta(),
+            Ecosystem::Npm,
+            None,
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "policy-provenance"),
+            "an ecosystem without attestations is unknown, not missing"
+        );
+    }
+
+    #[test]
+    fn policy_advisory_severity_catches_only_higher_advisories() {
+        let policy = crate::allowlist::Policy {
+            max_advisory_severity: Some(Severity::Warn),
+            ..crate::allowlist::Policy::default()
+        };
+        let advisories = list(vec![
+            advisory("GHSA-low", Severity::Info),
+            advisory("GHSA-medium", Severity::Warn),
+            advisory("GHSA-high", Severity::High),
+        ]);
+        let report = report_with_policy(
+            meta(),
+            Ecosystem::Npm,
+            None,
+            Some(&advisories),
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        let hits: Vec<&Finding> = report
+            .findings
+            .iter()
+            .filter(|finding| finding.id == "policy-advisory-severity")
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].title.contains("GHSA-high"));
+    }
+
+    #[test]
+    fn policy_license_lists_split_allow_and_deny() {
+        let policy = crate::allowlist::Policy {
+            allowed_licenses: vec!["Apache-2.0".to_string()],
+            denied_licenses: vec!["GPL-3.0-only".to_string()],
+            ..crate::allowlist::Policy::default()
+        };
+        let mut meta = meta();
+        meta.license = Some("MIT".to_string());
+        let report = report_with_policy(
+            meta.clone(),
+            Ecosystem::Npm,
+            None,
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        assert_eq!(
+            finding(&report.findings, "policy-license").severity,
+            Severity::Warn
+        );
+
+        meta.license = Some("GPL-3.0".to_string());
+        let report = report_with_policy(
+            meta,
+            Ecosystem::Npm,
+            None,
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        let denied = finding(&report.findings, "policy-license-denied");
+        assert_eq!(denied.severity, Severity::High);
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "policy-license")
+        );
+    }
+
+    #[test]
+    fn an_unknown_license_is_not_checked_when_policy_needs_it() {
+        let policy = crate::allowlist::Policy {
+            allowed_licenses: vec!["MIT".to_string()],
+            ..crate::allowlist::Policy::default()
+        };
+        let report = report_with_policy(
+            meta(),
+            Ecosystem::Npm,
+            None,
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &policy,
+        );
+        assert!(report.not_checked.contains(&"license"));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.id == "policy-license")
+        );
+
+        let report = report_with_policy(
+            meta(),
+            Ecosystem::Npm,
+            None,
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+            &crate::allowlist::Policy::default(),
+        );
+        assert!(!report.not_checked.contains(&"license"));
+    }
+
+    fn report_meta_young() -> PackageMeta {
+        let mut meta = meta();
+        meta.first_published_at = Some(NOW - date::SECONDS_PER_DAY);
+        meta
     }
 
     #[test]

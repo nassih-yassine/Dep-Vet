@@ -210,6 +210,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         .get(&project.info.version)
         .is_some_and(|files| !files.is_empty() && files.iter().all(|file| file.yanked));
     let latest_version = (!latest_is_yanked).then(|| project.info.version.clone());
+    let license = pypi_license(&project.info);
 
     Ok(PackageMeta {
         name: project.info.name,
@@ -238,7 +239,25 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
         },
 
         scorecard: None,
+        license,
     })
+}
+
+/// Prefer the SPDX expression, then the free-text field, then a Trove
+/// classifier. Prose that is not a license id yields `None`.
+fn pypi_license(info: &Info) -> Option<String> {
+    info.license_expression
+        .as_deref()
+        .and_then(crate::license::normalize)
+        .or_else(|| info.license.as_deref().and_then(crate::license::normalize))
+        .or_else(|| {
+            info.classifiers.iter().find_map(|classifier| {
+                classifier
+                    .strip_prefix("License :: ")
+                    .and_then(|rest| rest.rsplit(" :: ").next())
+                    .and_then(crate::license::normalize)
+            })
+        })
 }
 
 fn file_time(file: &File) -> Option<i64> {
@@ -300,6 +319,12 @@ struct Info {
     home_page: Option<String>,
     #[serde(default)]
     project_urls: Option<BTreeMap<String, String>>,
+    #[serde(default)]
+    license: Option<String>,
+    #[serde(default)]
+    license_expression: Option<String>,
+    #[serde(default)]
+    classifiers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

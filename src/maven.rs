@@ -253,6 +253,7 @@ fn parse_search(
         },
 
         scorecard: None,
+        license: None,
     })
 }
 
@@ -323,6 +324,7 @@ fn google_meta(
         release: crate::registry::ReleaseHistory::default(),
 
         scorecard: None,
+        license: None,
     })
 }
 

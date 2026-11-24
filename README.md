@@ -293,6 +293,26 @@ a wrapped limit.
 A disabled rule id must be one dep-vet knows, and every cap must be greater than
 zero; a typo is a configuration error (exit `3`), never a silent no-op.
 
+Install thresholds live under `[policy]` in the same file:
+
+```toml
+[policy]
+min_age_days = 30                  # package must be this old
+min_weekly_downloads = 1000        # where a weekly figure exists
+require_provenance = true          # npm/PyPI attestation required
+max_advisory_severity = "high"     # info, warn, or high
+allowed_licenses = ["MIT", "Apache-2.0", "BSD-3-Clause"]
+denied_licenses = ["GPL-3.0-only"] # always HIGH
+severity = "warn"                  # threshold violations: info/warn/high
+```
+
+Every key is optional and off by default. A missing age, download figure,
+provenance signal, or license is skipped and reported as not checked, never
+treated as passing. A license on both lists, a zero threshold, an unknown key,
+or an unknown severity is a configuration error (exit `3`). Licenses are read
+from registry metadata, normalised to SPDX ids (`MIT License` and `MIT` match),
+and compound expressions match member by member.
+
 `dep-vet` reads the nearest `.depvet.toml` walking up from the working
 directory, or the file passed to `--config`. An allowed finding stays in the
 report as `[ALLOWED]` with its reason and evidence, and stops affecting the exit
@@ -1044,6 +1064,8 @@ the report says `unofficial_registry`.
 | Known exploited | WARN | The CISA KEV catalog lists a CVE behind this advisory as exploited in the wild, with the date it was added and whether ransomware use is known. This is a separate finding from the advisory, so a High advisory stays High and a Low one still gets the warning. |
 | Exploit data unavailable | INFO | The advisory had a CVE, but the EPSS or CISA KEV lookup failed. The advisory is still reported; the report says the exploit check did not run instead of implying no exploitation. |
 | Low scorecard | INFO | OpenSSF Scorecard rates the source repository below 5/10 and this release also changed publisher. The score describes the repository, not this version, so it never raises the verdict on its own. |
+| Policy thresholds | INFO/WARN/HIGH from `[policy]` | The package is younger than `min_age_days`, has fewer than `min_weekly_downloads`, lacks the required provenance, or carries an advisory above `max_advisory_severity`. Unpublished values are skipped and reported as not checked. |
+| License policy | WARN, HIGH when denied | The registry license is outside `allowed_licenses`, or on `denied_licenses`. Licenses are normalised to SPDX ids first; an unreadable license is not checked, never assumed allowed. |
 | Invisible characters | WARN | Zero-width and bidi control characters in a readme or package text hide content from a human reviewer. Reported with the code point and line. |
 | Text aimed at a model | WARN | Phrases such as "ignore previous instructions" in package text are flagged as data, never followed. |
 | Install scripts | WARN, HIGH when combined | `preinstall`/`install`/`postinstall` run during `npm install`. Combined with a fresh package, an unexpected publisher, or a typosquat name, this is the shape of a supply-chain attack. |
