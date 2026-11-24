@@ -26,6 +26,7 @@ jobs:
   publish:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    environment: mcp-registry
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Check that this version can be published
@@ -51,8 +52,22 @@ jobs:
           fi
           echo "ready=true" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Skip when the registry already has this version
+        id: registry
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          current="$(curl --silent --fail \
+            'https://registry.modelcontextprotocol.io/v0.1/servers?search=dep-vet' \
+            | python3 -c 'import json,sys; names=[s["server"] for s in json.load(sys.stdin)["servers"] if s["server"]["name"] == "io.github.nassih-yassine/dep-vet"]; print(names[-1]["version"] if names else "")')"
+          if [ "$current" = "$VERSION" ]; then
+            echo "::notice::the registry already lists $VERSION; nothing to publish"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Install mcp-publisher
-        if: steps.check.outputs.ready == 'true'
+        if: steps.check.outputs.ready == 'true' && steps.registry.outputs.needed == 'true'
         run: |
           curl --fail --location --silent --show-error \
             --output publisher.tar.gz \
@@ -61,7 +76,7 @@ jobs:
           tar xzf publisher.tar.gz mcp-publisher
           ./mcp-publisher validate server.json
       - name: Publish
-        if: steps.check.outputs.ready == 'true'
+        if: steps.check.outputs.ready == 'true' && steps.registry.outputs.needed == 'true'
         run: |
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish server.json
