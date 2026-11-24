@@ -251,6 +251,8 @@ fn parse_search(
             recent_releases,
             ..crate::registry::ReleaseHistory::default()
         },
+
+        scorecard: None,
     })
 }
 
@@ -319,6 +321,8 @@ fn google_meta(
             .cloned(),
         candidate_weekly_downloads: None,
         release: crate::registry::ReleaseHistory::default(),
+
+        scorecard: None,
     })
 }
 

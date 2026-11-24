@@ -20,7 +20,7 @@ use dep_vet::model::{
 use dep_vet::nuget::{NugetClient, NugetError};
 use dep_vet::osv::{AdvisoryList, OsvClient, OsvQuery};
 use dep_vet::pypi::{PypiClient, PypiError};
-use dep_vet::registry::{RegistryClient, RegistryError};
+use dep_vet::registry::{PackageMeta, RegistryClient, RegistryError};
 use dep_vet::report::{
     render_audit_human, render_audit_json, render_human, render_json, render_lock_human,
     render_lock_json,
@@ -488,6 +488,7 @@ struct Auditor {
     maven: MavenClient,
     composer: ComposerClient,
     osv: OsvClient,
+    scorecard: dep_vet::scorecard::ScorecardClient,
 }
 
 impl Auditor {
@@ -503,6 +504,15 @@ impl Auditor {
             maven: MavenClient::from_env(Arc::clone(http)),
             composer: ComposerClient::from_env(Arc::clone(http)),
             osv: OsvClient::from_env(Arc::clone(http)),
+            scorecard: dep_vet::scorecard::ScorecardClient::from_env(Arc::clone(http)),
+        }
+    }
+
+    /// Attach the OpenSSF Scorecard for the repository, when deps.dev has one.
+    /// A miss stays `None`, which the report shows as not checked.
+    fn attach_scorecard(&self, meta: &mut PackageMeta) {
+        if let Some(repository) = meta.repository.as_deref() {
+            meta.scorecard = self.scorecard.lookup(repository);
         }
     }
 
@@ -514,6 +524,7 @@ impl Auditor {
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, RegistryError> {
         let mut meta = self.registry.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         // One extra lookup only when the name resembles a popular one: compare
         // the two download counts instead of trusting the generated seed.
         if let Some(candidate) =
@@ -595,7 +606,8 @@ impl Auditor {
         now: i64,
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, ComposerError> {
-        let meta = self.composer.fetch(spec)?;
+        let mut meta = self.composer.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         let advisories = match pre {
             Some(pre) => pre.advisories.cloned(),
             None => self
@@ -620,7 +632,8 @@ impl Auditor {
         now: i64,
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, MavenError> {
-        let meta = self.maven.fetch(spec)?;
+        let mut meta = self.maven.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         // A review override means the package came from Google Maven, which
         // OSV's Maven index does not cover.
         let google_maven = meta.review_url.is_some();
@@ -652,7 +665,8 @@ impl Auditor {
         now: i64,
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, NugetError> {
-        let meta = self.nuget.fetch(spec)?;
+        let mut meta = self.nuget.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         let advisories = match pre {
             Some(pre) => pre.advisories.cloned(),
             None => self
@@ -677,7 +691,8 @@ impl Auditor {
         now: i64,
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, GemError> {
-        let meta = self.gems.fetch(spec)?;
+        let mut meta = self.gems.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         let advisories = match pre {
             Some(pre) => pre.advisories.cloned(),
             None => self
@@ -702,7 +717,8 @@ impl Auditor {
         now: i64,
         _pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, JsrError> {
-        let meta = self.jsr.fetch(spec)?;
+        let mut meta = self.jsr.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         Ok(signals::report(
             meta,
             Ecosystem::Jsr,
@@ -720,7 +736,8 @@ impl Auditor {
         now: i64,
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, GoError> {
-        let meta = self.go.fetch(spec)?;
+        let mut meta = self.go.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         let advisories = match pre {
             Some(pre) => pre.advisories.cloned(),
             None => self
@@ -745,7 +762,8 @@ impl Auditor {
         now: i64,
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, CratesError> {
-        let meta = self.crates.fetch(spec)?;
+        let mut meta = self.crates.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         let advisories = match pre {
             Some(pre) => pre.advisories.cloned(),
             None => self
@@ -770,7 +788,8 @@ impl Auditor {
         now: i64,
         pre: Option<Pre<'_>>,
     ) -> Result<PackageReport, PypiError> {
-        let meta = self.pypi.fetch(spec)?;
+        let mut meta = self.pypi.fetch(spec)?;
+        self.attach_scorecard(&mut meta);
         let advisories = match pre {
             Some(pre) => pre.advisories.cloned(),
             None => self
@@ -829,6 +848,12 @@ fn run_guard_child(command: &str) -> (u8, Option<String>) {
                 format!("{}/downloads", test_base.to_string_lossy()),
             )
             .env("DEPVET_OSV_BASE", &test_base)
+            .env("DEPVET_SCORECARD_BASE", &test_base)
+            .env("DEPVET_EPSS_BASE", &test_base)
+            .env(
+                "DEPVET_KEV_BASE",
+                format!("{}/kev.json", test_base.to_string_lossy()),
+            )
             .env("DEPVET_NO_CACHE", "1")
             .env("DEPVET_ALLOW_INSECURE_BASES", "1");
     }

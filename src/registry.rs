@@ -52,6 +52,8 @@ pub struct PackageMeta {
     pub candidate_weekly_downloads: Option<u64>,
     /// The release before the audited one, when the client could tell.
     pub release: ReleaseHistory,
+    /// OpenSSF Scorecard for the repository, when deps.dev knows it.
+    pub scorecard: Option<crate::scorecard::Scorecard>,
 }
 
 /// What the previous release looked like. Empty means "no history", never
@@ -731,6 +733,8 @@ fn parse_packument(
                 .map(|url| normalize_repository(&url)),
             previous_provenance: previous_doc.map(has_attestation),
         },
+
+        scorecard: None,
     })
 }
 

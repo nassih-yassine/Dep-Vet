@@ -240,6 +240,8 @@ fn parse_versions(
             recent_releases,
             ..crate::registry::ReleaseHistory::default()
         },
+
+        scorecard: None,
     })
 }
 

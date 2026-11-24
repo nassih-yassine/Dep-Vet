@@ -198,6 +198,8 @@ fn parse_versions(
             history_known: previous.is_some(),
             ..crate::registry::ReleaseHistory::default()
         },
+
+        scorecard: None,
     })
 }
 

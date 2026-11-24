@@ -169,6 +169,8 @@ impl MockRegistry {
                         (200, br#"{"data":[]}"#.to_vec())
                     } else if path == "/kev.json" {
                         (200, br#"{"vulnerabilities":[]}"#.to_vec())
+                    } else if path.starts_with("/v3alpha/projects/") {
+                        (200, br#"{}"#.to_vec())
                     } else {
                         (404, b"{\"error\":\"Not found\"}".to_vec())
                     }
@@ -215,6 +217,7 @@ impl MockRegistry {
             .env("DEPVET_GO_BASE", &self.base)
             .env("DEPVET_EPSS_BASE", &self.base)
             .env("DEPVET_KEV_BASE", format!("{}/kev.json", self.base))
+            .env("DEPVET_SCORECARD_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("DEPVET_HOOK_TEST_BASE", &self.base)
             .env("NO_COLOR", "1");
@@ -2783,6 +2786,65 @@ fn a_failed_exploit_lookup_is_disclosed_without_hiding_the_advisory() {
         ))
         .stdout(predicate::str::contains("exploit data unavailable"))
         .stdout(predicate::str::contains("is exploited in the wild").not());
+}
+
+#[test]
+fn a_scorecard_is_rendered_and_low_scores_pair_with_publisher_changes() {
+    let mut package = PackageFixture::clean("scored-pkg");
+    package.publisher = "mallory";
+    let mut routes = HashMap::new();
+    routes.insert(package.route(), (200, package.to_json()));
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    routes.insert(
+        "/v3alpha/projects/github.com%2Falice%2Frepo".to_string(),
+        (
+            200,
+            r#"{"scorecard":{"date":"2026-08-24T00:00:00Z","overallScore":3.2,"checks":[
+                {"name":"Maintained","score":2},
+                {"name":"Code-Review","score":4},
+                {"name":"Signed-Releases","score":-1}
+            ]}}"#
+                .to_string(),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["npm", "scored-pkg", "--json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["scorecard"]["overall"], 3.2);
+    assert_eq!(value["scorecard"]["checks"][0]["name"], "Maintained");
+    assert!(
+        value["not_checked"]
+            .as_array()
+            .is_none_or(|items| !items.iter().any(|item| item == "scorecard"))
+    );
+    let finding = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["id"] == "low-scorecard")
+        .expect("a low score plus a publisher change is a finding");
+    assert_eq!(finding["severity"], "info");
+
+    registry
+        .command()
+        .args(["npm", "scored-pkg"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("3.2/10 (OpenSSF, 2026-08-24)"))
+        .stdout(predicate::str::contains(
+            "Maintained 2, Code-Review 4, Signed-Releases n/a",
+        ));
 }
 
 #[test]

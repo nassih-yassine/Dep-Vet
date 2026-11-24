@@ -812,6 +812,9 @@ exact host and port. Reports are marked `unofficial_registry: true` and a
 warning goes to stderr. Threat feeds are fixed `https` hosts
 (`api.first.org`, `www.cisa.gov`) configured in code, never taken from registry
 JSON; their `DEPVET_EPSS_BASE`/`DEPVET_KEV_BASE` overrides obey the same gate.
+The Scorecard lookup goes to `api.deps.dev` with a project key derived from a
+validated GitHub/GitLab/Bitbucket URL; its `DEPVET_SCORECARD_BASE` override
+obeys the same gate.
 The full allowlist and rules are in
 [SECURITY.md](SECURITY.md#outbound-url-policy).
 
@@ -1039,6 +1042,7 @@ the report says `unofficial_registry`.
 | Advisories | High/Warn/Info from OSV | Known vulnerabilities for this exact version, one finding per vulnerability, linking to its OSV record and aliases. Records that share an alias (PYSEC/GHSA/CVE) are merged, with the highest severity kept. An advisory whose details cannot be fetched still surfaces as a warning. If OSV is unreachable, the report says so as an INFO finding instead of implying the package is clean. Advisories with a CVE also show their EPSS probability and percentile; the score is context and never changes a severity. |
 | Known exploited | WARN | The CISA KEV catalog lists a CVE behind this advisory as exploited in the wild, with the date it was added and whether ransomware use is known. This is a separate finding from the advisory, so a High advisory stays High and a Low one still gets the warning. |
 | Exploit data unavailable | INFO | The advisory had a CVE, but the EPSS or CISA KEV lookup failed. The advisory is still reported; the report says the exploit check did not run instead of implying no exploitation. |
+| Low scorecard | INFO | OpenSSF Scorecard rates the source repository below 5/10 and this release also changed publisher. The score describes the repository, not this version, so it never raises the verdict on its own. |
 | Invisible characters | WARN | Zero-width and bidi control characters in a readme or package text hide content from a human reviewer. Reported with the code point and line. |
 | Text aimed at a model | WARN | Phrases such as "ignore previous instructions" in package text are flagged as data, never followed. |
 | Install scripts | WARN, HIGH when combined | `preinstall`/`install`/`postinstall` run during `npm install`. Combined with a fresh package, an unexpected publisher, or a typosquat name, this is the shape of a supply-chain attack. |

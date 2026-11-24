@@ -10,6 +10,12 @@
   severity, and EPSS alone never creates a finding. If either lookup fails, the
   advisory is still reported and one INFO `threat-data-unavailable` finding says
   the exploit check did not run. Both feeds are cached for 24 hours.
+- **Repository scores come from OpenSSF Scorecard through deps.dev.** When a
+  package declares a GitHub, GitLab, or Bitbucket repository, the report shows
+  the overall score and the Maintained, Code-Review, Branch-Protection,
+  Signed-Releases, and Dangerous-Workflow checks. A score below 5 becomes an
+  INFO `low-scorecard` finding only when the same release also changed
+  publisher. A missing score is `not checked`, never a clean 10.
 
 ## 0.13.6 — 2026-11-24
 

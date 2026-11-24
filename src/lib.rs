@@ -34,6 +34,7 @@ pub mod rubygems;
 pub mod rules;
 pub mod sarif;
 pub mod sbom;
+pub mod scorecard;
 pub mod signals;
 pub mod typosquat;
 pub mod update;

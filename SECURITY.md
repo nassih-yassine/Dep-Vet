@@ -90,6 +90,10 @@ provenance document, the URL must pass `src/netpolicy.rs`:
   catalog (`www.cisa.gov`) are fixed `https` hosts in `src/exploit.rs`; only a
   gated `DEPVET_EPSS_BASE`/`DEPVET_KEV_BASE` dev override can change them. The
   same resolver and public-IP filtering apply.
+- The Scorecard lookup is fixed too: `api.deps.dev` in `src/scorecard.rs`. The
+  repository is reduced to `host/owner/repo` for one of the three supported code
+  hosts before it becomes a path segment, so a registry cannot redirect the
+  request; the dev override is gated like every other one.
 
 ### Development overrides
 

@@ -85,6 +85,17 @@ pub fn report(
         None if !profile.advisories => findings.push(advisory_coverage_missing(ecosystem)),
         None => findings.push(advisory_check_unavailable()),
     }
+    // A low score alone is not evidence about this release: it describes the
+    // repository. Pair it with a publisher change, which is what makes the
+    // repository's practices worth reading now.
+    if let Some(scorecard) = &meta.scorecard
+        && scorecard.overall < LOW_SCORECARD
+        && findings
+            .iter()
+            .any(|finding| matches!(finding.id, "publisher-changed" | "publisher-not-maintainer"))
+    {
+        findings.push(low_scorecard(scorecard, meta.repository.as_deref()));
+    }
     findings.sort_by_key(|finding| std::cmp::Reverse(finding.severity));
 
     let suspect = if established { None } else { nearest };
@@ -97,6 +108,9 @@ pub fn report(
     let mut not_checked = profile.not_checked();
     if profile.freshness && meta.published_at.is_none() && !not_checked.contains(&"freshness") {
         not_checked.push("freshness");
+    }
+    if profile.scorecard && meta.scorecard.is_none() && !not_checked.contains(&"scorecard") {
+        not_checked.push("scorecard");
     }
 
     PackageReport {
@@ -114,6 +128,7 @@ pub fn report(
         provenance: meta.provenance,
         attestation_subject_matches: meta.attestation_subject_matches,
         attestation: meta.attestation,
+        scorecard: meta.scorecard,
         advisories: advisories
             .map(|list| list.advisories.clone())
             .unwrap_or_default(),
@@ -380,6 +395,49 @@ fn kev_evidence(kev: &crate::exploit::KevEntry) -> Evidence {
             "https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext={}",
             kev.cve
         )),
+    }
+}
+
+/// Below this overall score a repository's practices are worth a look when the
+/// publisher also changed. Never a finding on its own.
+pub const LOW_SCORECARD: f64 = 5.0;
+
+fn low_scorecard(scorecard: &crate::scorecard::Scorecard, repository: Option<&str>) -> Finding {
+    let project = repository.and_then(crate::scorecard::project_key);
+    let weak: Vec<String> = scorecard
+        .checks
+        .iter()
+        .filter(|check| (0..5).contains(&check.score))
+        .map(|check| format!("{} {}", check.name, check.score))
+        .collect();
+    let mut detail = format!(
+        "OpenSSF Scorecard rates {} {:.1}/10",
+        project.as_deref().unwrap_or("this repository"),
+        scorecard.overall
+    );
+    if !weak.is_empty() {
+        detail.push_str(&format!("; weak checks: {}", weak.join(", ")));
+    }
+    detail.push_str(
+        "; the publisher also changed in this release, so review who controls the repository",
+    );
+    let url =
+        project.map(|project| format!("https://securityscorecards.dev/viewer/?uri={project}"));
+    Finding {
+        id: "low-scorecard",
+        severity: Severity::Info,
+        title: "repository scores low on OpenSSF Scorecard".to_string(),
+        detail,
+        allowed: false,
+        evidence: vec![Evidence {
+            label: "scorecard".to_string(),
+            value: if scorecard.date.is_empty() {
+                "no scan date".to_string()
+            } else {
+                scorecard.date.clone()
+            },
+            url,
+        }],
     }
 }
 
@@ -1103,6 +1161,7 @@ mod tests {
             latest_version: None,
             candidate_weekly_downloads: None,
             release: crate::registry::ReleaseHistory::default(),
+            scorecard: None,
         }
     }
 
@@ -1821,7 +1880,7 @@ mod tests {
         assert!(!findings.iter().any(|finding| finding.id == "typosquat"));
 
         let report = report(meta, Ecosystem::Npm, None, None, &[], partial, NOW);
-        assert_eq!(report.not_checked, vec!["typosquat"]);
+        assert_eq!(report.not_checked, vec!["typosquat", "scorecard"]);
     }
 
     #[test]
@@ -1834,7 +1893,8 @@ mod tests {
                 "maintainers",
                 "repository",
                 "downloads",
-                "dependency history"
+                "dependency history",
+                "scorecard"
             ]
         );
         assert!(
@@ -1883,7 +1943,10 @@ mod tests {
     #[test]
     fn pypi_reports_its_missing_signals() {
         let report = report(meta(), Ecosystem::Pypi, None, None, &[], Profile::PYPI, NOW);
-        assert_eq!(report.not_checked, vec!["maintainers", "downloads"]);
+        assert_eq!(
+            report.not_checked,
+            vec!["maintainers", "downloads", "scorecard"]
+        );
         assert_eq!(report.ecosystem, Ecosystem::Pypi);
     }
 
@@ -2447,6 +2510,66 @@ mod tests {
             .expect("a failed lookup must be disclosed");
         assert_eq!(note.severity, Severity::Info);
         assert!(note.detail.contains("CISA KEV: boom"));
+    }
+
+    #[test]
+    fn a_low_scorecard_only_matters_when_the_publisher_changed() {
+        let mut meta = meta(); // publisher "alice" is a maintainer: no publisher finding
+        meta.scorecard = Some(crate::scorecard::Scorecard {
+            overall: 3.2,
+            date: "2026-08-24T00:00:00Z".to_string(),
+            checks: vec![
+                crate::scorecard::ScorecardCheck {
+                    name: "Maintained".to_string(),
+                    score: 2,
+                },
+                crate::scorecard::ScorecardCheck {
+                    name: "Signed-Releases".to_string(),
+                    score: -1,
+                },
+            ],
+        });
+        let unchanged = report(
+            meta.clone(),
+            Ecosystem::Npm,
+            None,
+            None,
+            &[],
+            Profile::NPM,
+            NOW,
+        );
+        assert!(
+            !unchanged
+                .findings
+                .iter()
+                .any(|finding| finding.id == "low-scorecard")
+        );
+        assert_eq!(unchanged.scorecard.as_ref().map(|s| s.overall), Some(3.2));
+
+        let mut changed = meta;
+        changed.publisher = Some("mallory".to_string());
+        let changed_report = report(changed, Ecosystem::Npm, None, None, &[], Profile::NPM, NOW);
+        let finding = finding(&changed_report.findings, "low-scorecard");
+        assert_eq!(finding.severity, Severity::Info);
+        assert!(finding.detail.contains("3.2/10"));
+        assert!(finding.detail.contains("Maintained 2"));
+        assert!(!finding.detail.contains("Signed-Releases"));
+        assert!(
+            finding
+                .evidence
+                .iter()
+                .any(|evidence| evidence.url.as_deref()
+                    == Some(
+                        "https://securityscorecards.dev/viewer/?uri=github.com/alice/some-package"
+                    ))
+        );
+    }
+
+    #[test]
+    fn a_missing_scorecard_is_not_checked_not_clean() {
+        let report = report(meta(), Ecosystem::Npm, None, None, &[], Profile::NPM, NOW);
+        assert!(report.scorecard.is_none());
+        assert!(report.not_checked.contains(&"scorecard"));
     }
 
     #[test]
