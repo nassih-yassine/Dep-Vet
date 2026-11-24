@@ -586,6 +586,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   refuses malformed JSON with exit 3 and no write. Writes are atomic
   (sibling temp file then rename). The settings `command` is a shell string; the
   binary path must be absolute and quoted when it has spaces.
+- **Every publishing job declares an environment.** `ghcr`, `linux-packages`,
+  `mcp-registry`, `npm-publish` and `crates-io` are the environments behind the
+  Deployments page; they also give each channel its own protection rules. Adding
+  a publish job means adding an environment, or the channel is invisible there.
 - **Docker images come from the Release workflow, not the release event.**
   `cargo-dist` creates the release with `GITHUB_TOKEN`, and GitHub never starts
   workflows from token-created releases, so `.github/workflows/docker.yml`
