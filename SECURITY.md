@@ -18,7 +18,9 @@ credits you unless you ask otherwise.
 
 In scope: the CLI and its parsing of untrusted input (registry responses,
 lockfiles, archives, config), archive extraction, the reusable GitHub Action,
-and the release artifacts.
+and the release artifacts. The invisible-character and prompt-injection rules
+are heuristics over package text: a hit means "look at this", not "malicious",
+and a clean report does not prove the text is benign.
 
 Out of scope: a verdict you disagree with when the evidence is accurate (open a
 regular issue), vulnerabilities in the packages being audited, and findings that

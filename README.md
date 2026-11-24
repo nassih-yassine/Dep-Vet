@@ -54,6 +54,10 @@ npm/crossenv@0.0.2-security
         -> https://www.npmjs.com/package/cross-env
 ```
 
+It also reads the text a package ships: zero-width and bidi characters that hide
+content from a reviewer, and phrasing aimed at a model rather than a person. Both
+are disclosed as heuristics, never as a verdict.
+
 No account, no API key, no telemetry, no score out of 100. One binary for the
 CLI, agent hooks, and MCP.
 
