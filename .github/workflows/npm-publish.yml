@@ -98,13 +98,13 @@ jobs:
         if: steps.check.outputs.needed == 'true' && env.NPM_TOKEN == ''
         env:
           VERSION: ${{ steps.tag.outputs.version }}
-        run: npm publish "$(pwd)/dist-npm/dep-vet" --provenance --access public
+        run: npm publish "$(pwd)/dist-npm/dep-vet" --provenance --access public --loglevel=http
       - name: Publish with provenance through a token
         if: steps.check.outputs.needed == 'true' && env.NPM_TOKEN != ''
         env:
           NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
           VERSION: ${{ steps.tag.outputs.version }}
-        run: npm publish "$(pwd)/dist-npm/dep-vet" --provenance --access public
+        run: npm publish "$(pwd)/dist-npm/dep-vet" --provenance --access public --loglevel=http
       - name: Dogfood the published package
         env:
           VERSION: ${{ steps.tag.outputs.version }}
