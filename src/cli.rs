@@ -286,6 +286,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Scan GitHub Actions workflows for supply-chain risks
+    Workflows {
+        /// Workflow file or directory (default: .github/workflows)
+        path: Option<std::path::PathBuf>,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Inspect a release archive without installing it
     Inspect {
         /// Ecosystem: npm, pypi, crates, go, jsr, gem, nuget, maven, composer
@@ -357,6 +367,7 @@ impl Cli {
             | Command::Nuget { json, .. }
             | Command::Maven { json, .. }
             | Command::Composer { json, .. }
+            | Command::Workflows { json, .. }
             | Command::Inspect { json, .. }
             | Command::Diff { json, .. }
             | Command::Lock { json, .. } => !*json,

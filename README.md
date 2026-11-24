@@ -431,6 +431,31 @@ no line.
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
 
+### Scan GitHub Actions workflows
+
+```sh
+dep-vet workflows                    # .github/workflows
+dep-vet workflows path/to/ci.yml     # one file, or a directory
+dep-vet workflows --json
+```
+
+Workflow YAML is read line-wise, without a YAML parser. Comments are ignored and
+a local `./path` action is not an unpinned dependency.
+
+| Rule | Severity | Meaning |
+|---|---|---|
+| `workflow-action-unpinned` | WARN | A `uses:` reference is a tag or branch, or has no ref at all. Only a full 40-character commit SHA is accepted. |
+| `workflow-pr-target-checkout` | HIGH | `pull_request_target` is combined with a checkout of `github.event.pull_request.head`, so fork code runs with the base repository's token and secrets. |
+| `workflow-script-injection` | HIGH | An attacker-controlled event field (PR title/body/head ref, issue body, comment body, commit message) is interpolated into a `run:` script. |
+| `workflow-write-all` | WARN | `permissions: write-all` gives every job write access to the repository token. |
+| `workflow-curl-pipe-shell` | HIGH | `curl`/`wget` output is piped into `sh`, `bash`, `zsh`, Python, or Node with no checksum or review. |
+| `workflow-secret-echo` | HIGH | A `run:` step prints a `secrets.*` value into the log. |
+
+The scan exits `0` when nothing matched, `1` for warnings, `2` for any HIGH
+finding, and `3` when the path cannot be read. Findings name the file and line
+and link the rule to GitHub's hardening guidance. They are not package
+allowlist entries: fix the workflow or accept the risk in review.
+
 ### Inspect a release archive
 
 Metadata cannot show what a release actually contains. `inspect` downloads the

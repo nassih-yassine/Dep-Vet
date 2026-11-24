@@ -23,7 +23,7 @@ crossenv 0.0.2-security
 - Install scripts, publisher changes, deprecation, freshness, recent release history
 - Provenance: whether an attestation exists, verified offline for npm
 - Invisible characters and text aimed at an AI reader, in code and readmes
-- Lockfile diffs, dependency trees, archive inspection, release diffs
+- Lockfile diffs, dependency trees, archive inspection, release diffs, GitHub Actions workflow scan
 
 Ecosystems: npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven/AndroidX,
 Composer.

@@ -847,6 +847,91 @@ fn thousands(value: u64) -> String {
     out
 }
 
+pub fn render_workflows_json(
+    report: &crate::workflows::WorkflowReport,
+) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Json<'a> {
+        files: &'a [String],
+        #[serde(serialize_with = "serialize_findings")]
+        findings: &'a [crate::model::Finding],
+        verdict: Severity,
+        exit_code: u8,
+    }
+
+    serde_json::to_string_pretty(&Json {
+        files: &report.files,
+        findings: &report.findings,
+        verdict: report.verdict(),
+        exit_code: report.exit_code(),
+    })
+}
+
+pub fn render_workflows_human(report: &crate::workflows::WorkflowReport, color: bool) -> String {
+    let mut out = format!(
+        "workflow scan: {} file{}\n\n",
+        report.files.len(),
+        if report.files.len() == 1 { "" } else { "s" }
+    );
+    if report.files.is_empty() {
+        out.push_str("  no .yml or .yaml files were found\n\n");
+    }
+    if report.findings.is_empty() {
+        if !report.files.is_empty() {
+            out.push_str("  no findings: no workflow rule matched\n\n");
+        }
+    } else {
+        out.push_str(&format!(
+            "  {} finding{}\n\n",
+            report.findings.len(),
+            if report.findings.len() == 1 { "" } else { "s" }
+        ));
+        for finding in &report.findings {
+            out.push_str(&format!(
+                "  {}  {}\n",
+                paint(
+                    &format!("[{}]", finding.severity.label()),
+                    verdict_color(finding.severity),
+                    color
+                ),
+                finding.title
+            ));
+            for line in wrap(&finding.detail, 92) {
+                out.push_str(&format!("        {line}\n"));
+            }
+            let workflow = finding
+                .evidence
+                .iter()
+                .find(|evidence| evidence.label == "workflow")
+                .map(|evidence| evidence.value.as_str())
+                .unwrap_or_default();
+            let line = finding
+                .evidence
+                .iter()
+                .find_map(|evidence| evidence.label.strip_prefix("line "))
+                .unwrap_or_default();
+            if !workflow.is_empty() {
+                out.push_str(&format!("        {workflow}:{line}\n"));
+            }
+            if let Some(reference) = finding
+                .evidence
+                .iter()
+                .find_map(|evidence| evidence.url.as_deref())
+            {
+                out.push_str(&format!("        -> {reference}\n"));
+            }
+            out.push('\n');
+        }
+    }
+    let verdict = report.verdict();
+    out.push_str(&format!(
+        "  verdict {} (exit {})\n",
+        paint(verdict.label(), verdict_color(verdict), color),
+        report.exit_code()
+    ));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
