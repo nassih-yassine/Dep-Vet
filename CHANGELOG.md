@@ -31,6 +31,10 @@
   `linux/amd64` and `linux/arm64` in one index, built from distroless static so
   the container holds only the binary and runs as non-root. The workflow smoke
   tests `--version` and a HIGH finding's exit code against the published image.
+- **npm 0.13.2 carries no provenance.** npm refuses trusted-publisher and token
+  changes while the account has no 2FA, so this version was published with the
+  existing CLI session. Provenance starts with the first version published from
+  CI once 2FA is enabled.
 
 ## 0.13.1 — 2026-11-23
 

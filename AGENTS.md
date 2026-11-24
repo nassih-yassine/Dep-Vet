@@ -623,7 +623,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   signature. It publishes with trusted publishing (OIDC) when no `NPM_TOKEN`
   exists, and falls back to a token stored in the protected `npm-publish`
   environment. Never publish by hand: a workstation upload carries no
-  provenance.
+  provenance. Both trusted publishers and tokens are blocked until account-level
+  2FA exists, so `npm publish` from a workstation is the only fallback and must
+  be recorded in CHANGELOG.
 - **Release assets are verified by attestation, not only checksum.**
   `scripts/build-npm-packages.py` and the Docker workflow both run
   `gh attestation verify` with `--signer-workflow <repo>/.github/workflows/release.yml`
