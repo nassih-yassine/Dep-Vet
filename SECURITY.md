@@ -109,7 +109,7 @@ can run yourself, and each proves something narrower than "this is safe".
 | npm | registry tarball digest | none yet: every publish so far predates provenance |
 | Docker | image digest | cosign keyless signature, plus SBOM and provenance attestations |
 | crates.io | `.crate` checksum from the registry index | none: crates.io does not sign artifacts |
-| `.deb`, `.rpm`, `.apk`, pacman | package contents, built in CI from the attested musl archives | none: the packages are not GPG-signed |
+| `.deb`, `.rpm`, `.apk`, pacman | package contents, built in CI from the attested musl archives | SLSA attestation from `packaging.yml` (no GPG signature) |
 
 GitHub release archives:
 
@@ -148,9 +148,20 @@ Build provenance and SBOM attestations are attached to the same digest
 
 Linux packages are built by `packaging.yml` from the same two attestation-verified
 musl archives, and they contain no maintainer scripts, so installing one runs no
-code before the binary starts. The packages themselves carry no signature; if you
-need a signed channel, use the GitHub release archives with `gh attestation
-verify`, or AUR, which checks the published checksums.
+code before the binary starts. Their provenance names the workflow and the branch
+run, because GitHub's OIDC token describes the dispatch ref rather than the tag
+that was checked out:
+
+```sh
+gh attestation verify dep-vet_0.13.4-1_amd64.deb \
+  --repo nassih-yassine/Dep-Vet \
+  --signer-workflow nassih-yassine/Dep-Vet/.github/workflows/packaging.yml \
+  --source-ref refs/heads/main
+```
+
+They carry no GPG signature; if you need a signed channel, use the release
+archives with the tag-pinned command above, or AUR, which checks the published
+checksums.
 
 An attestation says which workflow and commit produced the artifact. It does not
 say the code is free of bugs, and a valid signature is never described as trust.
