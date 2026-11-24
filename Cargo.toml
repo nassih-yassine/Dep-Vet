@@ -1,6 +1,6 @@
 [package]
 name = "dep-vet"
-version = "0.13.4"
+version = "0.13.5"
 edition = "2024"
 rust-version = "1.88"
 description = "Check a package's risk before it enters your lockfile"
@@ -9,7 +9,7 @@ homepage = "https://github.com/nassih-yassine/Dep-Vet"
 documentation = "https://docs.rs/dep-vet"
 readme = "README.md"
 license = "MIT"
-keywords = ["npm", "security", "supply-chain", "typosquat", "cli"]
+keywords = ["security", "supply-chain", "vulnerability", "typosquat", "npm"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.5 — 2026-11-24
+
+- **Findable on npm.** The package now carries search keywords (`security`,
+  `supply-chain`, `dependency`, `vulnerability`, `advisory`, `cve`, `typosquat`,
+  `scanner`, `audit`, `sast`, `devsecops`, `sbom`, `mcp`), a description that
+  leads with the terms people search for, and a `bugs` URL. crates.io keywords
+  swap `cli` for `vulnerability`.
+
 ## 0.13.4 — 2026-11-24
 
 - **The crate is published from CI.** `cargo-publish.yml` runs on the Release
