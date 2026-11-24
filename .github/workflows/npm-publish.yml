@@ -83,6 +83,17 @@ jobs:
             --version "$VERSION" \
             --assets assets \
             --output dist-npm
+      - name: Check OIDC availability
+        if: env.NPM_TOKEN == ''
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "oidc: id-token endpoint available"
+          else
+            echo "::error::id-token is not available; trusted publishing cannot work"
+            exit 1
+          fi
+          npm config get registry
+          npm config get provenance || true
       - name: Publish with provenance through trusted publishing
         if: steps.check.outputs.needed == 'true' && env.NPM_TOKEN == ''
         env:
