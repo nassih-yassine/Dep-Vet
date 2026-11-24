@@ -299,6 +299,17 @@ pub enum Command {
         json: bool,
     },
 
+    /// Report the latest release and how to update this install
+    Update {
+        /// Exit 1 when a newer release exists, 0 when current, 3 on failure
+        #[arg(long)]
+        check: bool,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Compare two releases of the same package by archive contents
     Diff {
         /// Ecosystem: npm, pypi, crates, go, jsr, gem, nuget, maven, composer

@@ -35,5 +35,6 @@ pub mod sarif;
 pub mod sbom;
 pub mod signals;
 pub mod typosquat;
+pub mod update;
 pub mod version;
 pub mod watch;

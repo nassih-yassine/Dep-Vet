@@ -608,6 +608,15 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   free of absolute paths and run it from a staging directory. AUR
   (`packaging/aur/PKGBUILD`, `dep-vet-bin`) is published by hand with the
   release checksums; `.SRCINFO` is generated, never edited.
+- **`update` is guidance, never a verdict or an installer.** `src/update.rs`
+  reads one GitHub document, compares `semver`, and prints the channel command.
+  Exit codes are `0` current, `1` newer with `--check`, `3` check failed; it must
+  never return `2`. Channel detection is a pure function over the executable
+  path, `/.dockerenv`, and distro marker files, so it stays testable; do not
+  spawn `dpkg`/`rpm`/`pacman` to ask. `DEPVET_UPDATE_BASE` is a test seam and is
+  only honoured with `DEPVET_ALLOW_INSECURE_BASES=1`, like every other override.
+  It never self-updates: a supply-chain tool that replaces its own binary needs
+  attestation checks this command does not perform.
 - **The MCP Registry listing is `io.github.nassih-yassine/dep-vet`.** The
   registry verifies npm ownership through `mcpName` in the published
   `package.json`, so a new version must be on npm before publishing, and

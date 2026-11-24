@@ -329,6 +329,8 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             run_audit(&auditor, &allowlist, path, format, output.as_deref(), cli)
         }
 
+        Command::Update { check, json } => Ok(dep_vet::update::run(&http, *check, *json)),
+
         Command::Sbom {
             lockfile,
             format,

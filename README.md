@@ -183,6 +183,19 @@ dep-vet npm express@5.3.0
 dep-vet audit package-lock.json
 ```
 
+**Updating**
+
+`dep-vet update` reports the latest release and the command for the channel this
+binary came from (Homebrew, Cargo, npm, Scoop, Docker, or a distro package):
+
+```sh
+dep-vet update            # current version, latest, and the update command
+dep-vet update --check    # exit 1 when a newer release exists, 0 when current
+```
+
+`--check` never exits `2`: a failed check is `3`, so a script cannot confuse
+"newer available" with "high risk".
+
 **Verify what you downloaded**
 
 Every channel has a check you can run; `SECURITY.md` lists what each one proves.
