@@ -341,6 +341,41 @@ pub enum Command {
     },
 }
 
+impl Cli {
+    /// True when this invocation prints a human report a hint may follow.
+    /// Machine formats, hooks, MCP, watch and update are excluded.
+    pub fn human_report(&self) -> bool {
+        match &self.command {
+            Command::Npm { json, .. }
+            | Command::Pypi { json, .. }
+            | Command::Crates { json, .. }
+            | Command::Go { json, .. }
+            | Command::Plan { json, .. }
+            | Command::Tree { json, .. }
+            | Command::Jsr { json, .. }
+            | Command::Gem { json, .. }
+            | Command::Nuget { json, .. }
+            | Command::Maven { json, .. }
+            | Command::Composer { json, .. }
+            | Command::Inspect { json, .. }
+            | Command::Diff { json, .. }
+            | Command::Lock { json, .. } => !*json,
+            Command::Audit {
+                json,
+                format,
+                output,
+                ..
+            } => !*json && format.is_none() && output.is_none(),
+            Command::Hook { .. }
+            | Command::Mcp { .. }
+            | Command::Guard { .. }
+            | Command::Sbom { .. }
+            | Command::Watch { .. }
+            | Command::Update { .. } => false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

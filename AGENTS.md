@@ -616,7 +616,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   spawn `dpkg`/`rpm`/`pacman` to ask. `DEPVET_UPDATE_BASE` is a test seam and is
   only honoured with `DEPVET_ALLOW_INSECURE_BASES=1`, like every other override.
   It never self-updates: a supply-chain tool that replaces its own binary needs
-  attestation checks this command does not perform.
+  attestation checks this command does not perform. The passive hint is gated by
+  `update::should_hint` (human report, both TTYs, exit `0`/`1`, no `CI`, no
+  `TERM=dumb`, no opt-out) and writes one line to stderr; it never touches stdout
+  and never changes the exit code.
 - **The MCP Registry listing is `io.github.nassih-yassine/dep-vet`.** The
   registry verifies npm ownership through `mcpName` in the published
   `package.json`, so a new version must be on npm before publishing, and
