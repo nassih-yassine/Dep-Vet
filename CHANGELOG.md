@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Advisories now say whether the vulnerability is exploited in practice.**
+  OSV advisories with a CVE are checked against FIRST's EPSS scores and the CISA
+  Known Exploited Vulnerabilities catalog. A KEV hit is a separate WARN
+  `known-exploited` finding with the date added and ransomware use; EPSS appears
+  as an evidence line with its percentile. Neither changes the advisory's
+  severity, and EPSS alone never creates a finding. If either lookup fails, the
+  advisory is still reported and one INFO `threat-data-unavailable` finding says
+  the exploit check did not run. Both feeds are cached for 24 hours.
+
 ## 0.13.6 — 2026-11-24
 
 - **Invisible characters and prompt-injection text are flagged.** `inspect` and

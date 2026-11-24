@@ -697,6 +697,7 @@ mod tests {
             advisories: vec![advisory("GHSA-old", crate::model::Severity::Warn)],
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         };
         let new_list = crate::osv::AdvisoryList {
             advisories: vec![
@@ -705,6 +706,7 @@ mod tests {
             ],
             hidden: 0,
             stale_seconds: None,
+            threat_error: None,
         };
         let old = prepared(&[("index.js", "const a = 1;")], &[]);
         let new = prepared(&[("index.js", "const a = 2;")], &[]);

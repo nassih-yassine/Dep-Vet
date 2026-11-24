@@ -17,7 +17,7 @@ crossenv 0.0.2-security
 
 ## What it checks
 
-- Advisories (OSV) with fixes, and typosquat names
+- Advisories (OSV) with fixes, plus EPSS scores and CISA KEV "exploited in the wild" warnings, and typosquat names
 - Install scripts, publisher changes, deprecation, freshness, recent release history
 - Provenance: whether an attestation exists, verified offline for npm
 - Invisible characters and text aimed at an AI reader, in code and readmes

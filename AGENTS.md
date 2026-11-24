@@ -88,7 +88,8 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/nuget.rs` | NuGet flat container, registration pages, times, deprecation |
 | `src/maven.rs` | Maven Central search: versions, timestamps |
 | `src/composer.rs` | Packagist p2 versions, maintainers, abandoned flag |
-| `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping |
+| `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping, EPSS/KEV enrichment |
+| `src/exploit.rs` | EPSS and CISA KEV parsing, CVE extraction, the two feeds' client |
 | `src/http.rs` | one agent, 64 MB body limit, the cache read/write policy |
 | `src/cache.rs` | SQLite cache: TTL, stale fallback, key/value entries |
 | `src/archive/` | bounded in-memory tar.gz/zip/gem extraction, caps and skipped-path reasons |
@@ -158,6 +159,16 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   "advisory without a summary" for every real advisory.
 - **Advisory failure is an INFO finding**, not silence and not exit 3. "We
   could not check" must never read as "nothing found".
+- **Exploit data enriches advisories; it never sets the verdict.** Only
+  advisories with a CVE trigger the lookups. A KEV listing is its own WARN
+  `known-exploited` finding with high confidence; EPSS is an evidence line and
+  never changes a severity or creates a finding. A failed lookup becomes one
+  INFO `threat-data-unavailable`, attached only to lists that actually had a
+  CVE, so clean packages in the same batch do not inherit the noise. Both feeds
+  cache for 24h; `DEPVET_EPSS_BASE`/`DEPVET_KEV_BASE` obey
+  `DEPVET_ALLOW_INSECURE_BASES`, and the `guard` hook strips them like every
+  other override. `tests/cli.rs` answers empty EPSS/KEV documents by default;
+  override the exact path to test a failure.
 - **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
   uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
   they show as `not checked`. The `PackageSource` trait is still deferred: two

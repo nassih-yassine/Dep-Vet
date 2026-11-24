@@ -38,6 +38,10 @@ pub struct AdvisoryList {
     /// How old the cached advisory answer was when it was served after a
     /// failed refresh. `None` means the answer is fresh.
     pub stale_seconds: Option<i64>,
+    /// Why EPSS or KEV data is missing, when an advisory with a CVE was found
+    /// and the lookup failed. `None` means either nothing needed enriching or
+    /// every lookup answered.
+    pub threat_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -178,10 +182,61 @@ impl OsvClient {
         }
         let bodies = self.fetch_bodies(&unique);
         let stale_seconds = oldest_stale(stale_seconds, &bodies);
-        check_len(
+        let mut lists = check_len(
             lists_from(chunk, capped, &bodies, stale_seconds),
             chunk.len(),
-        )
+        )?;
+        self.attach_exploit_data(&mut lists);
+        Ok(lists)
+    }
+
+    /// Add EPSS scores and CISA KEV listings for every CVE in the chunk.
+    ///
+    /// One KEV download and one EPSS request per 100 CVEs cover the whole
+    /// chunk. Failures are recorded on the lists, so the report says the
+    /// lookup failed instead of implying the advisories are unexploited.
+    fn attach_exploit_data(&self, lists: &mut [AdvisoryList]) {
+        let mut cves: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for advisory in lists.iter().flat_map(|list| &list.advisories) {
+            for cve in crate::exploit::cve_ids(&advisory.id, &advisory.aliases) {
+                if seen.insert(cve.clone()) {
+                    cves.push(cve);
+                }
+            }
+        }
+        if cves.is_empty() {
+            return;
+        }
+
+        let client = crate::exploit::ExploitClient::new(&self.http);
+        let epss = client.epss(&cves);
+        let kev = client.kev();
+        let mut failures = Vec::new();
+        match &epss {
+            Ok(_) => {}
+            Err(error) => failures.push(format!("EPSS: {error}")),
+        }
+        match &kev {
+            Ok(_) => {}
+            Err(error) => failures.push(format!("CISA KEV: {error}")),
+        }
+        let threat_error = if failures.is_empty() {
+            None
+        } else {
+            Some(failures.join("; "))
+        };
+        let scores = epss.unwrap_or_default();
+        let catalog = kev.unwrap_or_default();
+        apply_exploit_data(lists, &scores, &catalog);
+        for list in lists {
+            let has_cve = list.advisories.iter().any(|advisory| {
+                !crate::exploit::cve_ids(&advisory.id, &advisory.aliases).is_empty()
+            });
+            if has_cve {
+                list.threat_error.clone_from(&threat_error);
+            }
+        }
     }
 
     /// Raw advisory bodies keyed by id. A failed fetch is `None`, which becomes
@@ -218,6 +273,24 @@ impl OsvClient {
             bodies.extend(fetched);
         }
         bodies
+    }
+}
+
+/// Attach the first score and KEV record for each advisory's CVE ids. Advisories
+/// without a CVE keep both fields empty.
+fn apply_exploit_data(
+    lists: &mut [AdvisoryList],
+    scores: &[crate::exploit::EpssScore],
+    catalog: &std::collections::HashMap<String, crate::exploit::KevEntry>,
+) {
+    for list in lists {
+        for advisory in &mut list.advisories {
+            let ids = crate::exploit::cve_ids(&advisory.id, &advisory.aliases);
+            advisory.epss = ids
+                .iter()
+                .find_map(|cve| scores.iter().find(|score| &score.cve == cve).cloned());
+            advisory.kev = ids.iter().find_map(|cve| catalog.get(cve).cloned());
+        }
     }
 }
 
@@ -292,6 +365,7 @@ fn lists_from(
                 advisories: dedupe(advisories),
                 hidden,
                 stale_seconds,
+                threat_error: None,
             }
         })
         .collect()
@@ -800,6 +874,47 @@ mod tests {
             epss: None,
             kev: None,
         }
+    }
+
+    #[test]
+    fn exploit_data_attaches_by_cve_alias() {
+        let mut lists = vec![AdvisoryList {
+            advisories: vec![
+                advisory("GHSA-1", &["CVE-2021-44228"], Severity::Warn, "log4j"),
+                advisory("PYSEC-2", &[], Severity::Info, "no cve"),
+            ],
+            hidden: 0,
+            stale_seconds: None,
+            threat_error: None,
+        }];
+        let scores = vec![crate::exploit::EpssScore {
+            cve: "CVE-2021-44228".to_string(),
+            epss: 0.97,
+            percentile: 0.99,
+        }];
+        let mut catalog = std::collections::HashMap::new();
+        catalog.insert(
+            "CVE-2021-44228".to_string(),
+            crate::exploit::KevEntry {
+                cve: "CVE-2021-44228".to_string(),
+                date_added: "2021-12-10".to_string(),
+                ransomware: false,
+                vendor: "Apache".to_string(),
+                product: "Log4j2".to_string(),
+            },
+        );
+
+        apply_exploit_data(&mut lists, &scores, &catalog);
+
+        let log4j = &lists[0].advisories[0];
+        assert_eq!(log4j.epss.as_ref().map(|score| score.epss), Some(0.97));
+        assert_eq!(
+            log4j.kev.as_ref().map(|entry| entry.product.as_str()),
+            Some("Log4j2")
+        );
+        let unknown = &lists[0].advisories[1];
+        assert!(unknown.epss.is_none());
+        assert!(unknown.kev.is_none());
     }
 
     #[test]

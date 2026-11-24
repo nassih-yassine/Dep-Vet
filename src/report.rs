@@ -501,6 +501,19 @@ pub fn render_diff_human(report: &crate::inspect::DiffReport, color: bool) -> St
                 advisory.id,
                 advisory.summary
             ));
+            if let Some(score) = &advisory.epss {
+                out.push_str(&format!(
+                    "        EPSS {:.3} ({}th percentile)\n",
+                    score.epss,
+                    (score.percentile * 100.0).round() as i64
+                ));
+            }
+            if let Some(kev) = &advisory.kev {
+                out.push_str(&format!(
+                    "        exploited in the wild (CISA KEV, added {})\n",
+                    kev.date_added
+                ));
+            }
             out.push_str(&format!("        -> {}\n\n", advisory.url));
         }
     }

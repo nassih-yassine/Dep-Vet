@@ -18,6 +18,8 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "advisories-truncated",
     "advisory-check-unavailable",
     "advisory-coverage-partial",
+    "known-exploited",
+    "threat-data-unavailable",
     "install-scripts",
     "build-from-source",
     "typosquat",
