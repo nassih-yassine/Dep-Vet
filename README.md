@@ -2,7 +2,9 @@
 
 <img alt="Dep-Vet — Dependency Trust Engine: know what you're installing, who published it, and what changed" src="assets/banner.png" width="100%">
 
-**Check a package's risk before it enters your lockfile.**
+<h1>Dep-Vet</h1>
+
+**Vet a package for supply-chain risk before it enters your lockfile.**
 
 <p>
 <img alt="ci" src="https://github.com/nassih-yassine/Dep-Vet/actions/workflows/ci.yml/badge.svg">
@@ -14,14 +16,19 @@
 <img alt="no runtime" src="https://img.shields.io/badge/runtime-none%20(linux%20musl%3A%20static)-success.svg">
 <img alt="no telemetry" src="https://img.shields.io/badge/telemetry-none-success.svg">
 <img alt="9 ecosystems" src="https://img.shields.io/badge/ecosystems-9-success.svg">
+<img alt="platforms" src="https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20Windows-success.svg">
 </p>
 
-<code>npx @nassihyas/dep-vet npm express@5.3.0</code><br>
-<code>dep-vet pypi requests==2.31.0</code><br>
-<code>dep-vet audit package-lock.json</code><br>
-<code>dep-vet guard --check -- npm i express</code>
-
 </div>
+
+```sh
+npx @nassihyas/dep-vet npm express@5.3.0
+npx @nassihyas/dep-vet audit package-lock.json
+npx @nassihyas/dep-vet guard --check -- npm i express
+```
+
+One binary, no account, no API key, no telemetry. It never installs or executes
+the package it checks.
 
 ---
 
@@ -33,27 +40,6 @@ package you trust, what vulnerabilities apply to this exact version, and whether
 it is deprecated. Every finding links to the raw
 evidence it came from.
 
-```console
-$ dep-vet npm crossenv
-npm/crossenv@0.0.2-security
-
-  verdict      HIGH (exit 2)
-  first seen   2017-07-19
-  published    2017-08-02
-  downloads    2,039/week
-  maintainers  npm
-  repository   https://github.com/npm/security-holder.git
-
-  1 finding
-
-  [HIGH]  name is close to a popular package
-        'crossenv' is 1 edit(s) away from the popular package 'cross-env'
-        this package: crossenv
-        -> https://www.npmjs.com/package/crossenv/v/0.0.2-security
-        popular package: cross-env
-        -> https://www.npmjs.com/package/cross-env
-```
-
 It also reads the text a package ships: zero-width and bidi characters that hide
 content from a reviewer, and phrasing aimed at a model rather than a person. Both
 are disclosed as heuristics, never as a verdict.
@@ -61,17 +47,100 @@ are disclosed as heuristics, never as a verdict.
 No account, no API key, no telemetry, no score out of 100. One binary for the
 CLI, agent hooks, and MCP.
 
-## Why before install
+## Why vet dependencies before installing?
 
-| | dep-vet | `npm audit` | Dependabot |
-|---|---|---|---|
-| Question | should this tarball run on my machine? | is an installed version vulnerable? | is an installed dependency outdated or vulnerable? |
-| Moment | before `npm install` | after install | after commit |
-| Input | a package name you are considering | a lockfile | a repository |
+`npm install` runs package code, and so does a Python sdist build. Post-install
+scanners answer a different question after that moment has passed: is the
+version I already installed known to be vulnerable? They do not look at the
+`postinstall` hook that just ran, the maintainer who changed last week, or the
+name that is one edit away from the one you meant.
+
+Dep-Vet checks the package you are about to trust. It reads public registry
+metadata, OSV advisories, EPSS/KEV exploit context, OpenSSF Scorecard, and the
+archive itself (`inspect`), then returns findings with links to the evidence.
+There is no account, no API key, no telemetry, and no opaque score.
 
 The gap is the moment trust is granted. The `axios@1.14.1` compromise added a
 single dependency whose only job was a `postinstall` hook — invisible in
 `package.json`, transitive, and already running by the time an audit exists.
+
+Single-package commands (`npm`, `pypi`, `crates`, ...) check that package and
+version. `audit` and `lock` follow a lockfile's full installed tree; `plan`
+resolves a tree before install (npm ranges, and Maven POMs).
+
+## Example output
+
+A real typosquat, and a clean package, from the same command:
+
+```console
+$ npx @nassihyas/dep-vet npm crossenv
+npm/crossenv@0.0.2-security
+
+  verdict      HIGH (exit 2)
+  first seen   2017-07-19
+  published    2017-08-02
+  maintainers  npm
+
+  1 finding
+
+  [HIGH]  name is close to a popular package
+        'crossenv' is 1 edit(s) away from the popular package 'cross-env'
+        -> https://www.npmjs.com/package/crossenv/v/0.0.2-security
+```
+
+```console
+$ npx @nassihyas/dep-vet npm express@5.3.0
+npm/express@5.3.0
+
+  verdict      INFO (exit 0)
+  first seen   2010-12-29
+  maintainers  dougwilson, ulisesgascon
+  repository   https://github.com/expressjs/express
+  license      MIT
+
+  no findings: nothing in the registry metadata stands out
+```
+
+Exit codes are part of the interface; `3` is not a verdict:
+
+| Code | Meaning |
+|---|---|
+| `0` | clean, or informational findings only |
+| `1` | warnings: review before adding |
+| `2` | high risk: a HIGH finding such as malware-shaped install behavior or a near-identical name |
+| `3` | the check could not run or could not finish (bad input, network failure, unreadable response, a lockfile package that could not be fetched) |
+
+`3` lets CI distinguish "this package is risky" from "the scanner broke or was
+called wrong". clap's own usage-error exit is `2`, which would read as "high
+risk", so parse failures are remapped to `3`; `--help` and `--version` still
+exit `0`.
+
+## Supported ecosystems
+
+| Ecosystem | Tier | Checked | Not checked |
+|---|---|---|---|
+| npm | Full | advisories, install scripts, typosquats, maintainers/publisher history, downloads, provenance and attestation verification, repository, deprecation, freshness, license, Scorecard, archive `inspect`, `tree`/`plan` | — |
+| PyPI | Full | advisories, sdist build, provenance presence, yanked releases, dependency history, repository, license, Scorecard, archive `inspect` | maintainers, downloads |
+| crates.io | Full | advisories, owners, publisher, yanked releases, repository, dependency history, license, Scorecard | install scripts (no file list), downloads, provenance |
+| Composer | Full | advisories, maintainers, abandoned flag, repository, dependency history, license, Scorecard, archive `inspect` | install scripts, downloads |
+| RubyGems | Basic | advisories, repository, yanked releases, license, freshness | maintainers, downloads, install scripts, dependency history |
+| NuGet | Basic | advisories, deprecation, dependency history, license | repository, maintainers, downloads, install scripts |
+| JSR | Basic | repository, deprecation, freshness | advisories (OSV does not publish JSR), maintainers, downloads, install scripts |
+| Maven / AndroidX | Basic | advisories, versions; `plan maven` reads POM trees | repository, maintainers, downloads, install scripts, deprecation |
+| Go | Basic | advisories, versions | repository, maintainers, downloads, install scripts, dependency history |
+
+"Basic" means the registry does not expose the missing signals; the report lists
+them under `not checked` instead of treating absence as a pass.
+
+## How Dep-Vet compares to npm audit and Socket
+
+| | Dep-Vet | `npm audit` | Socket.dev |
+|---|---|---|---|
+| Runs before install | **Yes** — checks a name/version or a lockfile tree before anything executes | No — needs a lockfile or an install, and reports after the fact | **Yes** — analyzes packages before install |
+| Account / API key | None | None for the npm CLI; registry access only | Account and GitHub app or CLI token for private analysis |
+| Speed / runtime | Single static Rust binary; public registry + OSV requests, with a local cache | npm CLI; network per run | Cloud analysis; depends on the service and plan |
+| Evidence transparency | Every finding links to its OSV record, registry field, EPSS/KEV entry, Scorecard, or workflow line | Advisory IDs and severities from the npm advisory database | Proprietary risk signals and scores |
+| CI exit codes | `0` clean, `1` warning, `2` high risk, `3` incomplete | `1` when vulnerabilities are found | CLI exit codes; cloud alerts are the primary channel |
 
 ## Install
 
@@ -949,20 +1018,6 @@ obeys the same gate.
 The full allowlist and rules are in
 [SECURITY.md](SECURITY.md#outbound-url-policy).
 
-### Exit codes
-
-| Code | Meaning |
-|------|---------|
-| `0`  | clean, or informational findings only |
-| `1`  | warnings: review before adding |
-| `2`  | high risk: install scripts plus another signal, or a near-identical name |
-| `3`  | the check could not run or could not finish (bad input, unknown subcommand, network failure, unreadable response, a lockfile package that could not be fetched) |
-
-`3` exists so CI can tell "this package is risky" from "the scanner broke or was
-called wrong". clap's own exit code for usage errors is `2`, which would read as
-"high risk", so parse failures are remapped to `3`; `--help` and `--version`
-still exit `0`.
-
 ### JSON
 
 ```sh
@@ -1054,10 +1109,11 @@ instead of misread.
 | `DEPVET_CACHE_TTL_SECONDS` | Entry lifetime, default `86400` |
 | `DEPVET_NO_CACHE` | Disable the cache entirely |
 
-### GitHub Action
+### CI/CD Integration (GitHub Actions)
 
 A reusable workflow reviews the lockfile change on every pull request and keeps
-one comment updated with the report:
+one comment updated with the report. Copy
+[`examples/github-action.yml`](examples/github-action.yml) into `.github/workflows/`:
 
 ```yaml
 name: dependency review
