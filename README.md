@@ -437,6 +437,7 @@ resemble some other dependency.
 dep-vet mcp-config                          # .mcp.json, claude_desktop_config.json, .cursor/mcp.json, .vscode/mcp.json here
 dep-vet mcp-config path/to/.mcp.json        # one file
 dep-vet mcp-config path/to/directory        # the known names in that directory
+dep-vet mcp-config --user                   # plus the per-user Claude, Cursor, Windsurf, VS Code and Cline files
 dep-vet mcp-config --json
 ```
 
@@ -446,14 +447,21 @@ The scan reads the config and never starts a server. It reports:
 |---|---|---|
 | `mcp-remote-launch` | WARN | The server starts through `npx`, `bunx`, `uvx`, `pipx`, `docker`, `curl`, or `wget`, so code is fetched at launch. |
 | `mcp-unpinned-package` | WARN | The launched package has no exact version (`@latest` and ranges are not pins). Docker images must use `@sha256:`. |
-| `mcp-plaintext-secret` | HIGH | An `env` or header key such as `GITHUB_TOKEN` or `API_KEY` holds a literal value. The value is redacted from the report. `${VAR}`, `op://`, and placeholder values are accepted. |
+| `mcp-plaintext-secret` | HIGH | A literal secret in `env`, headers, an argument (`--token`, `Authorization: Bearer`), or a URL query parameter. The value is redacted from the report. `${VAR}`, `op://`, and placeholder values are accepted. |
 | `mcp-insecure-url` | HIGH | A remote server URL or fetched script uses `http` on a non-loopback host. |
 | `mcp-unknown-host` | WARN | A script fetched for a `curl`/`wget` server comes from a host that is not a known code host. |
 | `mcp-prompt-injection` | WARN | A command, argument, env value, or header contains instructions aimed at a model rather than a person. |
 | `mcp-invisible-text` | WARN | The same strings contain zero-width or bidi characters. |
+| `mcp-server-unreadable` | WARN | A server entry uses a shape the scan cannot read. It still counts toward the server total and is reported, never dropped. |
 
+JSONC comments and trailing commas are accepted (`//` inside a string is kept).
 Exit `0` clean, `1` warning, `2` HIGH, `3` for an unreadable path or invalid
-JSON. Findings name the config, server, and field. No server is ever executed.
+JSON. Findings name the config, server, and field. Evidence redacts `env` and
+header values, drops URL query strings and userinfo, and escapes invisible
+characters. Secret-looking flags (`--token`, `--api-key`), `Authorization:
+Bearer`, and secret query parameters are reported with the value redacted. No
+server is ever executed, and the resolved command line is never printed because
+its arguments can carry secrets.
 
 ### Scan GitHub Actions workflows
 
@@ -473,7 +481,21 @@ a local `./path` action is not an unpinned dependency.
 | `workflow-script-injection` | HIGH | An attacker-controlled event field (PR title/body/head ref, issue body, comment body, commit message) is interpolated into a `run:` script. |
 | `workflow-write-all` | WARN | `permissions: write-all` gives every job write access to the repository token. |
 | `workflow-curl-pipe-shell` | HIGH | `curl`/`wget` output is piped into `sh`, `bash`, `zsh`, Python, or Node with no checksum or review. |
-| `workflow-secret-echo` | HIGH | A `run:` step prints a `secrets.*` value into the log. |
+| `workflow-secret-echo` | HIGH | A `run:` or `script:` step prints a `secrets.*` value into the log. |
+| `workflow-checkout-persist-credentials` | WARN | A checkout under `pull_request_target` or `workflow_run` does not set `persist-credentials: false`, leaving the token in the git config for later steps. |
+| `workflow-run-artifact-download` | WARN | A `workflow_run` workflow downloads an artifact, which can carry attacker-controlled files into a privileged job. |
+| `workflow-self-hosted-pr` | WARN | A `pull_request` workflow runs on a self-hosted runner. Text cannot prove whether a fork can reach it. |
+| `workflow-secrets-inherit` | WARN | `secrets: inherit` gives a called workflow every caller secret, not only the ones it needs. |
+| `workflow-env-file-injection` | WARN | Event data is written to `$GITHUB_ENV` or `$GITHUB_PATH`, where a newline can add environment variables for later steps. |
+
+Docker references are pinned only by `@sha256:` with 64 hex characters; a tag or
+`docker://image` is reported. `script:` blocks from `actions/github-script` are
+scanned like `run:`. PR-target findings are per affected job.
+
+This is a first pass, not a full workflow analyzer. It reads text line-wise: it
+does not evaluate YAML anchors, expressions, or reusable-workflow semantics, and
+it cannot prove whether a fork reaches a self-hosted runner. Use
+[zizmor](https://github.com/woodruffw/zizmor) or actionlint for a deeper review.
 
 The scan exits `0` when nothing matched, `1` for warnings, `2` for any HIGH
 finding, and `3` when the path cannot be read. Findings name the file and line

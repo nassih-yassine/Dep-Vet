@@ -365,12 +365,21 @@ pub fn is_known_rule(id: &str) -> bool {
 /// code-point label. Used by the MCP config scan, which has strings rather
 /// than files.
 pub fn invisible_character(text: &str) -> Option<&'static str> {
-    text.chars().find_map(|character| {
-        INVISIBLE_CHARACTERS
-            .iter()
-            .find(|(candidate, _)| *candidate == character)
-            .map(|(_, label)| *label)
-    })
+    text.chars()
+        .find(|character| is_invisible_char(*character))
+        .and_then(|character| {
+            INVISIBLE_CHARACTERS
+                .iter()
+                .find(|(candidate, _)| *candidate == character)
+                .map(|(_, label)| *label)
+        })
+}
+
+/// Whether a character hides text from a reviewer or changes its direction.
+pub fn is_invisible_char(character: char) -> bool {
+    INVISIBLE_CHARACTERS
+        .iter()
+        .any(|(candidate, _)| *candidate == character)
 }
 
 /// The first prompt-injection phrase in `text`, if any.

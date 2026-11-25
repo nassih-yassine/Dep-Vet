@@ -451,7 +451,7 @@ fn parse_bun(body: &str) -> Result<LockContents, LockError> {
 }
 
 /// bun.lock is JSON with comments and trailing commas.
-fn strip_jsonc(input: &str) -> String {
+pub(crate) fn strip_jsonc(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut without_comments = String::with_capacity(input.len());
     let mut index = 0;

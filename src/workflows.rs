@@ -21,6 +21,9 @@ const INJECTION_REFERENCE: &str = "https://docs.github.com/en/actions/security-g
 const PERMISSIONS_REFERENCE: &str = "https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/controlling-permissions-for-github_token";
 const CURL_PIPE_REFERENCE: &str = "https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable";
 const SECRET_ECHO_REFERENCE: &str = "https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#storing-credentials";
+const PERSIST_CREDENTIALS_REFERENCE: &str = "https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#considering-cross-repository-access";
+const SELF_HOSTED_REFERENCE: &str = "https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners#self-hosted-runners-are-not-guaranteed-to-be-secure";
+const SECRETS_INHERIT_REFERENCE: &str = "https://docs.github.com/en/actions/sharing-automations/reusing-workflows#passing-inputs-and-secrets-to-a-reusable-workflow";
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowError {
@@ -139,10 +142,16 @@ fn line_of(finding: &Finding) -> usize {
 fn scan_text(path: &str, body: &str) -> Vec<Finding> {
     let lines: Vec<&str> = body.lines().map(strip_comment).collect();
     let mut findings = Vec::new();
-    let mut trigger_block: Option<usize> = None;
-    let mut pull_request_target = false;
+    let mut triggers: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut in_triggers = false;
+    let mut in_jobs = false;
+    let mut current_job: Option<String> = None;
     let mut run_base: Option<usize> = None;
-    let mut head_ref_line: Option<(usize, String)> = None;
+    let mut untrusted: Vec<(Option<String>, usize, String)> = Vec::new();
+    let mut checkouts: Vec<(usize, usize)> = Vec::new();
+    let mut self_hosted: Vec<(usize, String)> = Vec::new();
+    let mut downloads: Vec<(usize, String)> = Vec::new();
+    let mut secrets_inherit: Vec<(usize, String)> = Vec::new();
 
     for (index, line) in lines.iter().enumerate() {
         let number = index + 1;
@@ -155,30 +164,39 @@ fn scan_text(path: &str, body: &str) -> Vec<Finding> {
         if let Some(base) = run_base {
             if indent > base {
                 findings.extend(run_rules(path, number, trimmed));
-                if has_pr_head_reference(trimmed) {
-                    head_ref_line = Some((number, trimmed.to_string()));
+                if untrusted_ref(trimmed) {
+                    untrusted.push((current_job.clone(), number, trimmed.to_string()));
                 }
                 continue;
             }
             run_base = None;
         }
 
-        // A top-level key ends the `on:` block.
         if indent == 0 {
-            trigger_block = None;
-            if trimmed.starts_with("on:") || trimmed.starts_with("\"on\":") {
-                trigger_block = Some(indent);
-                pull_request_target |= trimmed.contains("pull_request_target");
+            in_triggers = false;
+            in_jobs = false;
+            current_job = None;
+            if starts_key(trimmed, "on") {
+                in_triggers = true;
+                collect_triggers(trimmed, &mut triggers);
+                if has_trigger_line(trimmed, "pull_request_target") {
+                    triggers.insert("pull_request_target".to_string());
+                }
                 continue;
             }
-        }
-        if let Some(base) = trigger_block
-            && indent > base
-        {
-            if trimmed.contains("pull_request_target") {
-                pull_request_target = true;
+            if starts_key(trimmed, "jobs") {
+                in_jobs = true;
             }
+        } else if in_triggers {
+            collect_triggers(trimmed, &mut triggers);
             continue;
+        } else if in_jobs
+            && indent == 2
+            && trimmed.ends_with(':')
+            && !trimmed.starts_with('-')
+            && !trimmed.starts_with("steps")
+        {
+            current_job = Some(trimmed.trim_end_matches(':').to_string());
         }
 
         if trimmed.starts_with("permissions:") {
@@ -203,6 +221,24 @@ fn scan_text(path: &str, body: &str) -> Vec<Finding> {
             continue;
         }
 
+        if trimmed.starts_with("secrets:") {
+            let value = trimmed
+                .split_once(':')
+                .map(|(_, value)| value.trim())
+                .unwrap_or_default();
+            if value == "inherit" {
+                secrets_inherit.push((number, trimmed.to_string()));
+            }
+            continue;
+        }
+
+        if let Some(value) = trimmed.strip_prefix("runs-on:") {
+            if value.to_ascii_lowercase().contains("self-hosted") {
+                self_hosted.push((number, trimmed.to_string()));
+            }
+            continue;
+        }
+
         if let Some(uses) = uses_value(trimmed) {
             if let Some(reason) = unpinned_reason(uses) {
                 findings.push(finding(
@@ -218,63 +254,214 @@ fn scan_text(path: &str, body: &str) -> Vec<Finding> {
                     trimmed,
                 ));
             }
+            if uses.to_ascii_lowercase().starts_with("actions/checkout") {
+                checkouts.push((number, indent));
+            }
+            if uses
+                .to_ascii_lowercase()
+                .starts_with("actions/download-artifact")
+            {
+                downloads.push((number, trimmed.to_string()));
+            }
             continue;
         }
 
-        if let Some(rest) = trimmed
-            .strip_prefix("- run:")
-            .or_else(|| trimmed.strip_prefix("run:"))
-        {
+        if let Some(rest) = stripped_block_scalar(trimmed) {
             let inline = rest.trim();
             if is_block_scalar(inline) {
                 run_base = Some(indent);
             } else {
                 findings.extend(run_rules(path, number, inline));
-                if has_pr_head_reference(inline) {
-                    head_ref_line = Some((number, trimmed.to_string()));
-                }
+            }
+            if untrusted_ref(inline) {
+                untrusted.push((current_job.clone(), number, trimmed.to_string()));
             }
             continue;
         }
 
-        if has_pr_head_reference(trimmed) {
-            head_ref_line = Some((number, trimmed.to_string()));
+        if untrusted_ref(trimmed) {
+            untrusted.push((current_job.clone(), number, trimmed.to_string()));
         }
     }
 
-    if pull_request_target && let Some((number, text)) = head_ref_line {
-        findings.push(finding(
+    let pull_request_target = triggers.contains("pull_request_target");
+    if pull_request_target {
+        let mut seen_jobs: Vec<String> = Vec::new();
+        for (job, number, text) in &untrusted {
+            if let Some(job) = job {
+                if seen_jobs.iter().any(|seen| seen == job) {
+                    continue;
+                }
+                seen_jobs.push(job.clone());
+            }
+            findings.push(finding(
                 Rule {
                     id: "workflow-pr-target-checkout",
                     severity: Severity::High,
                     title: "pull_request_target checks out untrusted code",
-                    detail: "a fork's code runs with the base repository token and secrets when the workflow checks out the PR head".to_string(),
+                    detail: match job {
+                        Some(job) => format!(
+                            "job '{job}' checks out the PR head while the workflow runs with the base repository token and secrets"
+                        ),
+                        None => "a fork's code runs with the base repository token and secrets when the workflow checks out the PR head".to_string(),
+                    },
                     reference: PR_TARGET_REFERENCE,
                 },
                 path,
-                number,
-                &text,
+                *number,
+                text,
             ));
+        }
+    }
+
+    if triggers.contains("workflow_run") {
+        for (number, text) in &downloads {
+            findings.push(finding(
+                Rule {
+                    id: "workflow-run-artifact-download",
+                    severity: Severity::Warn,
+                    title: "workflow_run downloads an artifact",
+                    detail: "artifacts from an untrusted workflow run can carry attacker-controlled files into this job".to_string(),
+                    reference: PR_TARGET_REFERENCE,
+                },
+                path,
+                *number,
+                text,
+            ));
+        }
+    }
+
+    if triggers.contains("pull_request_target") || triggers.contains("workflow_run") {
+        for (number, indent) in &checkouts {
+            if !checkout_disables_credentials(&lines, *number, *indent) {
+                findings.push(finding(
+                    Rule {
+                        id: "workflow-checkout-persist-credentials",
+                        severity: Severity::Warn,
+                        title: "checkout keeps the token in the git config",
+                        detail: "this checkout runs in a privileged trigger; set persist-credentials: false so later steps cannot reuse the token".to_string(),
+                        reference: PERSIST_CREDENTIALS_REFERENCE,
+                    },
+                    path,
+                    *number,
+                    lines[*number - 1].trim(),
+                ));
+            }
+        }
+    }
+
+    if triggers.contains("pull_request") {
+        for (number, text) in &self_hosted {
+            findings.push(finding(
+                Rule {
+                    id: "workflow-self-hosted-pr",
+                    severity: Severity::Warn,
+                    title: "pull_request runs on a self-hosted runner",
+                    detail: "text cannot prove whether a fork can reach this runner; a public repository needs approval or a fork guard".to_string(),
+                    reference: SELF_HOSTED_REFERENCE,
+                },
+                path,
+                *number,
+                text,
+            ));
+        }
+    }
+
+    for (number, text) in &secrets_inherit {
+        findings.push(finding(
+            Rule {
+                id: "workflow-secrets-inherit",
+                severity: Severity::Warn,
+                title: "every caller secret is passed through",
+                detail: "secrets: inherit hands a called workflow all of the caller's secrets, including ones it does not need".to_string(),
+                reference: SECRETS_INHERIT_REFERENCE,
+            },
+            path,
+            *number,
+            text,
+        ));
     }
 
     findings
 }
 
+fn starts_key(trimmed: &str, key: &str) -> bool {
+    trimmed
+        .strip_prefix(key)
+        .is_some_and(|rest| rest.starts_with(':') || rest.starts_with("\":"))
+        || trimmed.starts_with(&format!("\"{key}\":"))
+}
+
+fn collect_triggers(line: &str, triggers: &mut std::collections::BTreeSet<String>) {
+    for trigger in [
+        "pull_request_target",
+        "pull_request",
+        "workflow_run",
+        "push",
+        "schedule",
+        "release",
+    ] {
+        if has_trigger_line(line, trigger) {
+            triggers.insert(trigger.to_string());
+        }
+    }
+}
+
+/// Token-bounded so `pull_request_target` does not also set `pull_request`.
+fn has_trigger_line(line: &str, trigger: &str) -> bool {
+    line.split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .any(|token| token == trigger)
+}
+
+fn stripped_block_scalar(trimmed: &str) -> Option<&str> {
+    for prefix in ["- run:", "run:", "- script:", "script:"] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return Some(rest);
+        }
+    }
+    None
+}
+
+/// A checkout step can turn off credential persistence anywhere inside its own
+/// indented block.
+fn checkout_disables_credentials(lines: &[&str], number: usize, indent: usize) -> bool {
+    for line in lines.iter().skip(number) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let current = line.len() - line.trim_start().len();
+        if current <= indent {
+            return false;
+        }
+        if line
+            .to_ascii_lowercase()
+            .split_whitespace()
+            .collect::<String>()
+            .contains("persist-credentials:false")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn run_rules(path: &str, line: usize, text: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
-    if script_injection(text) {
+    if let Some((field, severity)) = script_injection(text) {
         findings.push(finding(
-                Rule {
-                    id: "workflow-script-injection",
-                    severity: Severity::High,
-                    title: "event data is interpolated into a shell command",
-                    detail: "a pull request title, branch name, or issue body can break out of the shell quoting".to_string(),
-                    reference: INJECTION_REFERENCE,
-                },
-                path,
-                line,
-                text,
-            ));
+            Rule {
+                id: "workflow-script-injection",
+                severity,
+                title: "event data is interpolated into a shell command",
+                detail: format!(
+                    "{field} comes from the event; a pull request title, branch name, issue body, or input can break out of the shell quoting"
+                ),
+                reference: INJECTION_REFERENCE,
+            },
+            path,
+            line,
+            text,
+        ));
     }
     if pipe_to_shell(text) {
         findings.push(finding(
@@ -293,17 +480,31 @@ fn run_rules(path: &str, line: usize, text: &str) -> Vec<Finding> {
     }
     if echoes_a_secret(text) {
         findings.push(finding(
-                Rule {
-                    id: "workflow-secret-echo",
-                    severity: Severity::High,
-                    title: "secret is written to the log",
-                    detail: "secrets echoed in a step are visible in the run log and to anyone who can read it".to_string(),
-                    reference: SECRET_ECHO_REFERENCE,
-                },
-                path,
-                line,
-                text,
-            ));
+            Rule {
+                id: "workflow-secret-echo",
+                severity: Severity::High,
+                title: "secret is written to the log",
+                detail: "secrets echoed in a step are visible in the run log and to anyone who can read it".to_string(),
+                reference: SECRET_ECHO_REFERENCE,
+            },
+            path,
+            line,
+            text,
+        ));
+    }
+    if writes_env_file_with_event(text) {
+        findings.push(finding(
+            Rule {
+                id: "workflow-env-file-injection",
+                severity: Severity::Warn,
+                title: "event data is written to GITHUB_ENV or GITHUB_PATH",
+                detail: "a newline in an attacker-controlled value can add environment variables or PATH entries for later steps".to_string(),
+                reference: CURL_PIPE_REFERENCE,
+            },
+            path,
+            line,
+            text,
+        ));
     }
     findings
 }
@@ -319,6 +520,19 @@ fn uses_value(trimmed: &str) -> Option<&str> {
 fn unpinned_reason(uses: &str) -> Option<String> {
     if uses.is_empty() || uses.starts_with("./") || uses.starts_with(".\\") {
         return None;
+    }
+    if let Some(image) = uses.strip_prefix("docker://") {
+        let pinned = image.rsplit_once('@').is_some_and(|(_, digest)| {
+            digest.strip_prefix("sha256:").is_some_and(|hex| {
+                hex.len() == 64 && hex.chars().all(|character| character.is_ascii_hexdigit())
+            })
+        });
+        if pinned {
+            return None;
+        }
+        return Some(format!(
+            "docker image '{image}' is not pinned by digest; use @sha256:<64 hex characters>"
+        ));
     }
     let Some((name, reference)) = uses.rsplit_once('@') else {
         return Some(format!(
@@ -340,7 +554,20 @@ fn unpinned_reason(uses: &str) -> Option<String> {
 /// Event fields an attacker controls. `github.event_name` and
 /// `github.repository` are not in this list on purpose: interpolating them is
 /// not the vulnerability this rule targets.
-fn script_injection(text: &str) -> bool {
+fn script_injection(text: &str) -> Option<(&'static str, Severity)> {
+    let field = event_field(text)?;
+    let folded = field.to_ascii_lowercase();
+    let severity = if folded.starts_with("inputs.") || folded.starts_with("github.event.inputs.") {
+        Severity::Info
+    } else {
+        Severity::High
+    };
+    Some((field, severity))
+}
+
+/// Fields a caller or a contributor can set. `github.event_name` and
+/// `github.repository` are not listed on purpose.
+fn event_field(text: &str) -> Option<&'static str> {
     let folded = text.to_ascii_lowercase();
     [
         "github.event.pull_request.title",
@@ -353,37 +580,64 @@ fn script_injection(text: &str) -> bool {
         "github.event.review.body",
         "github.event.review_comment.body",
         "github.event.head_commit.message",
-        "github.head_ref",
         "github.event.workflow_run.head_branch",
+        "github.event.inputs.",
+        "github.head_ref",
+        "inputs.",
     ]
-    .iter()
-    .any(|field| folded.contains(field))
+    .into_iter()
+    .find(|field| folded.contains(field))
+}
+
+fn writes_env_file_with_event(text: &str) -> bool {
+    let folded = text.to_ascii_lowercase();
+    let writes =
+        (folded.contains("github_env") || folded.contains("github_path")) && folded.contains(">>");
+    writes && event_field(text).is_some()
+}
+
+fn untrusted_ref(text: &str) -> bool {
+    let folded = text.to_ascii_lowercase();
+    folded.contains("github.event.pull_request.head")
+        || folded.contains("github.head_ref")
+        || folded.contains("refs/pull/")
 }
 
 fn pipe_to_shell(text: &str) -> bool {
     let folded = text.to_ascii_lowercase();
-    let Some((left, right)) = folded.split_once('|') else {
+    let fetches = folded.contains("curl") || folded.contains("wget");
+    if !fetches {
         return false;
-    };
-    let fetches = left.contains("curl") || left.contains("wget");
-    let shell = right.split_whitespace().any(|word| {
-        matches!(
-            word.trim_matches(|character: char| !character.is_alphanumeric()),
-            "sh" | "bash" | "zsh" | "fish" | "python" | "python3" | "node"
+    }
+    let shells = ["sh", "bash", "zsh", "fish", "python", "python3", "node"];
+    let is_shell = |word: &str| {
+        shells.contains(
+            &word
+                .trim_matches(|character: char| !character.is_alphanumeric())
+                .to_ascii_lowercase()
+                .as_str(),
         )
-    });
-    fetches && shell
+    };
+    if let Some((left, right)) = folded.split_once('|')
+        && (left.contains("curl") || left.contains("wget"))
+        && right.split_whitespace().any(is_shell)
+    {
+        return true;
+    }
+    // bash <(curl ...) and sh -c "$(curl ...)".
+    let substitution = folded.contains("<(") || folded.contains("$(");
+    substitution
+        && shells.iter().any(|shell| {
+            folded
+                .split(|character: char| !character.is_alphanumeric())
+                .any(|word| word == *shell)
+        })
 }
 
 fn echoes_a_secret(text: &str) -> bool {
     let folded = text.to_ascii_lowercase();
     let prints = folded.contains("echo") || folded.contains("printf") || folded.contains("cat ");
     prints && (folded.contains("secrets.") || folded.contains("secret."))
-}
-
-fn has_pr_head_reference(text: &str) -> bool {
-    text.to_ascii_lowercase()
-        .contains("github.event.pull_request.head")
 }
 
 /// A YAML comment starts at `#` outside quotes and at the start or after
@@ -593,6 +847,146 @@ jobs:
       - run: echo "#not-a-comment" # trailing comment
 "##;
         assert!(scan_yaml(body).is_empty());
+    }
+
+    #[test]
+    fn docker_images_need_a_digest() {
+        let body = r#"
+jobs:
+  test:
+    steps:
+      - uses: docker://alpine:3.19
+      - uses: docker://alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+"#;
+        let findings = scan_yaml(body);
+        assert_eq!(ids(&findings), vec!["workflow-action-unpinned"]);
+        assert!(findings[0].detail.contains("not pinned by digest"));
+    }
+
+    #[test]
+    fn github_script_blocks_are_scanned_and_inputs_are_info() {
+        let body = r#"
+jobs:
+  test:
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            console.log("${{ github.event.issue.title }}")
+      - run: echo "${{ inputs.name }}"
+"#;
+        let findings = scan_yaml(body);
+        let injections: Vec<&Finding> = findings
+            .iter()
+            .filter(|finding| finding.id == "workflow-script-injection")
+            .collect();
+        assert_eq!(injections.len(), 2);
+        assert_eq!(injections[0].severity, Severity::High);
+        assert_eq!(injections[1].severity, Severity::Info);
+    }
+
+    #[test]
+    fn pull_request_target_is_reported_per_affected_job() {
+        let body = r#"
+on: pull_request_target
+jobs:
+  safe:
+    steps:
+      - uses: actions/checkout@v4
+  unsafe:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+"#;
+        let findings = scan_yaml(body);
+        let hits: Vec<&Finding> = findings
+            .iter()
+            .filter(|finding| finding.id == "workflow-pr-target-checkout")
+            .collect();
+        assert_eq!(hits.len(), 1, "{findings:?}");
+        assert!(hits[0].detail.contains("'unsafe'"), "{:?}", hits[0].detail);
+    }
+
+    #[test]
+    fn workflow_run_artifact_download_and_secrets_inherit_are_warned() {
+        let body = r#"
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+jobs:
+  deploy:
+    uses: org/repo/.github/workflows/deploy.yml@main
+    secrets: inherit
+    steps:
+      - uses: actions/download-artifact@v4
+"#;
+        let findings = scan_yaml(body);
+        assert!(ids(&findings).contains(&"workflow-run-artifact-download"));
+        assert!(ids(&findings).contains(&"workflow-secrets-inherit"));
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.title.contains("artifact"))
+        );
+    }
+
+    #[test]
+    fn privileged_checkouts_must_disable_persisted_credentials() {
+        let body = r#"
+on: pull_request_target
+jobs:
+  one:
+    steps:
+      - uses: actions/checkout@v4
+  two:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+"#;
+        let findings = scan_yaml(body);
+        let hits: Vec<&Finding> = findings
+            .iter()
+            .filter(|finding| finding.id == "workflow-checkout-persist-credentials")
+            .collect();
+        assert_eq!(hits.len(), 1, "{findings:?}");
+    }
+
+    #[test]
+    fn self_hosted_pull_requests_and_env_file_writes_are_warned() {
+        let body = r#"
+on: pull_request
+jobs:
+  build:
+    runs-on: [self-hosted, linux]
+    steps:
+      - run: echo "FOO=${{ github.event.pull_request.title }}" >> "$GITHUB_ENV"
+"#;
+        let findings = scan_yaml(body);
+        assert!(ids(&findings).contains(&"workflow-self-hosted-pr"));
+        assert!(ids(&findings).contains(&"workflow-env-file-injection"));
+    }
+
+    #[test]
+    fn process_substitution_is_a_pipe_to_shell() {
+        let body = r#"
+jobs:
+  test:
+    steps:
+      - run: bash <(curl -fsSL https://example.test/install.sh)
+      - run: sh -c "$(wget -qO- https://example.test/install.sh)"
+      - run: curl -fsSL https://example.test/install.sh | sudo bash
+"#;
+        let findings = scan_yaml(body);
+        assert_eq!(
+            ids(&findings)
+                .iter()
+                .filter(|id| **id == "workflow-curl-pipe-shell")
+                .count(),
+            3
+        );
     }
 
     #[test]

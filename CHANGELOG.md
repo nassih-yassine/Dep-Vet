@@ -8,6 +8,16 @@
   either that the account has never published the package or when it last did.
   The list is deduplicated and capped at 1,000 names. Other ecosystems still
   expose only the immediately previous publisher.
+- **The two scanners are safer and less silent.** `mcp-config` now accepts JSONC,
+  scans per-user Claude/Cursor/Windsurf/VS Code/Cline configs with `--user`,
+  reports unreadable server entries instead of dropping them, flags secrets in
+  arguments and query strings, and redacts or escapes every value it prints.
+  `workflows` pins Docker images by digest, scans `github-script` blocks, reports
+  PR-target checkouts per job, catches process-substitution downloads, and adds
+  WARN rules for persisted checkout credentials, `workflow_run` artifact
+  downloads, self-hosted pull requests, `secrets: inherit`, and `$GITHUB_ENV`
+  injection. The reusable Action now evaluates the base revision's
+  `.depvet.toml`, so a pull request cannot loosen its own policy.
 
 ## 0.14.0 — 2026-11-25
 

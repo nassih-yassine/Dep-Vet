@@ -7920,3 +7920,31 @@ fn mcp_config_rejects_a_missing_path_or_malformed_json() {
         .code(3)
         .stderr(predicate::str::contains("not valid JSON"));
 }
+
+#[cfg(unix)]
+#[test]
+fn mcp_config_user_scan_adds_home_configs() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join(".claude.json"),
+        r#"{"mcpServers":{"home":{"command":"node","args":["server.js"]}}}"#,
+    )
+    .unwrap();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join(".mcp.json"),
+        r#"{"mcpServers":{"local":{"command":"node","args":["server.js"]}}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(project.path())
+        .env("HOME", home.path())
+        .env_remove("USERPROFILE")
+        .env_remove("APPDATA")
+        .args(["mcp-config", "--user"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("2 files, 2 servers"));
+}
