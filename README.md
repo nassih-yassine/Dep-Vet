@@ -351,7 +351,10 @@ run is allowed unless `--strict`.
 
 The MCP server exposes `vet_package`, `vet_command`, and `vet_lockfile_change`.
 It is listed in the official MCP Registry as
-`io.github.nassih-yassine/dep-vet`.
+`io.github.nassih-yassine/dep-vet`, and in the
+[Glama MCP directory](https://glama.ai/mcp/servers/nassih-yassine/Dep-Vet):
+
+[![Dep-Vet MCP server](https://glama.ai/mcp/servers/nassih-yassine/Dep-Vet/badges/score.svg)](https://glama.ai/mcp/servers/nassih-yassine/Dep-Vet)
 
 In OpenCode, configure it under `mcp.servers`:
 
