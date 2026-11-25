@@ -1,0 +1,25 @@
+# Copy this file into .github/workflows/dependency-review.yml.
+#
+# It runs the reusable dep-vet workflow on pull requests. The action diffs the
+# lockfile against the PR base, posts one sticky comment, and fails on exit 2
+# (high risk) or exit 3 (the check could not finish). Warnings (exit 1) pass
+# with the findings visible in the comment and the job summary.
+name: dependency review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dep-vet:
+    uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@v0.16.0
+    with:
+      # Any lockfile dep-vet supports; default is package-lock.json.
+      lockfile: package-lock.json
+      # Defaults to the pull request base branch. Pin a ref for release branches.
+      # base: origin/main
+      # Pin the binary to a reviewed release tag, not a moving branch.
+      ref: v0.16.0

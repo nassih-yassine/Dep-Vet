@@ -1,7 +1,7 @@
 # dep-vet
 
-Check a dependency's risk **before** it enters your lockfile. Nine ecosystems,
-no code execution.
+Vet a dependency for **supply-chain risk before it enters your lockfile**.
+Nine ecosystems, one binary, no account, no code execution.
 
 ```sh
 npx @nassihyas/dep-vet npm crossenv
@@ -71,7 +71,7 @@ and prebuilt archives on the releases page.
 ## Verify what you downloaded
 
 ```sh
-dep-vet inspect npm @nassihyas/dep-vet@0.13.6
+dep-vet inspect npm @nassihyas/dep-vet@0.16.0
 ```
 
 GitHub release archives carry a `.sha256` sidecar and a SLSA attestation

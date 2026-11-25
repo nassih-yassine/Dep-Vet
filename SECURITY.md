@@ -14,6 +14,19 @@ do not attach malware; a hash, a URL, and a description are enough.
 Expect an acknowledgement within a few days. Once a fix ships, the advisory
 credits you unless you ask otherwise.
 
+## Local-first, zero telemetry
+
+Dep-Vet runs as one local binary. It sends package names and versions to the
+public registry and advisory services named in the outbound URL policy, and
+nothing else: no account, no API key, no analytics, no crash reporting, and no
+upload of lockfile paths, source, reports, or findings. Registry responses are
+cached in a local SQLite file under `~/.cache/dep-vet` (or the platform
+equivalent); `--no-cache` bypasses it.
+
+The same rule applies to agent features. The Claude Code hook runs `guard` as a
+child process, and `mcp` speaks JSON-RPC over stdio to the local process. No
+dep-vet command phones home about how it was used.
+
 ## Scope
 
 In scope: the CLI and its parsing of untrusted input (registry responses,
