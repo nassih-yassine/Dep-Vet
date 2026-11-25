@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.0 — 2026-11-25
 
 - **Publisher history covers every release where the registry names the
   publisher.** npm and crates.io reports now compare the current account
