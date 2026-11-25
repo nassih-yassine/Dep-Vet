@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Publisher history covers every release where the registry names the
+  publisher.** npm and crates.io reports now compare the current account
+  against every prior publisher, not the last ten, and `publisher-changed` says
+  either that the account has never published the package or when it last did.
+  The list is deduplicated and capped at 1,000 names. Other ecosystems still
+  expose only the immediately previous publisher.
+
 ## 0.14.0 — 2026-11-25
 
 - **Advisories now say whether the vulnerability is exploited in practice.**

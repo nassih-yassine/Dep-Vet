@@ -194,7 +194,7 @@ fn parse_crate(
         crate::registry::HISTORY_WINDOW_DAYS,
     );
 
-    let publishers = crate::registry::recent_publishers(
+    let activity = crate::registry::publisher_activity(
         response.versions.iter().map(|release| {
             (
                 release.num.clone(),
@@ -207,7 +207,10 @@ fn parse_crate(
         }),
         &version,
         published_at,
-        crate::registry::PUBLISHER_HISTORY,
+        release
+            .published_by
+            .as_ref()
+            .map(|user| user.login.as_str()),
     );
 
     let deprecated = release.yanked.then(|| match &release.yank_message {
@@ -260,7 +263,8 @@ fn parse_crate(
                 })
                 .and_then(|release| release.published_by.as_ref())
                 .map(|user| user.login.clone()),
-            recent_publishers: publishers,
+            publishers: activity.names,
+            publisher_last_at: activity.last_at,
             ..crate::registry::ReleaseHistory::default()
         },
 
@@ -398,11 +402,11 @@ mod tests {
         assert_eq!(meta.release.previous_publisher.as_deref(), Some("oli-obk"));
         assert!(
             meta.release
-                .recent_publishers
+                .publishers
                 .iter()
                 .any(|publisher| publisher == "oli-obk"),
             "{:?}",
-            meta.release.recent_publishers
+            meta.release.publishers
         );
     }
 

@@ -834,6 +834,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Maven dependency trees beyond Gradle's lockfile format, and publisher history
-beyond the bounded recent window (the last 10 releases). SARIF/SBOM are built.
+Maven dependency trees beyond Gradle's lockfile format. SARIF/SBOM are built.
 Roadmap only: do not describe these as existing in code, README, or help text.
