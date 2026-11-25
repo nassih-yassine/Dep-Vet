@@ -30,6 +30,10 @@ npx @nassihyas/dep-vet guard --check -- npm i express
 One binary, no account, no API key, no telemetry. It never installs or executes
 the package it checks.
 
+<p align="center">
+  <img alt="Dep-Vet flagging the crossenv typosquat, then verifying an archive" src="assets/demo.gif" width="760">
+</p>
+
 ---
 
 `npm install` runs code, and so does a Python sdist build. `dep-vet` reads
