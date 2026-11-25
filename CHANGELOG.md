@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **Maven planning is bounded against hostile POMs.** Property interpolation
+  stops at 64 KiB or 10,000 replacements and reports the dependency as
+  unresolved ("property expansion too large") instead of growing without bound.
+  Local POMs over 4 MiB are refused before parsing, and fetched POMs over 4 MiB
+  are rejected before parsing, both as exit `3`.
+- **The passive update hint is bounded to one short attempt.** It now uses its
+  own 24-hour cache (the `update` command keeps 5 minutes), makes a single
+  attempt with a 2-second end-to-end budget instead of the normal 20-second,
+  three-try client, and remembers a failure for 6 hours. An offline machine
+  pays the delay at most once per window and never blocks exit past the budget.
+- **SECURITY.md now lists every outbound request, including the update hint.**
+  The previous "nothing else" sentence was false: an interactive run also
+  fetches the latest release from `api.github.com` once per 24 hours. The page
+  now names the request, its user agent, what it reveals, when it is skipped,
+  and both opt-outs (`DEPVET_NO_UPDATE_CHECK`, `NO_UPDATE_NOTIFIER`).
+
 ## 0.16.0 — 2026-11-25
 
 - **`plan maven group:artifact@version` resolves a POM tree.** It fetches POMs

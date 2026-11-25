@@ -8237,3 +8237,61 @@ fn maven_plan_reads_a_local_pom() {
     assert_eq!(value["nodes"][1]["name"], "com.example:lib");
     assert_eq!(value["nodes"][1]["version"], "1.2.3");
 }
+
+#[test]
+fn security_and_readme_name_the_update_check_opt_outs() {
+    let security = include_str!("../SECURITY.md");
+    let readme = include_str!("../README.md");
+    for document in [security, readme] {
+        for variable in ["DEPVET_NO_UPDATE_CHECK", "NO_UPDATE_NOTIFIER"] {
+            assert!(document.contains(variable), "missing {variable}");
+        }
+    }
+    assert!(
+        security.contains("api.github.com"),
+        "SECURITY.md must name the update host"
+    );
+    assert!(
+        security.contains("24 hours"),
+        "SECURITY.md must state the hint cache window"
+    );
+}
+
+#[test]
+fn maven_plan_refuses_an_oversized_fetched_pom() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("pom.xml"),
+        maven_pom(
+            r#"<groupId>com.example</groupId><artifactId>app</artifactId><version>1.0.0</version>
+            <dependencies><dependency>
+              <groupId>com.example</groupId><artifactId>huge</artifactId><version>1.0.0</version>
+            </dependency></dependencies>"#,
+        ),
+    )
+    .unwrap();
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/com/example/huge/1.0.0/huge-1.0.0.pom".to_string(),
+        (200, " ".repeat(4 * 1024 * 1024 + 1)),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let pom = directory.path().join("pom.xml");
+    let output = registry
+        .command()
+        .args(["plan", "maven", pom.to_str().unwrap(), "--json"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let unresolved = value["unresolved"].as_array().unwrap();
+    assert!(
+        unresolved
+            .iter()
+            .any(|entry| entry["reason"].as_str().unwrap().contains("4 MiB")),
+        "{unresolved:?}"
+    );
+}

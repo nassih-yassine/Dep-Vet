@@ -8,6 +8,7 @@
 use crate::http::HttpClient;
 use semver::Version;
 use std::path::Path;
+use std::time::Duration;
 
 /// Unauthenticated GitHub API root. `DEPVET_UPDATE_BASE` overrides it for tests.
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -18,6 +19,15 @@ const DEFAULT_RELEASE_URL: &str = "https://github.com/nassih-yassine/Dep-Vet/rel
 /// The latest release changes; a day-old answer would tell people to upgrade to
 /// something older. Five minutes keeps the hammering down without lying.
 const UPDATE_TTL_SECONDS: i64 = 5 * 60;
+/// The passive hint is not a version answer the user asked for; one check a day
+/// is enough, and it keeps an offline machine from retrying on every run.
+pub const HINT_TTL_SECONDS: i64 = 24 * 60 * 60;
+/// A failed hint is remembered for this long, so a blackholed network is paid
+/// at most once per window.
+pub const HINT_FAILURE_TTL_SECONDS: i64 = 6 * 60 * 60;
+/// The hint may add at most this much time to an interactive command.
+pub const HINT_TIMEOUT: Duration = Duration::from_secs(2);
+const HINT_FAILED_KEY: &str = "update-hint-failed";
 
 #[derive(Debug)]
 pub enum UpdateError {
@@ -179,14 +189,13 @@ fn api_base() -> String {
     GITHUB_API.to_string()
 }
 
-/// Fetch the latest release document.
-pub fn check(http: &HttpClient) -> Result<Latest, UpdateError> {
-    let url = format!("{}{RELEASE_PATH}", api_base().trim_end_matches('/'));
-    let body = http
-        .get_with_ttl(&url, UPDATE_TTL_SECONDS)
-        .map_err(|error| UpdateError::Http(error.to_string()))?;
+fn latest_url() -> String {
+    format!("{}{RELEASE_PATH}", api_base().trim_end_matches('/'))
+}
+
+fn parse_latest(body: &str) -> Result<Latest, UpdateError> {
     let document: serde_json::Value =
-        serde_json::from_str(&body).map_err(|error| UpdateError::Parse(error.to_string()))?;
+        serde_json::from_str(body).map_err(|error| UpdateError::Parse(error.to_string()))?;
     let tag = document
         .get("tag_name")
         .and_then(serde_json::Value::as_str)
@@ -196,6 +205,23 @@ pub fn check(http: &HttpClient) -> Result<Latest, UpdateError> {
         .ok_or_else(|| UpdateError::Version(format!("tag {tag:?} is not a version")))?;
     let url = release_url(document.get("html_url").and_then(serde_json::Value::as_str));
     Ok(Latest { version, tag, url })
+}
+
+/// Fetch the latest release document for `dep-vet update` (5-minute cache).
+pub fn check(http: &HttpClient) -> Result<Latest, UpdateError> {
+    let body = http
+        .get_with_ttl(&latest_url(), UPDATE_TTL_SECONDS)
+        .map_err(|error| UpdateError::Http(error.to_string()))?;
+    parse_latest(&body)
+}
+
+/// Fetch the latest release for the passive hint: 24-hour cache, one attempt,
+/// two-second budget.
+pub fn hint_check(http: &HttpClient) -> Result<Latest, UpdateError> {
+    let body = http
+        .get_with_deadline(&latest_url(), HINT_TTL_SECONDS, HINT_TIMEOUT)
+        .map_err(|error| UpdateError::Http(error.to_string()))?;
+    parse_latest(&body)
 }
 
 /// Pure gate for the passive hint: a human terminal, no CI, no opt-out.
@@ -234,7 +260,11 @@ pub fn maybe_hint(cli: &crate::cli::Cli, exit_code: u8) {
         return;
     }
     let http = HttpClient::from_env(false);
-    let Ok(latest) = check(&http) else {
+    if http.has_marker(HINT_FAILED_KEY, HINT_FAILURE_TTL_SECONDS) {
+        return;
+    }
+    let Ok(latest) = hint_check(&http) else {
+        http.put_marker(HINT_FAILED_KEY);
         return;
     };
     if is_newer(env!("CARGO_PKG_VERSION"), &latest.tag).unwrap_or(false) {
@@ -300,6 +330,13 @@ mod tests {
         assert_eq!(parse_version("1.2.3").unwrap(), Version::new(1, 2, 3));
         assert!(parse_version("release-1").is_none());
         assert!(parse_version("v1.2").is_none());
+    }
+
+    #[test]
+    fn the_hint_has_its_own_bounded_windows() {
+        assert_eq!(HINT_TTL_SECONDS, 24 * 60 * 60);
+        assert_eq!(HINT_FAILURE_TTL_SECONDS, 6 * 60 * 60);
+        assert_eq!(HINT_TIMEOUT, Duration::from_secs(2));
     }
 
     #[test]

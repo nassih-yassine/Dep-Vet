@@ -21,6 +21,12 @@ use crate::plan::{
 const DEFAULT_REPO: &str = "https://repo.maven.apache.org/maven2";
 const MAX_PARENT_DEPTH: usize = 12;
 const MAX_BOM_DEPTH: usize = 6;
+/// A hostile POM can make a property reference itself twice per pass; stop
+/// before the string or the replacement count grows without bound.
+const MAX_INTERPOLATED_BYTES: usize = 64 * 1024;
+const MAX_REPLACEMENTS: usize = 10_000;
+/// Real POMs are a few hundred KB at most.
+const MAX_POM_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default)]
 struct Dependency {
@@ -203,8 +209,9 @@ fn parse_model(body: &str) -> Result<Model, String> {
 
 /// Replace `${...}` from the effective properties and the project fields. A
 /// value that still contains `${` afterward is unresolved, not guessed.
-fn interpolate(value: &str, model: &Model) -> String {
+fn interpolate(value: &str, model: &Model) -> Result<String, String> {
     let mut current = value.to_string();
+    let mut budget = MAX_REPLACEMENTS;
     for _ in 0..10 {
         if !current.contains("${") {
             break;
@@ -213,32 +220,92 @@ fn interpolate(value: &str, model: &Model) -> String {
         let mut replaced = false;
         for (key, value) in model.properties.iter() {
             let placeholder = format!("${{{key}}}");
-            if next.contains(&placeholder) {
-                next = next.replace(&placeholder, value);
+            if replace_limited(&mut next, &placeholder, value, &mut budget)? {
                 replaced = true;
             }
         }
         if let Some(group) = &model.group {
-            next = next.replace("${project.groupId}", group);
-            next = next.replace("${pom.groupId}", group);
+            if replace_limited(&mut next, "${project.groupId}", group, &mut budget)? {
+                replaced = true;
+            }
+            if replace_limited(&mut next, "${pom.groupId}", group, &mut budget)? {
+                replaced = true;
+            }
         }
-        next = next.replace("${project.artifactId}", &model.artifact);
-        next = next.replace("${pom.artifactId}", &model.artifact);
+        if replace_limited(
+            &mut next,
+            "${project.artifactId}",
+            &model.artifact,
+            &mut budget,
+        )? {
+            replaced = true;
+        }
+        if replace_limited(&mut next, "${pom.artifactId}", &model.artifact, &mut budget)? {
+            replaced = true;
+        }
         if let Some(version) = &model.version {
-            next = next.replace("${project.version}", version);
-            next = next.replace("${pom.version}", version);
+            if replace_limited(&mut next, "${project.version}", version, &mut budget)? {
+                replaced = true;
+            }
+            if replace_limited(&mut next, "${pom.version}", version, &mut budget)? {
+                replaced = true;
+            }
         }
         if let Some((parent_group, parent_artifact, parent_version)) = &model.parent {
-            next = next.replace("${project.parent.groupId}", parent_group);
-            next = next.replace("${project.parent.artifactId}", parent_artifact);
-            next = next.replace("${project.parent.version}", parent_version);
+            if replace_limited(
+                &mut next,
+                "${project.parent.groupId}",
+                parent_group,
+                &mut budget,
+            )? {
+                replaced = true;
+            }
+            if replace_limited(
+                &mut next,
+                "${project.parent.artifactId}",
+                parent_artifact,
+                &mut budget,
+            )? {
+                replaced = true;
+            }
+            if replace_limited(
+                &mut next,
+                "${project.parent.version}",
+                parent_version,
+                &mut budget,
+            )? {
+                replaced = true;
+            }
         }
         if !replaced && next == current {
             break;
         }
         current = next;
     }
-    current
+    Ok(current)
+}
+
+/// Replace one placeholder, charging every occurrence against the budget and
+/// checking the result after each replacement.
+fn replace_limited(
+    target: &mut String,
+    needle: &str,
+    replacement: &str,
+    budget: &mut usize,
+) -> Result<bool, String> {
+    let hits = target.matches(needle).count();
+    if hits == 0 {
+        return Ok(false);
+    }
+    if hits > *budget {
+        return Err("property expansion too large".to_string());
+    }
+    *budget -= hits;
+    *target = target.replace(needle, replacement);
+    if target.len() > MAX_INTERPOLATED_BYTES {
+        return Err("property expansion too large".to_string());
+    }
+    Ok(true)
 }
 
 struct PomClient<'a> {
@@ -294,6 +361,11 @@ impl<'a> PomClient<'a> {
             .http
             .get(&url)
             .map_err(|error| format!("could not fetch {group}:{artifact}:{version}: {error}"))?;
+        if body.len() as u64 > MAX_POM_BYTES {
+            return Err(format!(
+                "POM {group}:{artifact}:{version} is larger than 4 MiB"
+            ));
+        }
         let model = parse_model(&body)?;
         self.cache.insert(key, model.clone());
         Ok(model)
@@ -329,7 +401,7 @@ impl<'a> PomClient<'a> {
         visiting: &mut HashSet<(String, String, String)>,
     ) -> Result<Model, String> {
         if let Some((parent_group, parent_artifact, parent_version)) = model.parent.clone() {
-            let parent_version = interpolate(&parent_version, &model);
+            let parent_version = interpolate(&parent_version, &model)?;
             if parent_version.contains("${") {
                 return Err(format!(
                     "parent version of {}:{} uses an unresolved property: {parent_version}",
@@ -383,7 +455,8 @@ impl<'a> PomClient<'a> {
             let version = import
                 .version
                 .as_deref()
-                .map(|version| interpolate(version, model));
+                .map(|version| interpolate(version, model))
+                .transpose()?;
             let Some(version) = version.filter(|version| !version.contains("${")) else {
                 continue;
             };
@@ -521,16 +594,13 @@ fn build_report(
             if excluded(&item.exclusions, &dependency.group, &dependency.artifact) {
                 continue;
             }
-            let declared = dependency
+            let raw_version = dependency
                 .version
                 .as_deref()
-                .map(|version| interpolate(version, &item.parent))
-                .or_else(|| {
-                    managed_version(&item.parent, dependency)
-                        .map(|version| interpolate(version, &item.parent))
-                });
+                .map(str::to_string)
+                .or_else(|| managed_version(&item.parent, dependency).map(str::to_string));
             let name = format!("{}:{}", dependency.group, dependency.artifact);
-            let Some(declared) = declared.filter(|value| !value.is_empty()) else {
+            let Some(raw_version) = raw_version else {
                 report.unresolved.push(Unresolved {
                     from: item.from.clone(),
                     name,
@@ -540,6 +610,29 @@ fn build_report(
                         .to_string(),
                 });
                 continue;
+            };
+            let declared = match interpolate(&raw_version, &item.parent) {
+                Ok(declared) if !declared.is_empty() => declared,
+                Ok(_) => {
+                    report.unresolved.push(Unresolved {
+                        from: item.from.clone(),
+                        name,
+                        range: raw_version,
+                        required: true,
+                        reason: "the declared version is empty".to_string(),
+                    });
+                    continue;
+                }
+                Err(reason) => {
+                    report.unresolved.push(Unresolved {
+                        from: item.from.clone(),
+                        name,
+                        range: raw_version,
+                        required: true,
+                        reason,
+                    });
+                    continue;
+                }
             };
             if declared.contains("${") {
                 report.unresolved.push(Unresolved {
@@ -658,8 +751,21 @@ fn build_report(
 /// exists only next to the project (a multi-module reactor) is reported as
 /// unresolved rather than approximated.
 pub fn plan_pom(http: &HttpClient, path: &Path) -> Result<PlanReport, String> {
-    let body = std::fs::read_to_string(path)
+    let metadata = std::fs::metadata(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    if metadata.len() > MAX_POM_BYTES {
+        return Err(format!("POM larger than 4 MiB: {}", path.display()));
+    }
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let mut body = String::new();
+    use std::io::Read as _;
+    file.take(MAX_POM_BYTES + 1)
+        .read_to_string(&mut body)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    if body.len() as u64 > MAX_POM_BYTES {
+        return Err(format!("POM larger than 4 MiB: {}", path.display()));
+    }
     let raw = parse_model(&body).map_err(|error| format!("{}: {error}", path.display()))?;
     let mut client = PomClient::new(http);
     let model = client.finish_model(raw, 0, &mut HashSet::new())?;
@@ -751,13 +857,62 @@ mod tests {
     #[test]
     fn interpolation_uses_properties_and_project_fields() {
         let model = parse_model(POM).unwrap();
-        assert_eq!(interpolate("${lib.version}", &model), "2.3.4");
-        assert_eq!(interpolate("${project.version}", &model), "1.0.0");
+        assert_eq!(interpolate("${lib.version}", &model).unwrap(), "2.3.4");
+        assert_eq!(interpolate("${project.version}", &model).unwrap(), "1.0.0");
         assert_eq!(
-            interpolate("${project.groupId}:${project.artifactId}", &model),
+            interpolate("${project.groupId}:${project.artifactId}", &model).unwrap(),
             "com.example:app"
         );
-        assert_eq!(interpolate("${unknown}", &model), "${unknown}");
+        assert_eq!(interpolate("${unknown}", &model).unwrap(), "${unknown}");
+    }
+
+    #[test]
+    fn chained_properties_resolve_in_order() {
+        let mut properties = BTreeMap::new();
+        properties.insert("a".to_string(), "${b}".to_string());
+        properties.insert("b".to_string(), "${c}".to_string());
+        properties.insert("c".to_string(), "1.2.3".to_string());
+        let model = Model {
+            properties,
+            ..Model::default()
+        };
+        assert_eq!(interpolate("${a}", &model).unwrap(), "1.2.3");
+    }
+
+    #[test]
+    fn doubling_properties_are_stopped_quickly() {
+        use std::time::{Duration, Instant};
+
+        let mut properties = BTreeMap::new();
+        properties.insert("v0".to_string(), "x".repeat(1024));
+        for level in 1..=10 {
+            properties.insert(
+                format!("v{level}"),
+                format!("${{v{}}}${{v{}}}", level - 1, level - 1),
+            );
+        }
+        let model = Model {
+            properties,
+            ..Model::default()
+        };
+        let start = Instant::now();
+        let error = interpolate("${v10}", &model).unwrap_err();
+        assert!(error.contains("too large"), "{error}");
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "expansion took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn an_oversized_local_pom_is_refused_before_parsing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pom.xml");
+        std::fs::write(&path, vec![b' '; (MAX_POM_BYTES + 1) as usize]).unwrap();
+        let client = crate::http::HttpClient::for_test(None);
+        let error = plan_pom(&client, &path).unwrap_err();
+        assert!(error.contains("4 MiB"), "{error}");
     }
 
     #[test]
