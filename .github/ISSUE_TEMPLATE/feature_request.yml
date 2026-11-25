@@ -1,0 +1,65 @@
+name: Feature request
+description: A new ecosystem, a new signal, or a change to how the tool behaves.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a new rule or signal, include a link that proves the risk is real.
+        A rule that cannot cite evidence will not ship.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can you not do or not see today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: Include the command or output shape you expect, if it applies.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: false
+      options:
+        - New ecosystem or lockfile format
+        - New rule or signal
+        - Existing signal or severity
+        - CLI, exit codes, or output format
+        - CI action, workflow scan, or MCP
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: For a new signal, link the advisory, incident, or specification that justifies it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I checked the existing scope and limits in the README.
+          required: true
+        - label: I searched existing issues for the same request.
+          required: true
