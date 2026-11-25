@@ -286,6 +286,16 @@ pub enum Command {
         json: bool,
     },
 
+    /// Scan MCP server configs without starting the servers
+    McpConfig {
+        /// Config file or directory (default: the known names in this directory)
+        path: Option<std::path::PathBuf>,
+
+        /// Print machine-readable JSON instead of a human report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Scan GitHub Actions workflows for supply-chain risks
     Workflows {
         /// Workflow file or directory (default: .github/workflows)
@@ -368,6 +378,7 @@ impl Cli {
             | Command::Maven { json, .. }
             | Command::Composer { json, .. }
             | Command::Workflows { json, .. }
+            | Command::McpConfig { json, .. }
             | Command::Inspect { json, .. }
             | Command::Diff { json, .. }
             | Command::Lock { json, .. } => !*json,

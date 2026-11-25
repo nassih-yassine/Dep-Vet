@@ -361,6 +361,27 @@ pub fn is_known_rule(id: &str) -> bool {
     RULES.iter().any(|rule| rule.id == id) || COMBO_RULES.contains(&id) || TEXT_RULES.contains(&id)
 }
 
+/// The first invisible or direction-changing character in `text`, with its
+/// code-point label. Used by the MCP config scan, which has strings rather
+/// than files.
+pub fn invisible_character(text: &str) -> Option<&'static str> {
+    text.chars().find_map(|character| {
+        INVISIBLE_CHARACTERS
+            .iter()
+            .find(|(candidate, _)| *candidate == character)
+            .map(|(_, label)| *label)
+    })
+}
+
+/// The first prompt-injection phrase in `text`, if any.
+pub fn injection_phrase(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    INJECTION_PHRASES
+        .iter()
+        .find(|phrase| lower.contains(**phrase))
+        .copied()
+}
+
 pub fn scan(files: &[ExtractedFile]) -> Vec<RuleFinding> {
     scan_with(files, &[])
 }

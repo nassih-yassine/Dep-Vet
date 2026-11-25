@@ -7818,3 +7818,105 @@ fn workflows_scan_of_an_empty_directory_is_clean() {
         .code(0)
         .stdout(predicate::str::contains("no .yml or .yaml files"));
 }
+
+const UNSAFE_MCP_CONFIG: &str = r#"{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@latest"],
+      "env": { "GITHUB_TOKEN": "ghp_literal_secret" }
+    }
+  }
+}"#;
+
+#[test]
+fn mcp_config_flags_unpinned_servers_and_plaintext_secrets() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join(".mcp.json"), UNSAFE_MCP_CONFIG).unwrap();
+
+    let output = Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["mcp-config", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["servers"], 1);
+    assert_eq!(value["verdict"], "high");
+    let rules: Vec<&str> = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|finding| finding["id"].as_str().unwrap())
+        .collect();
+    for expected in [
+        "mcp-remote-launch",
+        "mcp-unpinned-package",
+        "mcp-plaintext-secret",
+    ] {
+        assert!(rules.contains(&expected), "{rules:?}");
+    }
+    assert!(
+        !output
+            .windows(b"ghp_literal_secret".len())
+            .any(|window| window == b"ghp_literal_secret"),
+        "the secret value must never be echoed"
+    );
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["mcp-config"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("secret is stored in plaintext"))
+        .stdout(predicate::str::contains("filesystem (env.GITHUB_TOKEN)"))
+        .stdout(predicate::str::contains("verdict HIGH (exit 2)"));
+}
+
+#[test]
+fn mcp_config_finds_cursor_configs_and_local_servers_stay_clean() {
+    let directory = tempfile::tempdir().unwrap();
+    let cursor = directory.path().join(".cursor");
+    std::fs::create_dir_all(&cursor).unwrap();
+    std::fs::write(
+        cursor.join("mcp.json"),
+        r#"{"mcpServers":{"local":{"command":"node","args":["server.js"]}}}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .current_dir(directory.path())
+        .args(["mcp-config"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("1 file, 1 server"))
+        .stdout(predicate::str::contains("no findings"));
+}
+
+#[test]
+fn mcp_config_rejects_a_missing_path_or_malformed_json() {
+    let directory = tempfile::tempdir().unwrap();
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args([
+            "mcp-config",
+            directory.path().join("nope.json").to_str().unwrap(),
+        ])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("not a file or directory"));
+
+    let broken = directory.path().join("broken.json");
+    std::fs::write(&broken, "{ not json").unwrap();
+    Command::cargo_bin("dep-vet")
+        .unwrap()
+        .args(["mcp-config", broken.to_str().unwrap()])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("not valid JSON"));
+}

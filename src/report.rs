@@ -847,6 +847,95 @@ fn thousands(value: u64) -> String {
     out
 }
 
+pub fn render_mcp_config_json(
+    report: &crate::mcp_config::McpConfigReport,
+) -> Result<String, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Json<'a> {
+        files: &'a [String],
+        servers: usize,
+        #[serde(serialize_with = "serialize_findings")]
+        findings: &'a [crate::model::Finding],
+        verdict: Severity,
+        exit_code: u8,
+    }
+
+    serde_json::to_string_pretty(&Json {
+        files: &report.files,
+        servers: report.servers,
+        findings: &report.findings,
+        verdict: report.verdict(),
+        exit_code: report.exit_code(),
+    })
+}
+
+pub fn render_mcp_config_human(report: &crate::mcp_config::McpConfigReport, color: bool) -> String {
+    let mut out = format!(
+        "mcp config scan: {} file{}, {} server{}\n\n",
+        report.files.len(),
+        if report.files.len() == 1 { "" } else { "s" },
+        report.servers,
+        if report.servers == 1 { "" } else { "s" }
+    );
+    if report.files.is_empty() {
+        out.push_str("  no .mcp.json, claude_desktop_config.json, .cursor/mcp.json, or .vscode/mcp.json was found\n\n");
+    }
+    if report.findings.is_empty() {
+        if !report.files.is_empty() {
+            out.push_str("  no findings: no MCP config rule matched\n\n");
+        }
+    } else {
+        out.push_str(&format!(
+            "  {} finding{}\n\n",
+            report.findings.len(),
+            if report.findings.len() == 1 { "" } else { "s" }
+        ));
+        for finding in &report.findings {
+            out.push_str(&format!(
+                "  {}  {}\n",
+                paint(
+                    &format!("[{}]", finding.severity.label()),
+                    verdict_color(finding.severity),
+                    color
+                ),
+                finding.title
+            ));
+            for line in wrap(&finding.detail, 92) {
+                out.push_str(&format!("        {line}\n"));
+            }
+            let field = |label: &str| {
+                finding
+                    .evidence
+                    .iter()
+                    .find(|evidence| evidence.label == label)
+                    .map(|evidence| evidence.value.as_str())
+                    .unwrap_or_default()
+            };
+            out.push_str(&format!(
+                "        {}  {} ({})\n",
+                field("config"),
+                field("server"),
+                field("field")
+            ));
+            if let Some(reference) = finding
+                .evidence
+                .iter()
+                .find_map(|evidence| evidence.url.as_deref())
+            {
+                out.push_str(&format!("        -> {reference}\n"));
+            }
+            out.push('\n');
+        }
+    }
+    let verdict = report.verdict();
+    out.push_str(&format!(
+        "  verdict {} (exit {})\n",
+        paint(verdict.label(), verdict_color(verdict), color),
+        report.exit_code()
+    ));
+    out
+}
+
 pub fn render_workflows_json(
     report: &crate::workflows::WorkflowReport,
 ) -> Result<String, serde_json::Error> {

@@ -24,6 +24,7 @@ crossenv 0.0.2-security
 - Provenance: whether an attestation exists, verified offline for npm
 - Invisible characters and text aimed at an AI reader, in code and readmes
 - Lockfile diffs, dependency trees, archive inspection, release diffs, GitHub Actions workflow scan
+- MCP server config scan: launchers, unpinned packages, plaintext secrets, unsafe URLs
 
 Ecosystems: npm, PyPI, crates.io, Go, JSR, RubyGems, NuGet, Maven/AndroidX,
 Composer.

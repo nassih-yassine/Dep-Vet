@@ -431,6 +431,30 @@ no line.
 Typosquat comparison uses the seed list for a whole tree: every dependency would
 resemble some other dependency.
 
+### Scan MCP server configs
+
+```sh
+dep-vet mcp-config                          # .mcp.json, claude_desktop_config.json, .cursor/mcp.json, .vscode/mcp.json here
+dep-vet mcp-config path/to/.mcp.json        # one file
+dep-vet mcp-config path/to/directory        # the known names in that directory
+dep-vet mcp-config --json
+```
+
+The scan reads the config and never starts a server. It reports:
+
+| Rule | Severity | Meaning |
+|---|---|---|
+| `mcp-remote-launch` | WARN | The server starts through `npx`, `bunx`, `uvx`, `pipx`, `docker`, `curl`, or `wget`, so code is fetched at launch. |
+| `mcp-unpinned-package` | WARN | The launched package has no exact version (`@latest` and ranges are not pins). Docker images must use `@sha256:`. |
+| `mcp-plaintext-secret` | HIGH | An `env` or header key such as `GITHUB_TOKEN` or `API_KEY` holds a literal value. The value is redacted from the report. `${VAR}`, `op://`, and placeholder values are accepted. |
+| `mcp-insecure-url` | HIGH | A remote server URL or fetched script uses `http` on a non-loopback host. |
+| `mcp-unknown-host` | WARN | A script fetched for a `curl`/`wget` server comes from a host that is not a known code host. |
+| `mcp-prompt-injection` | WARN | A command, argument, env value, or header contains instructions aimed at a model rather than a person. |
+| `mcp-invisible-text` | WARN | The same strings contain zero-width or bidi characters. |
+
+Exit `0` clean, `1` warning, `2` HIGH, `3` for an unreadable path or invalid
+JSON. Findings name the config, server, and field. No server is ever executed.
+
 ### Scan GitHub Actions workflows
 
 ```sh
