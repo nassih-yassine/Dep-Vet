@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 — 2026-11-25
 
 - **`plan maven group:artifact@version` resolves a POM tree.** It fetches POMs
   from Maven Central, applies parent chains, properties, classifiers,
