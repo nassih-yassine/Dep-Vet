@@ -341,6 +341,7 @@ dep-vet audit packages.lock.json     # NuGet
 dep-vet audit packages.config        # legacy NuGet
 dep-vet audit composer.lock          # Composer
 dep-vet audit gradle.lockfile        # Gradle dependency locking
+dep-vet audit maven-tree.txt         # from `mvn dependency:tree -DoutputFile=`
 ```
 
 Vets **every** package the lockfile installs, not just the diff, and reports the
@@ -367,6 +368,7 @@ What each format contributes, and what it cannot:
 | `packages.config` | `<package id version />` elements | elements without a version; unrelated XML |
 | `composer.lock` | `packages` and `packages-dev` | dev-only advisories are still reported |
 | `gradle.lockfile` | `group:artifact:version` lines, including `buildscript-`/`settings-` variants | unlocked configurations; Gradle without dependency locking |
+| `maven-tree.txt` | every dependency line from `mvn dependency:tree -DoutputFile=...` | lines that are not coordinates; an empty tree |
 
 ### Plan an npm tree
 
@@ -777,6 +779,23 @@ dep-vet audit app/gradle.lockfile
 
 Remove the block and the next build rewrites the lockfile empty. If the
 Gradle output contains `FAILURE`, lock only the configurations that resolve.
+
+### Audit a resolved Maven tree
+
+Maven has no lockfile of its own, so dep-vet reads the tree Maven already
+resolved:
+
+```sh
+mvn dependency:tree -DoutputFile=maven-tree.txt
+dep-vet audit maven-tree.txt
+```
+
+The file Maven writes and the same text copied from the log both parse. Versions
+are the ones Maven printed, never a range or an inference. The project's own
+root line is skipped; a line that should be a coordinate but is not makes the
+run incomplete (exit `3`), and so does an empty tree. Profiles,
+`dependencyManagement`, and BOM imports are Maven's job, not this parser's:
+run Maven with the profiles you build with.
 
 ### Check a RubyGems gem
 

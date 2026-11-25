@@ -7353,6 +7353,60 @@ fn unknown_maven_artifact_is_a_tool_error() {
 }
 
 #[test]
+fn maven_dependency_tree_is_audited_as_a_tree() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("maven-tree.txt"),
+        r#"com.example:shop:jar:1.0.0
++- org.slf4j:slf4j-api:jar:1.7.36:compile
+\- com.google.guava:guava:jar:32.0.0-jre:compile
+"#,
+    )
+    .unwrap();
+    let mut routes = HashMap::new();
+    for (group, artifact, version) in [
+        ("org.slf4j", "slf4j-api", "1.7.36"),
+        ("com.google.guava", "guava", "32.0.0-jre"),
+    ] {
+        routes.insert(
+            format!(
+                "/solrsearch/select?q=g:%22{group}%22+AND+a:%22{artifact}%22+AND+v:%22{version}%22&core=gav&rows=200&wt=json"
+            ),
+            (
+                200,
+                format!(
+                    r#"{{ "response": {{ "numFound": 1, "docs": [ {{ "v": "{version}", "timestamp": 1635900000000 }} ] }} }}"#
+                ),
+            ),
+        );
+    }
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .current_dir(directory.path())
+        .args(["audit", "maven-tree.txt", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let names: Vec<&str> = value["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|package| package["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["com.google.guava:guava", "org.slf4j:slf4j-api"]);
+    assert_eq!(value["packages"][0]["version"], "32.0.0-jre");
+}
+
+#[test]
 fn maven_requires_group_and_artifact() {
     let mut routes = HashMap::new();
     routes.insert(
