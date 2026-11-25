@@ -2,6 +2,13 @@
 
 ## 0.16.1 — 2026-11-25
 
+- **npm was published from a workstation, without provenance.** The
+  trusted-publishing step is still blocked by account-level 2FA and the
+  `npm-publish` workflow had no token, so `@nassihyas/dep-vet@0.16.1` was built
+  from the attested release assets and published by hand. It runs the same
+  binaries, but it carries no provenance attestation. CI remains the intended
+  path; this entry records the exception.
+
 - **The MCP tools now describe their parameters.** Every `inputSchema` property
   carries a description, and the three tool descriptions state what the tool
   does and what it refuses, so an agent can choose between `vet_package`,
