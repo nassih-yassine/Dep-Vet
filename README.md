@@ -1193,6 +1193,26 @@ The server is listed in the official MCP Registry as
 `io.github.nassih-yassine/dep-vet`, so registry-aware clients can find and
 install it from there.
 
+In OpenCode, configure it under `mcp.servers`:
+
+```jsonc title="opencode.jsonc"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "dep-vet": {
+        "type": "local",
+        "command": ["dep-vet", "mcp"],
+      },
+    },
+  },
+}
+```
+
+<p align="center">
+  <img alt="OpenCode calling dep-vet's vet_command over MCP and blocking npm install crossenv" src="assets/demo-opencode.gif" width="760">
+</p>
+
 Tools: `vet_package {ecosystem, name, version?}`, `vet_command {command}`, and
 `vet_lockfile_change {lockfile, base?}`. Each returns structured content plus a
 text summary; tool-level failures are `isError` results, while bad arguments and
