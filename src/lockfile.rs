@@ -55,6 +55,7 @@ pub enum Format {
     NugetLock,
     Composer,
     Gradle,
+    MavenTree,
     Pipfile,
     PackagesConfig,
 }
@@ -68,7 +69,7 @@ impl Format {
             Self::Gemfile => crate::model::Ecosystem::RubyGems,
             Self::NugetLock => crate::model::Ecosystem::NuGet,
             Self::Composer => crate::model::Ecosystem::Composer,
-            Self::Gradle => crate::model::Ecosystem::Maven,
+            Self::Gradle | Self::MavenTree => crate::model::Ecosystem::Maven,
             Self::Pipfile => crate::model::Ecosystem::Pypi,
             Self::PackagesConfig => crate::model::Ecosystem::NuGet,
             Self::Pip | Self::Poetry | Self::Uv => crate::model::Ecosystem::Pypi,
@@ -97,6 +98,9 @@ pub fn detect(path: &Path) -> Result<Format, LockError> {
         "gradle.lockfile" | "buildscript-gradle.lockfile" | "settings-gradle.lockfile" => {
             Ok(Format::Gradle)
         }
+        "maven-tree.txt" | "dependency-tree.txt" | "mvn-dependency-tree.txt" => {
+            Ok(Format::MavenTree)
+        }
         "Pipfile.lock" => Ok(Format::Pipfile),
         "packages.config" => Ok(Format::PackagesConfig),
         "Cargo.lock" => Ok(Format::Cargo),
@@ -119,6 +123,7 @@ pub fn parse(format: Format, body: &str) -> Result<LockContents, LockError> {
         Format::NugetLock => parse_nuget_lock(body),
         Format::Composer => parse_composer_lock(body),
         Format::Gradle => Ok(parse_gradle(body)),
+        Format::MavenTree => parse_maven_tree(body),
         Format::Pipfile => parse_pipfile(body),
         Format::PackagesConfig => Ok(parse_packages_config(body)),
         Format::Pip => Ok(parse_pip(body)),
@@ -868,6 +873,86 @@ fn parse_gradle(body: &str) -> LockContents {
     }
 
     finish(packages, skipped)
+}
+
+/// Parses `mvn dependency:tree -DoutputFile=<file>` output (or the same text
+/// copied from the log). Maven already resolved versions, so this never guesses
+/// a range: the coordinate printed is the version that would be installed.
+fn parse_maven_tree(body: &str) -> Result<LockContents, LockError> {
+    let mut packages = Vec::new();
+    let mut skipped = Vec::new();
+    let mut root_seen = false;
+
+    for raw in body.lines() {
+        let line = raw
+            .trim_end()
+            .strip_prefix("[INFO] ")
+            .or_else(|| raw.trim_end().strip_prefix("[WARNING] "))
+            .unwrap_or(raw.trim_end());
+        let line = line.trim();
+        if line.is_empty()
+            || line.starts_with("---")
+            || line.starts_with("BUILD ")
+            || line.starts_with("Total time")
+            || line.starts_with("Finished at")
+            || line.starts_with("[ERROR]")
+        {
+            continue;
+        }
+        let is_dependency = line.contains("+- ") || line.contains("\\- ");
+        if !is_dependency {
+            // The first coordinate without a tree marker is the project itself.
+            if !root_seen && coordinate(line).is_some() {
+                root_seen = true;
+            }
+            // Anything else is log chatter; ignore it, never invent a package.
+            continue;
+        }
+        let coordinate_text = line
+            .split_once("+- ")
+            .or_else(|| line.split_once("\\- "))
+            .map(|(_, rest)| rest.trim())
+            .unwrap_or(line);
+        match coordinate(coordinate_text) {
+            Some((name, version)) => packages.push(LockedPackage { name, version }),
+            None => skipped.push((
+                coordinate_text.to_string(),
+                "unreadable Maven dependency line".to_string(),
+            )),
+        }
+    }
+
+    if packages.is_empty() && skipped.is_empty() {
+        skipped.push((
+            "maven-tree.txt".to_string(),
+            "no Maven coordinates found; run `mvn dependency:tree -DoutputFile=maven-tree.txt`"
+                .to_string(),
+        ));
+    }
+    Ok(finish(packages, skipped))
+}
+
+/// `group:artifact:type[:classifier]:version[:scope]`, with Maven's trailing
+/// `(version managed from ...)` / `(optional)` annotations removed.
+fn coordinate(line: &str) -> Option<(String, String)> {
+    let line = line.split(" (").next().unwrap_or(line).trim();
+    let parts: Vec<&str> = line.split(':').collect();
+    let version_index = match parts.len() {
+        4 => 3,
+        5 if parts[3].starts_with(|character: char| character.is_ascii_digit()) => 3,
+        5 => 4,
+        6.. => 4,
+        _ => return None,
+    };
+    let (group, artifact, version) = (parts[0], parts[1], parts[version_index]);
+    if group.is_empty()
+        || artifact.is_empty()
+        || version.is_empty()
+        || !group.chars().any(|c| c.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some((format!("{group}:{artifact}"), version.to_string()))
 }
 
 fn parse_composer_lock(body: &str) -> Result<LockContents, LockError> {
@@ -1662,6 +1747,76 @@ DEPENDENCIES
             parse(Format::Pipfile, "{ nope"),
             Err(LockError::Malformed(_))
         ));
+    }
+
+    const MAVEN_TREE: &str = r#"com.example:shop:jar:1.0.0
++- org.springframework:spring-core:jar:6.0.1:compile
+|  \- org.springframework:spring-jcl:jar:6.0.1:compile
++- com.google.guava:guava:jar:32.0.0-jre:compile
+|  \- com.google.guava:failureaccess:jar:1.0.1:compile (optional)
+\- io.netty:netty-tcnative:jar:linux-x86_64:2.0.0:runtime (version managed from 2.0.1)
+"#;
+
+    #[test]
+    fn maven_dependency_tree_parses_coordinates() {
+        let contents = parse(Format::MavenTree, MAVEN_TREE).unwrap();
+        assert!(contents.skipped.is_empty(), "{:?}", contents.skipped);
+        let specs: Vec<String> = contents
+            .packages
+            .iter()
+            .map(|package| package.spec())
+            .collect();
+        assert_eq!(
+            specs,
+            vec![
+                "com.google.guava:failureaccess@1.0.1",
+                "com.google.guava:guava@32.0.0-jre",
+                "io.netty:netty-tcnative@2.0.0",
+                "org.springframework:spring-core@6.0.1",
+                "org.springframework:spring-jcl@6.0.1",
+            ]
+        );
+    }
+
+    #[test]
+    fn maven_tree_accepts_log_output_and_ignores_chatter() {
+        let body = r#"[INFO] --- maven-dependency-plugin:3.6.1:tree (default-cli) @ shop ---
+[INFO] com.example:shop:jar:1.0.0
+[INFO] +- com.google.guava:guava:jar:32.0.0-jre:compile
+[INFO] |  \- com.google.guava:failureaccess:jar:1.0.1:compile
+[INFO] BUILD SUCCESS
+[INFO] Total time:  2.1 s
+"#;
+        let contents = parse(Format::MavenTree, body).unwrap();
+        assert_eq!(contents.packages.len(), 2);
+        assert!(contents.skipped.is_empty(), "{:?}", contents.skipped);
+    }
+
+    #[test]
+    fn a_broken_maven_tree_line_is_an_error_not_a_drop() {
+        let body = "com.example:shop:jar:1.0.0\n+- not-a-coordinate\n";
+        let contents = parse(Format::MavenTree, body).unwrap();
+        assert_eq!(contents.packages.len(), 0);
+        assert_eq!(contents.skipped.len(), 1);
+        assert!(contents.skipped[0].1.contains("unreadable Maven"));
+    }
+
+    #[test]
+    fn an_empty_maven_tree_says_how_to_make_one() {
+        let contents = parse(Format::MavenTree, "BUILD FAILURE\n").unwrap();
+        assert!(contents.packages.is_empty());
+        assert!(contents.skipped[0].1.contains("mvn dependency:tree"));
+    }
+
+    #[test]
+    fn maven_tree_file_names_are_detected() {
+        for name in [
+            "maven-tree.txt",
+            "dependency-tree.txt",
+            "mvn-dependency-tree.txt",
+        ] {
+            assert_eq!(detect(Path::new(name)).unwrap(), Format::MavenTree);
+        }
     }
 
     #[test]

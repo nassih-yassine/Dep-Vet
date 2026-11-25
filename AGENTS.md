@@ -251,6 +251,18 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `version: "==1.2.3"`. A missing/`*` version or a path/git/URL entry is
   reported as an error (an incomplete tree exits 3), matching `poetry.lock`;
   do not silently drop them.
+- **Maven trees come from Maven, not from a resolver.** `maven-tree.txt`,
+  `dependency-tree.txt`, and `mvn-dependency-tree.txt` are parsed line-wise from
+  `mvn dependency:tree -DoutputFile=...` (or the copied log). Only `+-`/`\-`
+  dependency lines become packages; the first coordinate without a marker is the
+  project and is skipped; `[INFO]`/`[WARNING]` prefixes and build chatter are
+  ignored; trailing `(version managed from ...)`/`(optional)` annotations are
+  stripped. A five-part coordinate is classified by whether the fourth field
+  looks like a version, so `type:classifier:version` (e.g. netty-tcnative) is
+  not read as a scope. A malformed dependency line or an empty tree exits `3`
+  via `skipped`, never a silent drop. There is no POM resolver: profiles,
+  properties, `dependencyManagement`, and BOM imports are Maven's job, and
+  dep-vet must not guess them.
 - **Gradle locking is Maven.** `gradle.lockfile` lines are
   `group:artifact:version=configurations`; the `empty=` line and `#` comments
   are skipped, and `buildscript-gradle.lockfile` / `settings-gradle.lockfile`
@@ -858,5 +870,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-Maven dependency trees beyond Gradle's lockfile format. SARIF/SBOM are built.
+A POM-based Maven resolver (trees are read from `mvn dependency:tree` output). SARIF/SBOM are built.
 Roadmap only: do not describe these as existing in code, README, or help text.

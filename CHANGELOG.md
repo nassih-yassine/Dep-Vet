@@ -22,6 +22,11 @@
   a non-string `scripts` value or a list under `repository`; the npm parser now
   keeps only string install hooks and reads the first repository URL instead of
   rejecting the package as unreadable.
+- **Maven trees can be audited from Maven's own output.** `dep-vet audit
+  maven-tree.txt` reads `mvn dependency:tree -DoutputFile=...` (or the copied
+  log), audits every resolved `group:artifact:version` through the existing
+  Maven path, and exits `3` on an unreadable line or an empty tree. Versions are
+  Maven's decisions; dep-vet never resolves ranges or POM inheritance.
 - **A reproducible real-world example lives in `examples/nodegoat`.** It pins
   OWASP NodeGoat at one commit, runs the package, workflow, archive, and tree
   checks, and records how to read the output, including an honest exit `3` when
