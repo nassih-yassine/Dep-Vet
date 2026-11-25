@@ -211,6 +211,7 @@ impl MockRegistry {
             .env("DEPVET_RUBYGEMS_BASE", &self.base)
             .env("DEPVET_NUGET_BASE", &self.base)
             .env("DEPVET_MAVEN_BASE", &self.base)
+            .env("DEPVET_MAVEN_REPO_BASE", &self.base)
             .env("DEPVET_GOOGLE_MAVEN_BASE", &self.base)
             .env("DEPVET_COMPOSER_BASE", &self.base)
             .env("DEPVET_PACKAGIST_BASE", &self.base)
@@ -8001,4 +8002,197 @@ fn mcp_config_user_scan_adds_home_configs() {
         .assert()
         .code(0)
         .stdout(predicate::str::contains("2 files, 2 servers"));
+}
+
+fn maven_pom(extra: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+{extra}
+</project>"#
+    )
+}
+
+#[test]
+fn maven_plan_resolves_parent_management_and_exclusions() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/com/example/parent/1.0.0/parent-1.0.0.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0.0</version>
+                <properties><lib.version>2.3.4</lib.version></properties>
+                <dependencyManagement><dependencies><dependency>
+                  <groupId>com.example</groupId><artifactId>lib</artifactId><version>${lib.version}</version>
+                </dependency></dependencies></dependencyManagement>"#,
+            ),
+        ),
+    );
+    routes.insert(
+        "/com/example/app/1.0.0/app-1.0.0.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0.0</version></parent>
+                <groupId>com.example</groupId><artifactId>app</artifactId><version>1.0.0</version>
+                <dependencies>
+                  <dependency><groupId>com.example</groupId><artifactId>lib</artifactId>
+                    <exclusions><exclusion><groupId>com.example</groupId><artifactId>leaf</artifactId></exclusion></exclusions>
+                  </dependency>
+                  <dependency><groupId>com.example</groupId><artifactId>test-only</artifactId><version>1.0</version><scope>test</scope></dependency>
+                  <dependency><groupId>com.example</groupId><artifactId>opt</artifactId><version>1.0</version><optional>true</optional></dependency>
+                </dependencies>"#,
+            ),
+        ),
+    );
+    routes.insert(
+        "/com/example/lib/2.3.4/lib-2.3.4.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<groupId>com.example</groupId><artifactId>lib</artifactId><version>2.3.4</version>
+                <dependencies>
+                  <dependency><groupId>com.example</groupId><artifactId>leaf</artifactId><version>1.0.0</version></dependency>
+                  <dependency><groupId>com.example</groupId><artifactId>kept</artifactId><version>1.0.0</version><scope>runtime</scope></dependency>
+                </dependencies>"#,
+            ),
+        ),
+    );
+    routes.insert(
+        "/com/example/kept/1.0.0/kept-1.0.0.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<groupId>com.example</groupId><artifactId>kept</artifactId><version>1.0.0</version>"#,
+            ),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["plan", "maven", "com.example:app@1.0.0", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let nodes: Vec<(&str, &str)> = value["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| {
+            (
+                node["name"].as_str().unwrap(),
+                node["version"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        nodes,
+        vec![
+            ("com.example:app", "1.0.0"),
+            ("com.example:lib", "2.3.4"),
+            ("com.example:kept", "1.0.0"),
+        ],
+        "test/optional/excluded dependencies must not appear"
+    );
+    assert_eq!(value["unresolved"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn maven_plan_reads_imported_boms() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/com/example/app/1.0.0/app-1.0.0.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<groupId>com.example</groupId><artifactId>app</artifactId><version>1.0.0</version>
+                <dependencyManagement><dependencies><dependency>
+                  <groupId>com.example</groupId><artifactId>bom</artifactId><version>1.0.0</version>
+                  <type>pom</type><scope>import</scope>
+                </dependency></dependencies></dependencyManagement>
+                <dependencies><dependency><groupId>com.example</groupId><artifactId>lib</artifactId></dependency></dependencies>"#,
+            ),
+        ),
+    );
+    routes.insert(
+        "/com/example/bom/1.0.0/bom-1.0.0.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<groupId>com.example</groupId><artifactId>bom</artifactId><version>1.0.0</version>
+                <dependencyManagement><dependencies><dependency>
+                  <groupId>com.example</groupId><artifactId>lib</artifactId><version>9.9.9</version>
+                </dependency></dependencies></dependencyManagement>"#,
+            ),
+        ),
+    );
+    routes.insert(
+        "/com/example/lib/9.9.9/lib-9.9.9.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<groupId>com.example</groupId><artifactId>lib</artifactId><version>9.9.9</version>"#,
+            ),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["plan", "maven", "com.example:app@1.0.0", "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["nodes"][1]["name"], "com.example:lib");
+    assert_eq!(value["nodes"][1]["version"], "9.9.9");
+}
+
+#[test]
+fn maven_plan_reports_missing_poms_and_ranges_as_incomplete() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/com/example/app/1.0.0/app-1.0.0.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<groupId>com.example</groupId><artifactId>app</artifactId><version>1.0.0</version>
+                <dependencies>
+                  <dependency><groupId>com.example</groupId><artifactId>missing</artifactId><version>1.0.0</version></dependency>
+                  <dependency><groupId>com.example</groupId><artifactId>range</artifactId><version>[1.0,2.0)</version></dependency>
+                </dependencies>"#,
+            ),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let output = registry
+        .command()
+        .args(["plan", "maven", "com.example:app@1.0.0", "--json"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let unresolved = value["unresolved"].as_array().unwrap();
+    assert_eq!(unresolved.len(), 2);
+    assert!(unresolved.iter().any(|entry| {
+        entry["reason"]
+            .as_str()
+            .unwrap()
+            .contains("could not fetch")
+    }));
+    assert!(
+        unresolved
+            .iter()
+            .any(|entry| entry["reason"].as_str().unwrap().contains("ranges"))
+    );
 }

@@ -193,9 +193,9 @@ pub enum Command {
         output: Option<std::path::PathBuf>,
     },
 
-    /// Resolve an npm dependency tree without installing it
+    /// Resolve a dependency tree without installing it
     Plan {
-        /// Ecosystem (npm only today)
+        /// Ecosystem: npm or maven
         ecosystem: String,
 
         /// Package with optional version or range: express@5

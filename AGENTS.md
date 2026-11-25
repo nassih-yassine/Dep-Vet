@@ -94,6 +94,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/rubygems.rs` | RubyGems versions, timestamps, source URL, yank flag |
 | `src/nuget.rs` | NuGet flat container, registration pages, times, deprecation |
 | `src/maven.rs` | Maven Central search: versions, timestamps |
+| `src/maven_plan.rs` | POM fetch, effective model (parents/properties/BOMs), Maven tree resolution |
 | `src/composer.rs` | Packagist p2 versions, maintainers, abandoned flag |
 | `src/osv.rs` | advisory IDs from `querybatch`, details per advisory, severity mapping, EPSS/KEV enrichment |
 | `src/exploit.rs` | EPSS and CISA KEV parsing, CVE extraction, the two feeds' client |
@@ -251,6 +252,19 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `version: "==1.2.3"`. A missing/`*` version or a path/git/URL entry is
   reported as an error (an incomplete tree exits 3), matching `poetry.lock`;
   do not silently drop them.
+- **`plan maven` resolves POMs; `audit maven-tree.txt` does not.** The resolver
+  in `maven_plan.rs` fetches `.pom` files only from `repo.maven.apache.org`
+  (`DEPVET_MAVEN_REPO_BASE` is gated like every other override), builds the
+  effective model (parent chain, child-wins properties, `dependencyManagement`,
+  imported BOMs), and walks `compile`/`runtime` dependencies. `test`,
+  `provided`, `system`, `optional`, and `import` dependencies are skipped.
+  Nearest definition wins per `group:artifact`; later different versions become
+  conflicts, not extra nodes. Profiles are never evaluated, ranges and
+  `LATEST`/`RELEASE` are unresolved, and a repository declared inside a POM is
+  ignored. The node/depth caps are the npm planner's (`MAX_NODES`,
+  `MAX_DEPTH`), and any required unresolved edge or truncation exits `3`.
+  `quick-xml` is the only XML dependency; do not hand-parse POMs with string
+  splitting.
 - **Maven trees come from Maven, not from a resolver.** `maven-tree.txt`,
   `dependency-tree.txt`, and `mvn-dependency-tree.txt` are parsed line-wise from
   `mvn dependency:tree -DoutputFile=...` (or the copied log). Only `+-`/`\-`
@@ -870,5 +884,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-A POM-based Maven resolver (trees are read from `mvn dependency:tree` output). SARIF/SBOM are built.
+A `tree pom.xml` project resolver (a single Maven coordinate is already resolved by `plan maven`; dependency trees can be audited from `mvn dependency:tree` output). SARIF/SBOM are built.
 Roadmap only: do not describe these as existing in code, README, or help text.

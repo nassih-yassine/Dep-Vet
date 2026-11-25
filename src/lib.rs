@@ -20,6 +20,7 @@ pub mod jsr;
 pub mod license;
 pub mod lockfile;
 pub mod maven;
+pub mod maven_plan;
 pub mod mcp;
 pub mod mcp_config;
 pub mod model;
