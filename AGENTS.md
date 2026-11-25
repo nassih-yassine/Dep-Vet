@@ -216,7 +216,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   package, and only `@sha256:` pins a Docker image. Loopback `http` is allowed
   because local MCP servers use it; every other `http` URL is HIGH. URL
   evidence drops userinfo, the query, and the fragment so tokens cannot leak
-  into a report. Malformed JSON and unreadable paths exit `3`; an empty search
+  into a report. The report names the server and field but never prints the
+  resolved command line: arguments can carry tokens, and a scan must not leak
+  them. Malformed JSON and unreadable paths exit `3`; an empty search
   is a clean result.
 - **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
   uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
