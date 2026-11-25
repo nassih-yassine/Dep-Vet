@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Maven planning is bounded against hostile POMs.** Property interpolation
+  stops at 64 KiB or 10,000 replacements and reports the dependency as
+  unresolved ("property expansion too large") instead of growing without bound.
+  Local POMs over 4 MiB are refused before parsing, and fetched POMs over 4 MiB
+  are rejected before parsing, both as exit `3`.
 - **The passive update hint is bounded to one short attempt.** It now uses its
   own 24-hour cache (the `update` command keeps 5 minutes), makes a single
   attempt with a 2-second end-to-end budget instead of the normal 20-second,
