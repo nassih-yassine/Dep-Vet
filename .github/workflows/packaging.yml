@@ -156,6 +156,8 @@ jobs:
             dist-pkg/*.apk
             dist-pkg/*.pkg.tar.zst
       - name: Smoke test the amd64 package
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
           set -eu
           deb=$(ls dist-pkg/*amd64.deb)
@@ -163,8 +165,8 @@ jobs:
           dpkg-deb -x "$deb" smoke
           version="$(smoke/usr/bin/dep-vet --version)"
           case "$version" in
-            *"dep-vet 0.13"*) echo "$version" ;;
-            *) echo "::error::unexpected version '$version'"; exit 1 ;;
+            *"dep-vet $VERSION"*) echo "$version" ;;
+            *) echo "::error::unexpected version '$version' (wanted $VERSION)"; exit 1 ;;
           esac
       # --clobber keeps a re-run of this workflow idempotent. The packages are
       # attested above, so a replaced file still carries provenance for its own
