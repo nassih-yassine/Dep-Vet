@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The passive update hint is bounded to one short attempt.** It now uses its
+  own 24-hour cache (the `update` command keeps 5 minutes), makes a single
+  attempt with a 2-second end-to-end budget instead of the normal 20-second,
+  three-try client, and remembers a failure for 6 hours. An offline machine
+  pays the delay at most once per window and never blocks exit past the budget.
 - **SECURITY.md now lists every outbound request, including the update hint.**
   The previous "nothing else" sentence was false: an interactive run also
   fetches the latest release from `api.github.com` once per 24 hours. The page

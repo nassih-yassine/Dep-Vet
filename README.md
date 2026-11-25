@@ -278,7 +278,8 @@ On an interactive terminal, dep-vet also prints one line to stderr when a newer
 release exists. It is silent in CI, in `--json`/SARIF/file output, in `hook`,
 `mcp`, `guard`, and `watch`, and after a HIGH or failed check. Opt out with
 `DEPVET_NO_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1`. The lookup is cached for
-24 hours and sends no package data.
+24 hours, makes one attempt with a 2-second budget, remembers a failure for 6
+hours, and sends no package data.
 
 **Verify what you downloaded**
 

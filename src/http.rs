@@ -236,6 +236,57 @@ impl HttpClient {
             .map(|(body, _)| body)
     }
 
+    /// One attempt with a caller-chosen end-to-end timeout. Used only by the
+    /// passive update hint, where a slow network must never delay exit.
+    pub fn get_with_deadline(
+        &self,
+        url: &str,
+        ttl_seconds: i64,
+        timeout: Duration,
+    ) -> Result<String, HttpError> {
+        self.get_with_deadline_at(url, ttl_seconds, timeout, now_seconds())
+    }
+
+    pub fn get_with_deadline_at(
+        &self,
+        url: &str,
+        ttl_seconds: i64,
+        timeout: Duration,
+        now: i64,
+    ) -> Result<String, HttpError> {
+        self.guard()?;
+        self.cached_with_ttl_attempts(url, Some(ttl_seconds), 1, now, || {
+            self.fetch_get_with_timeout(url, timeout)
+        })
+        .map(|(body, _)| body)
+    }
+
+    /// A marker is a cache entry whose body is irrelevant; it records that
+    /// something happened. Used for the update hint's negative cache.
+    pub fn has_marker(&self, key: &str, ttl_seconds: i64) -> bool {
+        self.has_marker_at(key, ttl_seconds, now_seconds())
+    }
+
+    pub fn has_marker_at(&self, key: &str, ttl_seconds: i64, now: i64) -> bool {
+        self.cache
+            .as_ref()
+            .and_then(|cache| cache.lock().ok())
+            .and_then(|cache| cache.fresh_with(key, now, ttl_seconds).ok().flatten())
+            .is_some()
+    }
+
+    pub fn put_marker(&self, key: &str) {
+        self.put_marker_at(key, now_seconds());
+    }
+
+    pub fn put_marker_at(&self, key: &str, now: i64) {
+        if let Some(cache) = &self.cache
+            && let Ok(cache) = cache.lock()
+        {
+            let _ = cache.put(key, "1", now);
+        }
+    }
+
     /// Raw response for callers that must stream a body (archives). Statuses
     /// are checked here, so a caller still sees `HttpError::Status` on 404.
     pub fn get_raw(
@@ -340,9 +391,19 @@ impl HttpClient {
         &self,
         key: &str,
         ttl_override: Option<i64>,
+        fetch: impl FnMut() -> Result<String, HttpError>,
+    ) -> Result<(String, Source), HttpError> {
+        self.cached_with_ttl_attempts(key, ttl_override, MAX_ATTEMPTS, now_seconds(), fetch)
+    }
+
+    fn cached_with_ttl_attempts(
+        &self,
+        key: &str,
+        ttl_override: Option<i64>,
+        max_attempts: u32,
+        now: i64,
         mut fetch: impl FnMut() -> Result<String, HttpError>,
     ) -> Result<(String, Source), HttpError> {
-        let now = now_seconds();
         let advisory = self.is_advisory(key);
         if let Some(cache) = &self.cache
             && let Ok(cache) = cache.lock()
@@ -361,7 +422,7 @@ impl HttpClient {
         let result = loop {
             match fetch() {
                 Ok(body) => break Ok(body),
-                Err(error) if error.is_transient() && attempt + 1 < MAX_ATTEMPTS => {
+                Err(error) if error.is_transient() && attempt + 1 < max_attempts => {
                     std::thread::sleep(retry_delay(attempt, error.retry_after()));
                     attempt += 1;
                 }
@@ -398,6 +459,38 @@ impl HttpClient {
         match self.agent.get(url).call() {
             Ok(response) => read_response(response, url),
             Err(error) => Err(network_error(error, url)),
+        }
+    }
+
+    fn fetch_get_with_timeout(&self, url: &str, timeout: Duration) -> Result<String, HttpError> {
+        let request = self
+            .agent
+            .get(url)
+            .config()
+            .timeout_global(Some(timeout))
+            .build();
+        match request.call() {
+            Ok(response) => read_response(response, url),
+            Err(error) => Err(network_error(error, url)),
+        }
+    }
+
+    /// Test-only client with a default resolver, so a local listener can be
+    /// used to exercise the deadline without weakening the production path.
+    #[cfg(test)]
+    pub fn for_test(cache: Option<crate::cache::Cache>) -> Self {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(20)))
+            .http_status_as_error(false)
+            .user_agent(concat!("dep-vet/", env!("CARGO_PKG_VERSION")))
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+        Self {
+            agent: agent.clone(),
+            archive_agent: agent,
+            cache: cache.map(Mutex::new),
+            policy_error: None,
+            advisory_base: String::new(),
         }
     }
 
@@ -573,6 +666,91 @@ mod tests {
             url: "https://example.test/x".to_string(),
             message: "offline".to_string(),
         }
+    }
+
+    #[test]
+    fn an_explicit_ttl_and_attempt_budget_are_honoured() {
+        let (_directory, cache) = cache(60);
+        let client = HttpClient::for_test(Some(cache));
+        let mut calls = 0;
+        let fetch = |calls: &mut usize| {
+            *calls += 1;
+            Ok(format!("body{calls}"))
+        };
+
+        let (first, _) = client
+            .cached_with_ttl_attempts("k", Some(3600), 1, 1000, || fetch(&mut calls))
+            .unwrap();
+        assert_eq!(first, "body1");
+        let (second, _) = client
+            .cached_with_ttl_attempts("k", Some(3600), 1, 1000 + 3599, || fetch(&mut calls))
+            .unwrap();
+        assert_eq!(second, "body1", "inside the TTL must come from cache");
+        let (third, _) = client
+            .cached_with_ttl_attempts("k", Some(3600), 1, 1000 + 3600, || fetch(&mut calls))
+            .unwrap();
+        assert_eq!(third, "body2", "at the TTL boundary it refetches");
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn one_attempt_means_one_attempt() {
+        let client = HttpClient::for_test(None);
+        let mut calls = 0;
+        let result = client.cached_with_ttl_attempts("k", Some(60), 1, 1000, || {
+            calls += 1;
+            Err(network_error())
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn negative_cache_markers_expire_on_their_own_window() {
+        let (_directory, cache) = cache(60);
+        let client = HttpClient::for_test(Some(cache));
+        let now = 1_000;
+        client.put_marker_at("update-hint-failed", now);
+        assert!(client.has_marker_at("update-hint-failed", 6 * 3600, now));
+        assert!(client.has_marker_at("update-hint-failed", 6 * 3600, now + 6 * 3600 - 1));
+        assert!(!client.has_marker_at("update-hint-failed", 6 * 3600, now + 6 * 3600));
+        assert!(!client.has_marker_at("other", 6 * 3600, now));
+    }
+
+    #[test]
+    fn a_hanging_server_hits_the_deadline_after_one_attempt() {
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&accepts);
+        thread::spawn(move || {
+            if let Ok(stream) = listener.accept() {
+                counter.fetch_add(1, Ordering::SeqCst);
+                thread::sleep(Duration::from_secs(10));
+                drop(stream);
+            }
+        });
+        let client = HttpClient::for_test(None);
+        let start = Instant::now();
+        let result = client.get_with_deadline_at(
+            &format!("http://{address}/hang"),
+            3600,
+            Duration::from_secs(2),
+            1000,
+        );
+        assert!(result.is_err());
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "deadline exceeded: {:?}",
+            start.elapsed()
+        );
+        assert_eq!(accepts.load(Ordering::SeqCst), 1);
     }
 
     #[test]
