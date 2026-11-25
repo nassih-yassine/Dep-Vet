@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The MCP tools now describe their parameters.** Every `inputSchema` property
+  carries a description, and the three tool descriptions state what the tool
+  does and what it refuses, so an agent can choose between `vet_package`,
+  `vet_command`, and `vet_lockfile_change` without guessing. Behaviour is
+  unchanged; a test now fails if a parameter is added without a description.
+
 - **Maven planning is bounded against hostile POMs.** Property interpolation
   stops at 64 KiB or 10,000 replacements and reports the dependency as
   unresolved ("property expansion too large") instead of growing without bound.

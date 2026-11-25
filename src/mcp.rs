@@ -230,7 +230,7 @@ pub fn tools() -> Value {
     json!({"tools": [
         {
             "name": "vet_package",
-            "description": "Vet one package before installing it: advisories, typosquats, install scripts, freshness, and maintainers, with evidence links.",
+            "description": "Vet one package at an exact version before installing it. Reports advisories with fixed versions, install hooks, typosquats, freshness, maintainers, provenance and license, each with an evidence URL. Read-only: nothing is downloaded, extracted or executed. Returns a verdict plus exit code; an incomplete check reports 3, never clean.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -238,33 +238,51 @@ pub fn tools() -> Value {
                 "properties": {
                     "ecosystem": {
                         "type": "string",
+                        "description": "Registry to query. Required; there is no default.",
                         "enum": ["npm", "pypi", "crates", "go", "jsr", "rubygems", "nuget", "maven", "composer"]
                     },
-                    "name": {"type": "string"},
-                    "version": {"type": "string"}
+                    "name": {
+                        "type": "string",
+                        "description": "Package name as the registry spells it, for example 'left-pad', '@scope/pkg', or 'group:artifact' for Maven."
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Exact version or dist-tag. Omit to audit the latest published release. Ranges and carets are refused rather than resolved."
+                    }
                 }
             }
         },
         {
             "name": "vet_command",
-            "description": "Vet the direct packages an install command names, using the same parser as the agent hook.",
+            "description": "Vet the direct packages an install command names, using the same parser as the agent hook. The command is parsed, never executed, and transitive dependencies are not checked.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["command"],
-                "properties": {"command": {"type": "string"}}
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "One install command, for example \"npm i left-pad@1.3.0\". Shell operators, URLs, git and local paths are reported as notes instead of guessed."
+                    }
+                }
             }
         },
         {
             "name": "vet_lockfile_change",
-            "description": "Audit the packages a lockfile change adds, comparing the working file with a git ref.",
+            "description": "Audit only the packages a lockfile change adds, comparing the working file against a git ref. Returns one verdict per added package plus an aggregate exit code; an incomplete audit reports 3, never a pass.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["lockfile"],
                 "properties": {
-                    "lockfile": {"type": "string"},
-                    "base": {"type": "string"}
+                    "lockfile": {
+                        "type": "string",
+                        "description": "Lockfile path, relative to the working directory and inside it: package-lock.json, requirements.txt, Cargo.lock, pnpm-lock.yaml, deno.lock, and the rest."
+                    },
+                    "base": {
+                        "type": "string",
+                        "description": "Git ref to compare against, such as HEAD~1 or origin/main. Defaults to HEAD."
+                    }
                 }
             }
         }
@@ -523,5 +541,23 @@ mod tests {
                 .iter()
                 .any(|value| value == "pypi")
         );
+    }
+
+    #[test]
+    fn every_tool_parameter_is_described_for_the_model() {
+        // Bare properties cost tool-definition quality and make an agent guess
+        // what to pass, so each one ships with a description.
+        for tool in tools()["tools"].as_array().unwrap() {
+            let name = tool["name"].as_str().unwrap();
+            let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+            assert!(!properties.is_empty(), "{name} has no parameters");
+            for (parameter, schema) in properties {
+                let description = schema["description"].as_str().unwrap_or("");
+                assert!(
+                    description.len() > 20,
+                    "{name}.{parameter} needs a description, got {description:?}"
+                );
+            }
+        }
     }
 }
