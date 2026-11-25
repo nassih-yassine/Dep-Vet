@@ -31,6 +31,11 @@
   OWASP NodeGoat at one commit, runs the package, workflow, archive, and tree
   checks, and records how to read the output, including an honest exit `3` when
   a lockfile references a version that no longer exists.
+- **npm 0.15.0 was published from the release assets by hand.** Trusted
+  publishing is still blocked until the npm account has account-level 2FA, and
+  the CI token is empty. The upload was built and checksum/attestation-verified
+  from the GitHub release, but a workstation upload carries no npm provenance
+  attestation. This is the documented fallback, not the normal path.
 
 ## 0.14.0 — 2026-11-25
 

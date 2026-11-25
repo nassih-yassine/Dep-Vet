@@ -1,6 +1,6 @@
 pkgbase = dep-vet-bin
 	pkgdesc = Check a dependency's risk before it enters your lockfile
-	pkgver = 0.14.0
+	pkgver = 0.15.0
 	pkgrel = 1
 	url = https://github.com/nassih-yassine/Dep-Vet
 	arch = x86_64
@@ -10,9 +10,9 @@ pkgbase = dep-vet-bin
 	conflicts = dep-vet
 	options = !strip
 	options = !debug
-	source_x86_64 = https://github.com/nassih-yassine/Dep-Vet/releases/download/v0.14.0/dep-vet-x86_64-unknown-linux-musl.tar.xz
-	sha256sums_x86_64 = 59481d06162d521034f0d9d27092cee39b4c4b1d1a3b59e16fc66094d6677149
-	source_aarch64 = https://github.com/nassih-yassine/Dep-Vet/releases/download/v0.14.0/dep-vet-aarch64-unknown-linux-musl.tar.xz
-	sha256sums_aarch64 = cff4c6da28bc2d1a2b24c36103747f9eafdffb5944a9ee32257fbb35f94bb999
+	source_x86_64 = https://github.com/nassih-yassine/Dep-Vet/releases/download/v0.15.0/dep-vet-x86_64-unknown-linux-musl.tar.xz
+	sha256sums_x86_64 = 2bcf3b404acf82f8068d24955387163abdb90b8dde6382e51f5d38a994624ec3
+	source_aarch64 = https://github.com/nassih-yassine/Dep-Vet/releases/download/v0.15.0/dep-vet-aarch64-unknown-linux-musl.tar.xz
+	sha256sums_aarch64 = 65ccc6e3b4191dedc07935a604c7e2cd5211738c04368b4f98a12d4f4f8932aa
 
 pkgname = dep-vet-bin
