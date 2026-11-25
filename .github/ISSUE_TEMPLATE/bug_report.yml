@@ -1,0 +1,83 @@
+name: Bug report
+description: Something crashed, reported the wrong thing, or refused to check a package.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report security vulnerabilities here. Use
+        [SECURITY.md](https://github.com/nassih-yassine/Dep-Vet/blob/main/SECURITY.md)
+        instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: dep-vet version
+      description: Output of `dep-vet --version`.
+      placeholder: dep-vet 0.16.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The exact command you ran.
+      render: shell
+      placeholder: dep-vet npm left-pad@1.3.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: I expected a typosquat finding, or a clean report with a link.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include the exit code. `3` means the check could not run.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: Input
+      multiple: false
+      options:
+        - Single package (`dep-vet npm ...`)
+        - Lockfile audit
+        - Lockfile diff (`lock`)
+        - "plan / tree"
+        - "inspect / diff"
+        - Workflow or MCP scan
+        - "guard or the agent hook"
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: ecosystem
+    attributes:
+      label: Ecosystem or lockfile format
+      placeholder: npm, PyPI, Cargo, pnpm, Maven tree, Deno, ...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I am on the latest release.
+          required: true
+        - label: I searched existing issues for the same report.
+          required: true
+        - label: I can reproduce it with `--no-cache`.
+          required: false
