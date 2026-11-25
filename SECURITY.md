@@ -16,16 +16,34 @@ credits you unless you ask otherwise.
 
 ## Local-first, zero telemetry
 
-Dep-Vet runs as one local binary. It sends package names and versions to the
-public registry and advisory services named in the outbound URL policy, and
-nothing else: no account, no API key, no analytics, no crash reporting, and no
-upload of lockfile paths, source, reports, or findings. Registry responses are
-cached in a local SQLite file under `~/.cache/dep-vet` (or the platform
-equivalent); `--no-cache` bypasses it.
+Dep-Vet runs as one local binary. It makes these outbound requests:
 
-The same rule applies to agent features. The Claude Code hook runs `guard` as a
-child process, and `mcp` speaks JSON-RPC over stdio to the local process. No
-dep-vet command phones home about how it was used.
+- Registries and package hosts named in the outbound URL policy
+  (`registry.npmjs.org`, `pypi.org`/`files.pythonhosted.org`, `crates.io`,
+  `proxy.golang.org`, `jsr.io`, `rubygems.org`, `api.nuget.org`,
+  `search.maven.org`/`dl.google.com`, `repo.packagist.org`) with the package
+  names and versions being checked.
+- Advisory and repository services: `api.osv.dev`, `api.first.org` (EPSS),
+  `www.cisa.gov` (KEV), and `api.deps.dev` (OpenSSF Scorecard).
+- The passive update check: one unauthenticated `GET` to
+  `api.github.com/repos/nassih-yassine/Dep-Vet/releases/latest` (exact host
+  `api.github.com`) with `User-Agent: dep-vet/<version>`. It reveals the client
+  IP and version to GitHub, sends no package data, and runs only on an
+  interactive terminal outside CI. It is skipped for `hook`, `mcp`, `guard`,
+  `watch`, `--json`, SARIF and file output, and after a HIGH or failed check.
+  Opt out with `DEPVET_NO_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1`.
+- Archive and provenance URLs the registry declares, after the outbound URL
+  policy validates them.
+
+That is the whole list. There is no account, no API key, no analytics, no crash
+reporting, and no upload of lockfile paths, source, reports, or findings.
+Registry responses are cached in a local SQLite file under `~/.cache/dep-vet`
+(or the platform equivalent); `--no-cache` bypasses it.
+
+The update check is also cached for 24 hours, and a failed check is remembered
+for 6 hours so an offline machine does not retry it on every run. The same rule
+applies to agent features: the Claude Code hook runs `guard` as a child process,
+and `mcp` speaks JSON-RPC over stdio to the local process.
 
 ## Scope
 

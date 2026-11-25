@@ -8237,3 +8237,22 @@ fn maven_plan_reads_a_local_pom() {
     assert_eq!(value["nodes"][1]["name"], "com.example:lib");
     assert_eq!(value["nodes"][1]["version"], "1.2.3");
 }
+
+#[test]
+fn security_and_readme_name_the_update_check_opt_outs() {
+    let security = include_str!("../SECURITY.md");
+    let readme = include_str!("../README.md");
+    for document in [security, readme] {
+        for variable in ["DEPVET_NO_UPDATE_CHECK", "NO_UPDATE_NOTIFIER"] {
+            assert!(document.contains(variable), "missing {variable}");
+        }
+    }
+    assert!(
+        security.contains("api.github.com"),
+        "SECURITY.md must name the update host"
+    );
+    assert!(
+        security.contains("24 hours"),
+        "SECURITY.md must state the hint cache window"
+    );
+}

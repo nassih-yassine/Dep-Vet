@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **SECURITY.md now lists every outbound request, including the update hint.**
+  The previous "nothing else" sentence was false: an interactive run also
+  fetches the latest release from `api.github.com` once per 24 hours. The page
+  now names the request, its user agent, what it reveals, when it is skipped,
+  and both opt-outs (`DEPVET_NO_UPDATE_CHECK`, `NO_UPDATE_NOTIFIER`).
+
 ## 0.16.0 — 2026-11-25
 
 - **`plan maven group:artifact@version` resolves a POM tree.** It fetches POMs
