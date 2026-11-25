@@ -413,6 +413,11 @@ for 30 days. A fresh entry skips the network; a stale entry is used only after a
 network error, `5xx`, or `429`, and a `404` never falls back. `--no-cache`
 bypasses it.
 
+What that buys, measured on a 1,090-package lockfile (OWASP NodeGoat pinned at
+`c5cb68a`, release build, i7-11800H): 118.26 s cold, 1.45 s warm, with 1,866
+cache entries and 115 MiB after the cold run. The script and method are in
+[`examples/benchmark`](examples/benchmark/README.md).
+
 Network errors, `429`, and `5xx` retry up to three times with exponential
 backoff; `Retry-After` is honoured up to five seconds. The passive update hint is
 the exception: one attempt, two seconds, cached for 24 hours, with a six-hour
