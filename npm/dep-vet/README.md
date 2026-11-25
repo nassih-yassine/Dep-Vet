@@ -65,7 +65,7 @@ npm install --global @nassihyas/dep-vet
 ```
 
 Other channels: `cargo install dep-vet`, `brew install nassih-yassine/tap/dep-vet`,
-`docker run --rm -v "$PWD:/work" -w /work ghcr.io/nassih-yassine/dep-vet:v0.13.6`,
+`docker run --rm -v "$PWD:/work" -w /work ghcr.io/nassih-yassine/dep-vet:v0.14.0`,
 and prebuilt archives on the releases page.
 
 ## Verify what you downloaded
