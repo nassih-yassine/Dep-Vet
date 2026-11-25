@@ -536,6 +536,10 @@ dep-vet mcp-config --user                   # plus the per-user Claude, Cursor, 
 dep-vet mcp-config --json
 ```
 
+<p align="center">
+  <img alt="Dep-Vet scanning an MCP config: plaintext secret, network launcher, unpinned package" src="assets/demo-mcp.gif" width="760">
+</p>
+
 The scan reads the config and never starts a server. It reports:
 
 | Rule | Severity | Meaning |
