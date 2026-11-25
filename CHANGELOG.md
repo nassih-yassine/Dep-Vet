@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **`plan maven group:artifact@version` resolves a POM tree.** It fetches POMs
+  from Maven Central, applies parent chains, properties, classifiers,
+  exclusions, `dependencyManagement`, and imported BOMs, follows
+  compile/runtime dependencies, and applies Maven's nearest-definition
+  mediation. Profiles are never evaluated; ranges and `LATEST`/`RELEASE` are
+  reported as unresolved; a missing POM or required edge exits `3`.
+
 ## 0.15.0 — 2026-11-25
 
 - **Publisher history covers every release where the registry names the

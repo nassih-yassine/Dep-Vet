@@ -220,13 +220,20 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             json,
         } => {
             let ecosystem = inspect_ecosystem(ecosystem)?;
-            if ecosystem != Ecosystem::Npm {
-                anyhow::bail!("plan supports npm only today");
-            }
-            let http = Arc::new(HttpClient::from_env(cli.no_cache));
-            let registry = RegistryClient::from_env(http);
-            let report =
-                dep_vet::plan::plan(&registry, package).map_err(|error| anyhow::anyhow!(error))?;
+            let report = match ecosystem {
+                Ecosystem::Npm => {
+                    let http = Arc::new(HttpClient::from_env(cli.no_cache));
+                    let registry = RegistryClient::from_env(http);
+                    dep_vet::plan::plan(&registry, package)
+                        .map_err(|error| anyhow::anyhow!(error))?
+                }
+                Ecosystem::Maven => {
+                    let http = HttpClient::from_env(cli.no_cache);
+                    dep_vet::maven_plan::plan(&http, package)
+                        .map_err(|error| anyhow::anyhow!(error))?
+                }
+                _ => anyhow::bail!("plan supports npm and maven"),
+            };
             let output = if *json {
                 dep_vet::plan::render_json(&report)?
             } else {

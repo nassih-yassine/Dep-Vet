@@ -350,12 +350,13 @@ pub fn render_json(report: &PlanReport) -> Result<String, serde_json::Error> {
 
 pub fn render(report: &PlanReport) -> String {
     let mut out = format!(
-        "{}plan: npm/{} (requested {})\n\n",
+        "{}plan: {}/{} (requested {})\n\n",
         if crate::netpolicy::insecure_active() {
             "UNOFFICIAL REGISTRY: a development override is active; results are not production registry data\n\n"
         } else {
             ""
         },
+        report.ecosystem,
         report.root,
         report.requested
     );
@@ -450,7 +451,10 @@ pub fn render(report: &PlanReport) -> String {
             .map(|entry| format!("{}:{}", entry.from, entry.name))
             .collect(),
     };
-    out.push_str(&crate::graph::render_tree(&graph, "npm/plan"));
+    out.push_str(&crate::graph::render_tree(
+        &graph,
+        &format!("{}/plan", report.ecosystem),
+    ));
     out.push_str(&format!(
         "\n  plan {} (exit {})\n",
         if report.complete() {

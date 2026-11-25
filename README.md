@@ -370,11 +370,13 @@ What each format contributes, and what it cannot:
 | `gradle.lockfile` | `group:artifact:version` lines, including `buildscript-`/`settings-` variants | unlocked configurations; Gradle without dependency locking |
 | `maven-tree.txt` | every dependency line from `mvn dependency:tree -DoutputFile=...` | lines that are not coordinates; an empty tree |
 
-### Plan an npm tree
+### Plan a dependency tree
 
 ```sh
 dep-vet plan npm express@5          # resolve a range, print the tree
 dep-vet plan npm express@^4.18 --json
+dep-vet plan maven org.slf4j:slf4j-api@2.0.17
+dep-vet plan maven org.springframework.boot:spring-boot-starter-web@3.2.0 --json
 ```
 
 `plan` reads npm packuments to pick the highest version that satisfies each
@@ -385,13 +387,24 @@ whether it is direct, optional, or a peer, and the same name may appear at more
 than one version; those versions are listed under `multiple versions resolved`.
 Cycles terminate at the existing node.
 
-The resolver is deliberately bounded: 2,000 packages and 50 levels. Anything
+For Maven, `plan` fetches POMs from Maven Central and builds the effective model
+before walking anything: parent chains, property interpolation, classifiers,
+exclusions, `dependencyManagement`, and imported BOMs are applied. It follows
+`compile` and `runtime` dependencies, and ignores `test`, `provided`, `system`,
+`optional`, and `import` entries. The nearest definition wins per
+`group:artifact`, the same way Maven mediates a tree, and a different version
+reached later is reported as a conflict rather than expanded. Profiles are never
+evaluated, version ranges and `LATEST`/`RELEASE` are reported as unresolved, and
+POMs are only fetched from `repo.maven.apache.org` (never a repository declared
+inside a POM). A real Spring Boot starter resolves end to end; an AndroidX
+coordinate comes from Google Maven and is reported as unresolved.
+
+Both resolvers are deliberately bounded: 2,000 packages and 50 levels. Anything
 left unresolved is listed with the range and reason, and an incomplete plan
 exits `3` when a required dependency could not be resolved or a cap was hit.
 A missing optional or peer dependency does not fail the plan. Non-semver specs
 (`git+…`, `file:`, URLs), `devDependencies`, and npm's hoisting algorithm are
-not modeled; use an actual lockfile and `audit` for the installed tree. Only npm
-is supported today.
+not modeled; use an actual lockfile and `audit` for the installed tree.
 
 ### See the dependency graph
 
