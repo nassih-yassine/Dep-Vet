@@ -1,6 +1,6 @@
 {
   "name": "@nassihyas/dep-vet",
-  "version": "0.13.6",
+  "version": "0.14.0",
   "mcpName": "io.github.nassih-yassine/dep-vet",
   "description": "Dependency risk scanner: CVEs, typosquats, install scripts, provenance. Nine ecosystems, no code execution. MCP server for AI agents.",
   "keywords": [

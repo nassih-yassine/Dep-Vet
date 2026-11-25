@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 — 2026-11-25
 
 - **Advisories now say whether the vulnerability is exploited in practice.**
   OSV advisories with a CVE are checked against FIRST's EPSS scores and the CISA
