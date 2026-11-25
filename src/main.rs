@@ -229,8 +229,13 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 }
                 Ecosystem::Maven => {
                     let http = HttpClient::from_env(cli.no_cache);
-                    dep_vet::maven_plan::plan(&http, package)
-                        .map_err(|error| anyhow::anyhow!(error))?
+                    if package.ends_with("pom.xml") || std::path::Path::new(package).is_file() {
+                        dep_vet::maven_plan::plan_pom(&http, std::path::Path::new(package))
+                            .map_err(|error| anyhow::anyhow!(error))?
+                    } else {
+                        dep_vet::maven_plan::plan(&http, package)
+                            .map_err(|error| anyhow::anyhow!(error))?
+                    }
                 }
                 _ => anyhow::bail!("plan supports npm and maven"),
             };

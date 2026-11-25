@@ -377,6 +377,7 @@ dep-vet plan npm express@5          # resolve a range, print the tree
 dep-vet plan npm express@^4.18 --json
 dep-vet plan maven org.slf4j:slf4j-api@2.0.17
 dep-vet plan maven org.springframework.boot:spring-boot-starter-web@3.2.0 --json
+dep-vet plan maven ./pom.xml       # resolve the project's declared dependencies
 ```
 
 `plan` reads npm packuments to pick the highest version that satisfies each
@@ -397,7 +398,10 @@ reached later is reported as a conflict rather than expanded. Profiles are never
 evaluated, version ranges and `LATEST`/`RELEASE` are reported as unresolved, and
 POMs are only fetched from `repo.maven.apache.org` (never a repository declared
 inside a POM). A real Spring Boot starter resolves end to end; an AndroidX
-coordinate comes from Google Maven and is reported as unresolved.
+coordinate comes from Google Maven and is reported as unresolved. Passing a
+local `pom.xml` resolves that project's declared dependencies (and its parent
+and BOMs); a parent that exists only beside the project, as in a multi-module
+reactor, is reported as unresolved rather than guessed.
 
 Both resolvers are deliberately bounded: 2,000 packages and 50 levels. Anything
 left unresolved is listed with the range and reason, and an incomplete plan

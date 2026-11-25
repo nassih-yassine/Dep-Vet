@@ -8,6 +8,10 @@
   compile/runtime dependencies, and applies Maven's nearest-definition
   mediation. Profiles are never evaluated; ranges and `LATEST`/`RELEASE` are
   reported as unresolved; a missing POM or required edge exits `3`.
+- **`plan maven ./pom.xml` reads a local project.** The same resolver builds the
+  project's effective model (its parent and BOMs are fetched, the project itself
+  is not) and walks its declared compile/runtime dependencies. A parent that
+  exists only beside the project is reported as unresolved.
 
 ## 0.15.0 — 2026-11-25
 
