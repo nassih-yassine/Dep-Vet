@@ -108,6 +108,16 @@ Any refusal is a tool error (exit `3`) with the offending host named; it is
 never a clean result. The reusable GitHub Action does not set or forward these
 variables.
 
+### Pull-request policy
+
+The reusable action runs on `pull_request`, where `actions/checkout` gives it
+the pull request's merge commit. Before `dep-vet lock`, it replaces
+`.depvet.toml` with the version from the base revision (or removes the file when
+the base has none). A pull request therefore cannot add allow entries, disable
+signals, or loosen `[policy]` to pass its own check. The step logs which policy
+it used; a `git show` failure stops the job rather than falling back to the PR
+copy. Local runs still read the working tree, because a local reviewer owns it.
+
 ## Verifying what you download
 
 No channel asks you to trust a download blindly. Each one exposes a check you

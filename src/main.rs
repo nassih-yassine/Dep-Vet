@@ -235,8 +235,11 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             emit(&output, report.exit_code())
         }
 
-        Command::McpConfig { path, json } => {
-            let report = dep_vet::mcp_config::scan(path.as_deref())?;
+        Command::McpConfig { path, user, json } => {
+            let report = dep_vet::mcp_config::scan_with(dep_vet::mcp_config::ScanOptions {
+                path: path.clone(),
+                user: *user,
+            })?;
             let output = if *json {
                 dep_vet::report::render_mcp_config_json(&report)?
             } else {

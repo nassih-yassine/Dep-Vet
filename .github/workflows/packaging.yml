@@ -31,6 +31,7 @@ jobs:
           # Build from the tag, so the attestation names refs/tags/vX.Y.Z and can
           # be verified against it.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || inputs.tag }}
+          persist-credentials: false
       - name: Validate the tag
         id: tag
         env:

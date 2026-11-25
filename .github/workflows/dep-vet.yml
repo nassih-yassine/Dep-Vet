@@ -82,6 +82,19 @@ jobs:
             esac
           done < <(env)
           base="${BASE_INPUT:-origin/$PR_BASE}"
+          # The pull request must not loosen or allowlist its own findings:
+          # evaluate the policy from the base revision, not the checked-out PR.
+          if ! printf '%s' "$base" | grep -Eq '^[A-Za-z0-9._/-]+$'; then
+            echo "::error::invalid base ref '$base'"
+            exit 3
+          fi
+          if git cat-file -e "$base:.depvet.toml" 2>/dev/null; then
+            git show --no-ext-diff --end-of-options "$base:.depvet.toml" > .depvet.toml
+            echo "policy: using .depvet.toml from $base"
+          else
+            rm -f .depvet.toml
+            echo "policy: no .depvet.toml at $base"
+          fi
           set +e
           dep-vet lock "$LOCKFILE" --base "$base" > dep-vet-report.txt 2>&1
           status=$?

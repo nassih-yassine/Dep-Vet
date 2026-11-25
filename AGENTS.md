@@ -200,26 +200,37 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **The workflow scan is text, not YAML.** `src/workflows.rs` follows `on:`,
   `jobs:`, and `run:` indentation, strips comments with a quote-aware scanner,
   and never executes or evaluates anything. Only a 40-character hex commit pins
-  an action; `pull_request_target` becomes HIGH only when a
-  `github.event.pull_request.head` line is also present; the injection rule
-  matches a fixed list of attacker-controlled fields (never
-  `github.event_name` or `github.repository`); a `run:` block ends at the next
-  line that is not indented deeper than the key. A missing path, unreadable file,
-  or file over 5 MB exits `3`. Findings are file-scoped and not allowlistable.
-  Running it on this repository reports its own cargo-dist and rustup
-  `curl | sh` lines as HIGH: that is the rule working, not a regression.
+  an action; a Docker reference needs `@sha256:` plus 64 hex. PR-target findings
+  are per job and require an untrusted ref (`github.event.pull_request.head`,
+  `github.head_ref`, or `refs/pull/`); `github-script`'s `script:` blocks are
+  scanned like `run:`. Injection fields are a fixed list: event fields are HIGH,
+  `inputs.*` is INFO, and `github.event_name`/`github.repository` never match.
+  The other WARN rules are `checkout-persist-credentials` (privileged triggers),
+  `workflow-run-artifact-download`, `self-hosted-pr`, `secrets-inherit`, and
+  `env-file-injection`. A missing path, unreadable file, or file over 5 MB exits
+  `3`. Findings are file-scoped and not allowlistable. This is a first pass, not
+  a YAML engine: no anchors, expression evaluation, or reusable-workflow
+  semantics, and it cannot prove fork origin for self-hosted runners. Document
+  that and point at zizmor/actionlint instead of implying completeness. Running
+  it on this repository reports its own cargo-dist and rustup `curl | sh` lines
+  as HIGH: that is the rule working, not a regression.
 - **The MCP scan never starts a server.** `src/mcp_config.rs` parses JSON with
-  `serde_json` and supports both `mcpServers` and `servers`. Literal secret
-  values are redacted from the detail and must not be printed by tests; `${…}`,
-  `op://`, `file://`, `env:`, and placeholder values do not count as secrets.
-  Only a version after `@`/`==` that starts with a digit pins an npm/PyPI
-  package, and only `@sha256:` pins a Docker image. Loopback `http` is allowed
-  because local MCP servers use it; every other `http` URL is HIGH. URL
-  evidence drops userinfo, the query, and the fragment so tokens cannot leak
-  into a report. The report names the server and field but never prints the
-  resolved command line: arguments can carry tokens, and a scan must not leak
-  them. Malformed JSON and unreadable paths exit `3`; an empty search
-  is a clean result.
+  `serde_json`, accepts JSONC via `lockfile::strip_jsonc` only after strict JSON
+  fails, and supports both `mcpServers` and `servers`. Servers are hand-parsed:
+  scalars are accepted wherever a string is expected, and a shape that cannot be
+  read becomes WARN `mcp-server-unreadable` while still counting toward the
+  server total. Literal secret values are redacted from the detail and must not
+  be printed by tests; `${…}`, `op://`, `file://`, `env:`, and placeholder
+  values do not count. Secret-looking arguments (`--token`, `--api-key`,
+  `Authorization: Bearer`) and secret query parameters are HIGH, with the value
+  redacted. Only a version after `@`/`==` that starts with a digit pins an
+  npm/PyPI package, and only `@sha256:` pins a Docker image. Loopback `http` is
+  allowed because local MCP servers use it; every other `http` URL is HIGH.
+  `safe_evidence` drops URL userinfo/query/fragment and escapes control and
+  invisible characters. `--user` adds the per-user Claude/Cursor/Windsurf/VS
+  Code/Cline files, with the path list kept pure for per-platform tests. The
+  report never prints the resolved command line: arguments can carry tokens.
+  Malformed JSON and unreadable paths exit `3`; an empty search is clean.
 - **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
   uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
   they show as `not checked`. The `PackageSource` trait is still deferred: two
@@ -613,7 +624,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 - **CI uses `--locked`.** Keep it on clippy and test commands, or CI can pass on
   crate versions that are not in `Cargo.lock`.
 - **The action's `ref` input is the real pin.** `uses: ...@v1` pins the workflow
-  file, not the binary; the install step builds `ref` (tag or branch).
+  file, not the binary; the install step builds `ref` (tag or branch). The job
+  also replaces `.depvet.toml` with the base revision's copy (or removes it)
+  before `dep-vet lock`, so a PR cannot allowlist or loosen its own findings.
 - **PR comments are capped at 60,000 bytes** because GitHub rejects bodies over
   65,536 characters. The full report is printed to the job log as well.
 - **Workflow YAML is not covered by `cargo test`.** Validate it with

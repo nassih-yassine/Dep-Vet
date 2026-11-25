@@ -65,16 +65,40 @@ impl McpConfigReport {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct ScanOptions {
+    pub path: Option<PathBuf>,
+    /// Also look in the per-user config locations for Claude, Cursor, Windsurf,
+    /// VS Code, and Cline.
+    pub user: bool,
+}
+
 /// Scan a config file or a directory containing the known config names. With
 /// no path, scan the current directory for them. A missing explicit path is an
 /// error; finding no config files is a clean, empty report.
 pub fn scan(path: Option<&Path>) -> Result<McpConfigReport, McpConfigError> {
-    let files = match path {
+    scan_with(ScanOptions {
+        path: path.map(Path::to_path_buf),
+        user: false,
+    })
+}
+
+pub fn scan_with(options: ScanOptions) -> Result<McpConfigReport, McpConfigError> {
+    let mut files = match options.path.as_deref() {
         Some(path) if path.is_file() => vec![path.to_path_buf()],
         Some(path) if path.is_dir() => known_files(path),
         Some(path) => return Err(McpConfigError::NotADirectory(path.display().to_string())),
         None => known_files(Path::new(".")),
     };
+    if options.user {
+        files.extend(
+            user_config_paths()
+                .into_iter()
+                .filter(|path| path.is_file()),
+        );
+    }
+    files.sort();
+    files.dedup();
 
     let mut report = McpConfigReport {
         files: Vec::new(),
@@ -132,6 +156,61 @@ fn known_files(directory: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// Per-user locations, kept as a pure function so each platform can be tested
+/// on any host. Missing files are skipped; an existing one is still read.
+pub(crate) fn user_paths(
+    home: &Path,
+    appdata: Option<&Path>,
+    macos: bool,
+    windows: bool,
+) -> Vec<PathBuf> {
+    let mut paths = vec![
+        home.join(".claude.json"),
+        home.join(".cursor").join("mcp.json"),
+        home.join(".codeium/windsurf/mcp_config.json"),
+    ];
+    if windows {
+        if let Some(appdata) = appdata {
+            paths.push(appdata.join("Claude").join("claude_desktop_config.json"));
+            paths.push(appdata.join("Code").join("User").join("mcp.json"));
+            paths.push(appdata.join(
+                "Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+            ));
+        }
+    } else if macos {
+        let support = home.join("Library/Application Support");
+        paths.push(support.join("Claude").join("claude_desktop_config.json"));
+        paths.push(support.join("Code/User/mcp.json"));
+        paths.push(support.join(
+            "Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        ));
+    } else {
+        let config = home.join(".config");
+        paths.push(config.join("Claude").join("claude_desktop_config.json"));
+        paths.push(config.join("Code/User/mcp.json"));
+        paths.push(config.join(
+            "Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        ));
+    }
+    paths
+}
+
+fn user_config_paths() -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+    user_paths(
+        &home,
+        appdata.as_deref(),
+        cfg!(target_os = "macos"),
+        cfg!(target_os = "windows"),
+    )
+}
+
 fn server_of(finding: &Finding) -> String {
     finding
         .evidence
@@ -141,41 +220,144 @@ fn server_of(finding: &Finding) -> String {
         .unwrap_or_default()
 }
 
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Debug, Default)]
 struct Server {
-    #[serde(default)]
     command: Option<String>,
-    #[serde(default)]
     args: Vec<String>,
-    #[serde(default)]
     env: BTreeMap<String, String>,
-    #[serde(default)]
     url: Option<String>,
-    #[serde(default)]
     headers: BTreeMap<String, String>,
 }
 
+/// Servers are hand-parsed, not derived: a config that uses a number or bool
+/// where a string is expected is read leniently, and one that cannot be read
+/// becomes a finding instead of disappearing.
+fn parse_server(value: &serde_json::Value) -> Result<Server, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "server is not an object".to_string())?;
+    Ok(Server {
+        command: optional_scalar(object.get("command"))
+            .map_err(|()| "command is not a string".to_string())?,
+        url: optional_scalar(object.get("url")).map_err(|()| "url is not a string".to_string())?,
+        args: parse_args(object.get("args"))?,
+        env: parse_pairs(object.get("env"), "env")?,
+        headers: parse_pairs(object.get("headers"), "headers")?,
+    })
+}
+
+fn scalar(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        serde_json::Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn optional_scalar(value: Option<&serde_json::Value>) -> Result<Option<String>, ()> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(value) => scalar(value).map(Some).ok_or(()),
+    }
+}
+
+fn parse_args(value: Option<&serde_json::Value>) -> Result<Vec<String>, String> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(serde_json::Value::String(text)) => Ok(vec![text.clone()]),
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                scalar(item).ok_or_else(|| format!("args[{index}] is not a string"))
+            })
+            .collect(),
+        Some(_) => Err("args is neither a string nor an array".to_string()),
+    }
+}
+
+fn parse_pairs(
+    value: Option<&serde_json::Value>,
+    field: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(BTreeMap::new()),
+        Some(serde_json::Value::Object(map)) => map
+            .iter()
+            .map(|(key, value)| {
+                scalar(value)
+                    .map(|text| (key.clone(), text))
+                    .ok_or_else(|| format!("{field}.{key} is not a string"))
+            })
+            .collect(),
+        Some(serde_json::Value::Array(items)) => {
+            let mut pairs = BTreeMap::new();
+            for (index, item) in items.iter().enumerate() {
+                let text = item
+                    .as_str()
+                    .ok_or_else(|| format!("{field}[{index}] is not a string"))?;
+                let (key, value) = text
+                    .split_once('=')
+                    .ok_or_else(|| format!("{field}[{index}] has no '='"))?;
+                pairs.insert(key.to_string(), value.to_string());
+            }
+            Ok(pairs)
+        }
+        Some(_) => Err(format!("{field} is neither an object nor an array")),
+    }
+}
+
+/// Strict JSON first, then the JSONC stripper used for `bun.lock`. Config files
+/// with comments should parse, but a second failure stays an error.
+fn parse_document(body: &str) -> Result<serde_json::Value, String> {
+    match serde_json::from_str(body) {
+        Ok(document) => Ok(document),
+        Err(error) => {
+            let stripped = crate::lockfile::strip_jsonc(body);
+            if stripped == body {
+                return Err(error.to_string());
+            }
+            serde_json::from_str(&stripped).map_err(|_| error.to_string())
+        }
+    }
+}
+
 fn scan_text(path: &str, body: &str) -> Result<(usize, Vec<Finding>), McpConfigError> {
-    let document: serde_json::Value =
-        serde_json::from_str(body).map_err(|error| McpConfigError::Decode {
-            path: path.to_string(),
-            message: error.to_string(),
-        })?;
-    let mut servers: BTreeMap<&str, Server> = BTreeMap::new();
+    let document = parse_document(body).map_err(|message| McpConfigError::Decode {
+        path: path.to_string(),
+        message,
+    })?;
+    let mut raw: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     for key in ["mcpServers", "servers"] {
         let Some(map) = document.get(key).and_then(serde_json::Value::as_object) else {
             continue;
         };
         for (name, value) in map {
-            if let Ok(server) = serde_json::from_value::<Server>(value.clone()) {
-                servers.entry(name.as_str()).or_insert(server);
-            }
+            raw.entry(name.clone()).or_insert_with(|| value.clone());
         }
     }
 
     let mut findings = Vec::new();
     let mut text_findings = 0;
-    for (name, server) in &servers {
+    for (name, value) in &raw {
+        let server = match parse_server(value) {
+            Ok(server) => server,
+            Err(reason) => {
+                findings.push(finding(
+                    "mcp-server-unreadable",
+                    Severity::Warn,
+                    path,
+                    name,
+                    "server",
+                    "server entry could not be read",
+                    &format!("{reason}; it was not checked"),
+                    REMOTE_LAUNCH_REFERENCE,
+                    "[not read]",
+                ));
+                continue;
+            }
+        };
         let mut strings: Vec<(String, &str)> = Vec::new();
         if let Some(command) = &server.command {
             strings.push(("command".to_string(), command.as_str()));
@@ -257,8 +439,42 @@ fn scan_text(path: &str, body: &str) -> Result<(usize, Vec<Finding>), McpConfigE
             }
         }
 
+        if !server.args.is_empty()
+            && let Some(flag) = argument_secret(&server.args.join(" "))
+        {
+            findings.push(finding(
+                "mcp-plaintext-secret",
+                Severity::High,
+                path,
+                name,
+                "args",
+                "secret is passed as an argument",
+                &format!(
+                    "argument '{flag}' carries a literal secret; pass it through the environment"
+                ),
+                SECRET_REFERENCE,
+                "[redacted]",
+            ));
+        }
+
         for (field, value) in &strings {
             if let Some(url) = urls(value).first() {
+                if let Some(parameter) = query_secret(url) {
+                    findings.push(finding(
+                        "mcp-plaintext-secret",
+                        Severity::High,
+                        path,
+                        name,
+                        field,
+                        "secret is in the URL query string",
+                        &format!(
+                            "query parameter '{parameter}' carries a secret in {}; query strings are logged and cached",
+                            redact_url(url)
+                        ),
+                        SECRET_REFERENCE,
+                        "[redacted]",
+                    ));
+                }
                 if let Some(reason) = insecure_url(url) {
                     findings.push(finding(
                         "mcp-insecure-url",
@@ -328,7 +544,71 @@ fn scan_text(path: &str, body: &str) -> Result<(usize, Vec<Finding>), McpConfigE
             }
         }
     }
-    Ok((servers.len(), findings))
+    Ok((raw.len(), findings))
+}
+
+const SECRET_FLAGS: &[&str] = &[
+    "token",
+    "api-key",
+    "apikey",
+    "api_key",
+    "password",
+    "passwd",
+    "secret",
+    "auth",
+    "access-token",
+    "client-secret",
+];
+const SECRET_QUERY: &[&str] = &[
+    "token",
+    "access_token",
+    "api_key",
+    "apikey",
+    "key",
+    "secret",
+    "client_secret",
+    "password",
+    "sig",
+    "signature",
+    "auth",
+];
+
+/// A literal secret passed as an argument: `--token abc`, `--api-key=abc`, or
+/// an inline `Authorization: Bearer ...`.
+fn argument_secret(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    if (lower.contains("authorization:") || lower.contains("authorization="))
+        && lower.contains("bearer")
+    {
+        return Some("authorization".to_string());
+    }
+    let tokens: Vec<&str> = value.split_whitespace().collect();
+    for (index, token) in tokens.iter().enumerate() {
+        let (flag, inline) = match token.split_once('=') {
+            Some((flag, inline)) => (flag, Some(inline)),
+            None => (*token, None),
+        };
+        let flag = flag.trim_start_matches('-').to_ascii_lowercase();
+        if !SECRET_FLAGS.contains(&flag.as_str()) {
+            continue;
+        }
+        if inline.is_some_and(|inline| !inline.is_empty()) {
+            return Some(flag);
+        }
+        if tokens
+            .get(index + 1)
+            .is_some_and(|next| !next.starts_with('-') && !next.is_empty())
+        {
+            return Some(flag);
+        }
+    }
+    None
+}
+
+fn query_secret(url: &url::Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(key, _)| SECRET_QUERY.contains(&key.to_ascii_lowercase().as_str()))
+        .map(|(key, _)| key.to_string())
 }
 
 fn command_basename(command: &str) -> &str {
@@ -565,22 +845,22 @@ fn finding(
         id,
         severity,
         title: title.to_string(),
-        detail: format!("{detail}; value: {}", truncate(value, 120)),
+        detail: format!("{detail}; value: {}", safe_evidence(field, value)),
         allowed: false,
         evidence: vec![
             Evidence {
                 label: "config".to_string(),
-                value: path.to_string(),
+                value: safe_evidence("config", path),
                 url: None,
             },
             Evidence {
                 label: "server".to_string(),
-                value: server.to_string(),
+                value: safe_evidence("server", server),
                 url: None,
             },
             Evidence {
                 label: "field".to_string(),
-                value: field.to_string(),
+                value: safe_evidence("field", field),
                 url: None,
             },
             Evidence {
@@ -590,6 +870,28 @@ fn finding(
             },
         ],
     }
+}
+
+/// Evidence that cannot leak a secret or hide text: env/header values are
+/// redacted, URLs lose userinfo/query/fragment, and control or invisible
+/// characters are escaped.
+fn safe_evidence(field: &str, value: &str) -> String {
+    if field.starts_with("env.") || field.starts_with("headers.") {
+        return "[redacted]".to_string();
+    }
+    let trimmed = value.trim();
+    let redacted = url::Url::parse(trimmed)
+        .map(|url| redact_url(&url))
+        .unwrap_or_else(|_| trimmed.to_string());
+    let mut escaped = String::new();
+    for character in redacted.chars() {
+        if character.is_control() || crate::rules::is_invisible_char(character) {
+            escaped.push_str(&format!("\\u{{{:04X}}}", character as u32));
+        } else {
+            escaped.push(character);
+        }
+    }
+    truncate(&escaped, 160)
 }
 
 fn truncate(value: &str, limit: usize) -> String {
@@ -749,6 +1051,41 @@ mod tests {
     }
 
     #[test]
+    fn user_paths_follow_each_platform() {
+        let home = Path::new("/home/u");
+        let linux = user_paths(home, None, false, false);
+        for expected in [
+            "/home/u/.claude.json",
+            "/home/u/.cursor/mcp.json",
+            "/home/u/.config/Claude/claude_desktop_config.json",
+            "/home/u/.config/Code/User/mcp.json",
+            "/home/u/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        ] {
+            assert!(
+                linux.iter().any(|path| path == Path::new(expected)),
+                "{expected}"
+            );
+        }
+
+        let mac = user_paths(home, None, true, false);
+        assert!(mac.iter().any(|path| path
+            == Path::new("/home/u/Library/Application Support/Claude/claude_desktop_config.json")));
+
+        let appdata = Path::new("C:/Users/u/AppData/Roaming");
+        let windows = user_paths(home, Some(appdata), false, true);
+        assert!(
+            windows
+                .iter()
+                .any(|path| path == &appdata.join("Claude/claude_desktop_config.json"))
+        );
+        assert!(
+            windows
+                .iter()
+                .any(|path| path == &appdata.join("Code/User/mcp.json"))
+        );
+    }
+
+    #[test]
     fn the_servers_shape_and_empty_configs_work() {
         let (servers, findings) =
             scan_json(r#"{"servers":{"x":{"command":"node","args":["server.js"]}}}"#);
@@ -773,6 +1110,131 @@ mod tests {
         let text = format!("{:?}", finding);
         assert!(!text.contains("abc123"), "{text}");
         assert!(!text.contains("pass"), "{text}");
+    }
+
+    #[test]
+    fn evidence_escapes_invisible_characters() {
+        let body = r#"{"mcpServers":{"x":{
+            "command":"node",
+            "env":{"TOKEN":"abc\u200bdef"}
+        }}}"#;
+        let (_, findings) = scan_json(body);
+        let finding = findings
+            .iter()
+            .find(|finding| finding.id == "mcp-plaintext-secret")
+            .unwrap();
+        let text = format!("{finding:?}");
+        assert!(!text.contains('\u{200b}'), "raw zero-width leaked: {text}");
+        assert!(text.contains("[redacted]"), "{text}");
+
+        let body = r#"{"mcpServers":{"\u202eevil":{"command":"node","args":["x\u202ey"]}}}"#;
+        let (_, findings) = scan_json(body);
+        let text = format!("{findings:?}");
+        assert!(text.contains("\\u{202E}"), "{text}");
+        assert!(!text.contains('\u{202e}'), "{text}");
+    }
+
+    #[test]
+    fn secrets_in_arguments_and_query_strings_are_flagged_without_the_value() {
+        let body = r#"{"mcpServers":{
+            "flag":{"command":"node","args":["--token","abc123"]},
+            "query":{"url":"https://mcp.example.test/sse?token=abc123"}
+        }}"#;
+        let (_, findings) = scan_json(body);
+        let secrets: Vec<&Finding> = findings
+            .iter()
+            .filter(|finding| finding.id == "mcp-plaintext-secret")
+            .collect();
+        assert_eq!(secrets.len(), 2, "{findings:?}");
+        let text = format!("{secrets:?}");
+        assert!(!text.contains("abc123"), "{text}");
+        assert!(
+            text.contains("mcp.example.test"),
+            "the host stays visible: {text}"
+        );
+        assert!(
+            secrets
+                .iter()
+                .any(|finding| finding.title == "secret is passed as an argument")
+        );
+        assert!(
+            secrets
+                .iter()
+                .any(|finding| finding.title == "secret is in the URL query string")
+        );
+    }
+
+    #[test]
+    fn scalar_values_are_read_leniently() {
+        let body = r#"{"mcpServers":{
+            "numbers":{"command":"node","args":[1,true,"server.js"],"env":{"PORT":3000}},
+            "string-args":{"command":"node","args":"server.js"},
+            "array-env":{"command":"node","env":["TOKEN=${TOKEN}","MODE=dev"]},
+            "bool-header":{"command":"node","headers":{"X-Debug":true}}
+        }}"#;
+        let (servers, findings) = scan_json(body);
+        assert_eq!(servers, 4);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn an_unreadable_server_is_counted_and_reported() {
+        let body = r#"{"mcpServers":{
+            "good":{"command":"node"},
+            "broken":{"command":"npx","args":[{"nested":"object"}]},
+            "not-object":"node"
+        }}"#;
+        let (servers, findings) = scan_json(body);
+        assert_eq!(servers, 3, "every entry is counted");
+        let unreadable: Vec<String> = findings
+            .iter()
+            .filter(|finding| finding.id == "mcp-server-unreadable")
+            .map(server_of)
+            .collect();
+        assert_eq!(unreadable.len(), 2);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.severity == Severity::Warn)
+        );
+        let detail = &findings
+            .iter()
+            .find(|finding| finding.title == "server entry could not be read")
+            .unwrap()
+            .detail;
+        assert!(detail.contains("not checked"), "{detail}");
+        assert!(
+            !detail.contains("nested"),
+            "the value must not be echoed: {detail}"
+        );
+    }
+
+    #[test]
+    fn jsonc_comments_and_trailing_commas_are_accepted() {
+        let body = r#"{
+            // the local server
+            "mcpServers": {
+                /* pinned */ "local": {"command":"node", "args":["server.js"],},
+            },
+        }"#;
+        let (servers, findings) = scan_json(body);
+        assert_eq!(servers, 1);
+        assert!(findings.is_empty());
+
+        let urls =
+            r#"{"mcpServers":{"x":{"command":"node","args":["https://example.test/a//b"]}}}"#;
+        assert!(
+            scan_json(urls).1.is_empty(),
+            "// inside a string is not a comment"
+        );
+    }
+
+    #[test]
+    fn still_invalid_json_stays_a_tool_error() {
+        assert!(matches!(
+            scan_text("cfg.json", "{ // comment\n broken"),
+            Err(McpConfigError::Decode { .. })
+        ));
     }
 
     #[test]

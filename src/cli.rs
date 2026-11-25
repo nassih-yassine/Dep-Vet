@@ -291,6 +291,10 @@ pub enum Command {
         /// Config file or directory (default: the known names in this directory)
         path: Option<std::path::PathBuf>,
 
+        /// Also scan the per-user Claude, Cursor, Windsurf, VS Code, and Cline configs
+        #[arg(long)]
+        user: bool,
+
         /// Print machine-readable JSON instead of a human report
         #[arg(long)]
         json: bool,
