@@ -680,7 +680,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `refs/heads/main`: GitHub's OIDC token describes the dispatch ref, not the tag
   the job checks out, so verification uses `--source-ref refs/heads/main`. AUR
   (`packaging/aur/PKGBUILD`, `dep-vet-bin`) is published by hand with the
-  release checksums; `.SRCINFO` is generated, never edited.
+  release checksums; `.SRCINFO` is generated, never edited. The smoke test
+  compares `dep-vet --version` with the tag's version output, never a literal:
+  a hardcoded `0.13` failed the 0.14.0 run after the packages themselves built.
 - **`update` is guidance, never a verdict or an installer.** `src/update.rs`
   reads one GitHub document, compares `semver`, and prints the channel command.
   Exit codes are `0` current, `1` newer with `--check`, `3` check failed; it must
