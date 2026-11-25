@@ -42,6 +42,11 @@
   are redacted; `${VAR}`, `op://`, and placeholders are not treated as secrets.
   Loopback `http` URLs are allowed. Malformed JSON and unreadable paths exit
   `3`; finding no config files is a clean, empty result.
+- **npm 0.14.0 was published from the release assets by hand.** Trusted
+  publishing is still blocked until the npm account has account-level 2FA, and
+  the CI token is empty. The upload was built and checksum/attestation-verified
+  from the GitHub release, but a workstation upload carries no npm provenance
+  attestation. This is the documented fallback, not the normal path.
 - **Install policy thresholds and license rules are configurable.** A new
   `[policy]` section in `.depvet.toml` accepts `min_age_days`,
   `min_weekly_downloads`, `require_provenance`, `max_advisory_severity`,
