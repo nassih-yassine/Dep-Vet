@@ -12,6 +12,11 @@
   project's effective model (its parent and BOMs are fetched, the project itself
   is not) and walks its declared compile/runtime dependencies. A parent that
   exists only beside the project is reported as unresolved.
+- **npm 0.16.0 was published from the release assets by hand.** Trusted
+  publishing is still blocked until the npm account has account-level 2FA, and
+  the CI token is empty. The upload was built and checksum/attestation-verified
+  from the GitHub release, but a workstation upload carries no npm provenance
+  attestation. This is the documented fallback, not the normal path.
 
 ## 0.15.0 — 2026-11-25
 
