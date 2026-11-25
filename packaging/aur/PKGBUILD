@@ -1,6 +1,6 @@
 # Maintainer: nassih-yassine <https://github.com/nassih-yassine>
 pkgname=dep-vet-bin
-pkgver=0.16.0
+pkgver=0.16.1
 pkgrel=1
 pkgdesc="Check a dependency's risk before it enters your lockfile"
 arch=('x86_64' 'aarch64')
@@ -11,8 +11,8 @@ conflicts=('dep-vet')
 options=('!strip' '!debug')
 source_x86_64=("${url}/releases/download/v${pkgver}/dep-vet-x86_64-unknown-linux-musl.tar.xz")
 source_aarch64=("${url}/releases/download/v${pkgver}/dep-vet-aarch64-unknown-linux-musl.tar.xz")
-sha256sums_x86_64=('80b02ed7ac4497f0868c57420f1221138a9782481e38484839152763aa15a833')
-sha256sums_aarch64=('ac04bd500a0c72b8e5ae8c282a953a66a5822fcd68a5d311fd9cef036c37db69')
+sha256sums_x86_64=('f694c6ce39c6a6a1ed2404ae4781a1b7bce528e9fb772671e4b36ae60b55590c')
+sha256sums_aarch64=('3589f678a2f7acb1ac49d3d88b93f09da7d09372fb292fb2c23f6cd4db4932f1')
 
 package() {
   local target

@@ -8,12 +8,12 @@
     "url": "https://github.com/nassih-yassine/Dep-Vet",
     "source": "github"
   },
-  "version": "0.16.0",
+  "version": "0.16.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@nassihyas/dep-vet",
-      "version": "0.16.0",
+      "version": "0.16.1",
       "transport": {
         "type": "stdio"
       },

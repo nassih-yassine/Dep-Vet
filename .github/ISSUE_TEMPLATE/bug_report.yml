@@ -14,7 +14,7 @@ body:
     attributes:
       label: dep-vet version
       description: Output of `dep-vet --version`.
-      placeholder: dep-vet 0.16.0
+      placeholder: dep-vet 0.16.1
     validations:
       required: true
 

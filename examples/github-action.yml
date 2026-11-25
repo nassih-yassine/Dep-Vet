@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   dep-vet:
-    uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@v0.16.0
+    uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@v0.16.1
     with:
       # Any lockfile dep-vet supports; default is package-lock.json.
       lockfile: package-lock.json
