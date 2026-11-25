@@ -535,9 +535,11 @@ fn install_scripts(doc: &VersionDoc) -> Vec<InstallScript> {
     doc.scripts
         .iter()
         .filter(|(hook, _)| INSTALL_HOOKS.contains(&hook.as_str()))
-        .map(|(name, command)| InstallScript {
-            name: name.clone(),
-            command: command.clone(),
+        .filter_map(|(name, command)| {
+            Some(InstallScript {
+                name: name.clone(),
+                command: command.as_str()?.to_string(),
+            })
         })
         .collect()
 }
@@ -565,8 +567,10 @@ struct Attestations {
 struct VersionDoc {
     #[serde(default)]
     dist: Option<Dist>,
+    /// Old packages occasionally publish a non-string where npm expects a
+    /// command; only string hooks are scripts.
     #[serde(default)]
-    scripts: BTreeMap<String, String>,
+    scripts: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     dependencies: BTreeMap<String, String>,
     #[serde(default, rename = "optionalDependencies")]
@@ -611,6 +615,8 @@ enum RepoField {
         #[serde(default)]
         url: Option<String>,
     },
+    /// Old packuments occasionally carry a list of repository objects.
+    List(Vec<RepoField>),
 }
 
 fn parse_packument(
@@ -791,6 +797,7 @@ fn repo_url(field: &RepoField) -> Option<String> {
     match field {
         RepoField::Url(url) => Some(url.clone()),
         RepoField::Object { url } => url.clone(),
+        RepoField::List(fields) => fields.iter().find_map(repo_url),
     }
 }
 
@@ -889,6 +896,38 @@ mod tests {
             date::parse_timestamp("2024-06-01T00:00:00.000Z")
         );
         assert_eq!(meta.release.publishers, vec!["alice", "bob"]);
+    }
+
+    #[test]
+    fn odd_real_world_shapes_do_not_fail_the_parse() {
+        let body = r#"{
+            "name": "evil-pkg",
+            "dist-tags": { "latest": "1.0.0" },
+            "maintainers": [{ "name": "alice" }],
+            "time": {
+                "created": "2024-01-01T00:00:00.000Z",
+                "1.0.0": "2024-01-02T00:00:00.000Z"
+            },
+            "versions": {
+                "1.0.0": {
+                    "scripts": {
+                        "install": { "not": "a command" },
+                        "postinstall": "node x.js"
+                    },
+                    "repository": [
+                        { "type": "git", "url": "https://github.com/a/b.git" }
+                    ],
+                    "_npmUser": { "name": "alice" }
+                }
+            }
+        }"#;
+        let meta = fetch(body, None).expect("old packument shapes must parse");
+        assert_eq!(meta.install_scripts.len(), 1);
+        assert_eq!(meta.install_scripts[0].command, "node x.js");
+        assert_eq!(
+            meta.repository.as_deref(),
+            Some("https://github.com/a/b.git")
+        );
     }
 
     #[test]

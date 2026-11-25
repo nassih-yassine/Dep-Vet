@@ -262,6 +262,9 @@ If the current directory or a parent contains `package-lock.json`, its dependenc
 names join the typosquat list, so a package one edit from something you already
 use is flagged. `--no-local` ignores it.
 
+A reproducible run against a real project, with captured output and how to read
+it, lives in [`examples/nodegoat`](examples/nodegoat).
+
 ### Allowlists
 
 ```toml

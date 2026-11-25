@@ -18,6 +18,14 @@
   downloads, self-hosted pull requests, `secrets: inherit`, and `$GITHUB_ENV`
   injection. The reusable Action now evaluates the base revision's
   `.depvet.toml`, so a pull request cannot loosen its own policy.
+- **Old packuments no longer fail the whole audit.** Some real packages publish
+  a non-string `scripts` value or a list under `repository`; the npm parser now
+  keeps only string install hooks and reads the first repository URL instead of
+  rejecting the package as unreadable.
+- **A reproducible real-world example lives in `examples/nodegoat`.** It pins
+  OWASP NodeGoat at one commit, runs the package, workflow, archive, and tree
+  checks, and records how to read the output, including an honest exit `3` when
+  a lockfile references a version that no longer exists.
 
 ## 0.14.0 — 2026-11-25
 
