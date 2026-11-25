@@ -1167,21 +1167,23 @@ pub fn assess(
         && !is_automation_publisher(publisher)
         && !publisher.eq_ignore_ascii_case(previous)
     {
-        let new_to_recent = !meta.release.recent_publishers.is_empty()
-            && !meta
-                .release
-                .recent_publishers
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(publisher));
+        let published_before = meta
+            .release
+            .publishers
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(publisher));
         findings.push(Finding {
             id: "publisher-changed",
             severity: Severity::Info,
             title: "a different maintainer published this version".to_string(),
-            detail: if new_to_recent {
+            detail: if !meta.release.publishers.is_empty() && !published_before {
                 format!(
-                    "this version was published by '{publisher}', who is on the maintainer list but not among the last {} publisher(s) [{}]; the previous release was published by '{previous}'",
-                    meta.release.recent_publishers.len(),
-                    meta.release.recent_publishers.join(", ")
+                    "this version was published by '{publisher}', who has not published this package before; the previous release was published by '{previous}'"
+                )
+            } else if let Some(last) = meta.release.publisher_last_at {
+                format!(
+                    "this version was published by '{publisher}', who last published this package on {}; the previous release was published by '{previous}'",
+                    date::format_date(last)
                 )
             } else {
                 format!(
@@ -2200,17 +2202,39 @@ mod tests {
     }
 
     #[test]
-    fn a_publisher_new_to_recent_history_is_called_out() {
+    fn a_publisher_new_to_history_is_called_out() {
         let mut meta = meta();
         meta.publisher = Some("bob".to_string());
         meta.maintainers = vec!["alice".to_string(), "bob".to_string()];
         meta.release.previous_publisher = Some("alice".to_string());
-        meta.release.recent_publishers = vec!["alice".to_string(), "carol".to_string()];
+        meta.release.publishers = vec!["alice".to_string(), "carol".to_string()];
         let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
         let finding = finding(&findings, "publisher-changed");
         assert_eq!(finding.severity, Severity::Info);
         assert!(
-            finding.detail.contains("not among the last 2 publisher"),
+            finding
+                .detail
+                .contains("has not published this package before"),
+            "{finding:?}"
+        );
+    }
+
+    #[test]
+    fn a_returning_publisher_names_the_last_release_date() {
+        let mut meta = meta();
+        meta.publisher = Some("bob".to_string());
+        meta.maintainers = vec!["alice".to_string(), "bob".to_string()];
+        meta.release.previous_publisher = Some("alice".to_string());
+        meta.release.publishers = vec!["alice".to_string(), "bob".to_string()];
+        let last = NOW - 400 * date::SECONDS_PER_DAY;
+        meta.release.publisher_last_at = Some(last);
+        let findings = assess(&meta, Ecosystem::Npm, &[], &Profile::NPM, NOW);
+        let finding = finding(&findings, "publisher-changed");
+        assert!(
+            finding.detail.contains(&format!(
+                "last published this package on {}",
+                date::format_date(last)
+            )),
             "{finding:?}"
         );
     }

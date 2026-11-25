@@ -65,9 +65,14 @@ pub struct ReleaseHistory {
     pub previous_version: Option<String>,
     pub previous_published_at: Option<i64>,
     pub previous_publisher: Option<String>,
-    /// Publishers of the most recent prior releases, newest first, deduplicated
-    /// case-insensitively. Bounded: this is recent history, not all history.
-    pub recent_publishers: Vec<String>,
+    /// Every publisher who released an earlier version, newest activity first,
+    /// deduplicated case-insensitively. Capped so a hostile packument cannot
+    /// grow it without bound.
+    pub publishers: Vec<String>,
+    /// When the audited version's publisher last released this package before
+    /// this version. `None` means they have not published it before, or the
+    /// ecosystem does not expose who published each release.
+    pub publisher_last_at: Option<i64>,
     pub previous_install_scripts: Vec<InstallScript>,
     pub previous_dependencies: Vec<String>,
     pub dependencies: Vec<String>,
@@ -82,19 +87,28 @@ pub struct ReleaseHistory {
     pub previous_provenance: Option<bool>,
 }
 
-/// How many prior releases feed the publisher history.
-pub const PUBLISHER_HISTORY: usize = 10;
+/// How many distinct publishers are kept. A package with thousands of accounts
+/// is not a realistic history; the cap bounds memory on a hostile packument.
+pub const MAX_PUBLISHERS: usize = 1_000;
 
-/// Publishers from the most recent prior releases. Timestamp ordered, not list
-/// ordered, and deduplicated so a rotation back to an older account is clear.
-pub fn recent_publishers(
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PublisherActivity {
+    /// Every prior publisher, newest activity first, deduplicated.
+    pub names: Vec<String>,
+    /// The current publisher's own most recent prior release.
+    pub last_at: Option<i64>,
+}
+
+/// Publishers across all prior releases, not a recent window, plus when the
+/// current publisher last released this package.
+pub fn publisher_activity(
     entries: impl IntoIterator<Item = (String, Option<i64>, Option<String>)>,
     current_version: &str,
     current_time: Option<i64>,
-    limit: usize,
-) -> Vec<String> {
+    current_publisher: Option<&str>,
+) -> PublisherActivity {
     let Some(current_time) = current_time else {
-        return Vec::new();
+        return PublisherActivity::default();
     };
     let mut entries: Vec<_> = entries
         .into_iter()
@@ -103,17 +117,31 @@ pub fn recent_publishers(
         })
         .collect();
     entries.sort_by_key(|(_, time, _)| std::cmp::Reverse(*time));
-    let mut publishers: Vec<String> = Vec::new();
-    for (_, _, publisher) in entries.into_iter().take(limit) {
+
+    let last_at = current_publisher.and_then(|current| {
+        entries.iter().find_map(|(_, time, publisher)| {
+            let publisher = publisher.as_deref()?;
+            publisher
+                .eq_ignore_ascii_case(current)
+                .then_some(*time)
+                .flatten()
+        })
+    });
+
+    let mut names: Vec<String> = Vec::new();
+    for (_, _, publisher) in entries {
         let Some(publisher) = publisher else { continue };
-        if !publishers
+        if names.len() >= MAX_PUBLISHERS {
+            break;
+        }
+        if !names
             .iter()
             .any(|known| known.eq_ignore_ascii_case(&publisher))
         {
-            publishers.push(publisher);
+            names.push(publisher);
         }
     }
-    publishers
+    PublisherActivity { names, last_at }
 }
 
 /// Releases whose timestamp falls inside the last `days` days.
@@ -673,7 +701,8 @@ fn parse_packument(
     let previous_doc = previous_version
         .as_ref()
         .and_then(|version| packument.versions.get(version));
-    let publishers = recent_publishers(
+    let publisher = doc.npm_user.as_ref().and_then(|user| user.name.clone());
+    let activity = publisher_activity(
         packument
             .time
             .iter()
@@ -688,7 +717,7 @@ fn parse_packument(
             }),
         &version,
         published_at,
-        PUBLISHER_HISTORY,
+        publisher.as_deref(),
     );
 
     Ok(PackageMeta {
@@ -704,7 +733,7 @@ fn parse_packument(
             .iter()
             .filter_map(|user| user.name.clone())
             .collect(),
-        publisher: doc.npm_user.as_ref().and_then(|user| user.name.clone()),
+        publisher,
         maintainers_known: true,
         install_scripts: hooks,
         build_from_source: false,
@@ -723,7 +752,8 @@ fn parse_packument(
             previous_publisher: previous_doc
                 .and_then(|doc| doc.npm_user.as_ref())
                 .and_then(|user| user.name.clone()),
-            recent_publishers: publishers,
+            publishers: activity.names,
+            publisher_last_at: activity.last_at,
             previous_install_scripts: previous_doc.map(install_scripts).unwrap_or_default(),
             previous_dependencies: previous_doc
                 .map(|doc| doc.dependencies.keys().cloned().collect())
@@ -834,6 +864,34 @@ mod tests {
     }"#;
 
     #[test]
+    fn the_current_publisher_carries_their_own_last_release_time() {
+        let body = r#"{
+            "name": "evil-pkg",
+            "dist-tags": { "latest": "3.0.0" },
+            "maintainers": [{ "name": "alice" }, { "name": "bob" }],
+            "time": {
+                "created": "2024-01-01T00:00:00.000Z",
+                "modified": "2026-03-01T00:00:00.000Z",
+                "1.0.0": "2024-06-01T00:00:00.000Z",
+                "2.0.0": "2025-06-01T00:00:00.000Z",
+                "3.0.0": "2026-03-01T00:00:00.000Z"
+            },
+            "versions": {
+                "1.0.0": { "_npmUser": { "name": "bob" } },
+                "2.0.0": { "_npmUser": { "name": "alice" } },
+                "3.0.0": { "_npmUser": { "name": "bob" } }
+            }
+        }"#;
+        let meta = fetch(body, None).unwrap();
+        assert_eq!(meta.publisher.as_deref(), Some("bob"));
+        assert_eq!(
+            meta.release.publisher_last_at,
+            date::parse_timestamp("2024-06-01T00:00:00.000Z")
+        );
+        assert_eq!(meta.release.publishers, vec!["alice", "bob"]);
+    }
+
+    #[test]
     fn scoped_names_are_not_sent_to_the_bulk_endpoint() {
         assert!(is_scoped("@types/node"));
         assert!(!is_scoped("chalk"));
@@ -869,7 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn publisher_history_is_timestamp_ordered_deduped_and_bounded() {
+    fn publisher_activity_is_timestamp_ordered_deduped_and_complete() {
         let entries = vec![
             ("1.0.0".to_string(), Some(100), Some("alice".to_string())),
             ("2.0.0".to_string(), Some(300), Some("bob".to_string())),
@@ -877,22 +935,56 @@ mod tests {
             ("3.0.0".to_string(), Some(400), Some("carol".to_string())),
             ("4.0.0".to_string(), None, Some("dave".to_string())),
         ];
-        assert_eq!(
-            recent_publishers(entries, "3.0.0", Some(350), PUBLISHER_HISTORY),
-            vec!["bob".to_string(), "alice".to_string()]
+        let activity = publisher_activity(entries, "3.0.0", Some(350), Some("alice"));
+        assert_eq!(activity.names, vec!["bob".to_string(), "alice".to_string()]);
+        assert_eq!(activity.last_at, Some(200));
+
+        let activity = publisher_activity(
+            vec![
+                ("1.0.0".to_string(), Some(100), Some("alice".to_string())),
+                ("2.0.0".to_string(), Some(200), Some("bob".to_string())),
+            ],
+            "9.9.9",
+            Some(250),
+            Some("bob"),
         );
+        assert_eq!(activity.names, vec!["bob".to_string(), "alice".to_string()]);
+        assert_eq!(activity.last_at, Some(200));
+
+        let unknown = publisher_activity(
+            vec![("1.0.0".to_string(), Some(100), Some("alice".to_string()))],
+            "2.0.0",
+            Some(200),
+            Some("mallory"),
+        );
+        assert_eq!(unknown.last_at, None);
         assert_eq!(
-            recent_publishers(
-                vec![
-                    ("1.0.0".to_string(), Some(100), Some("alice".to_string())),
-                    ("2.0.0".to_string(), Some(200), Some("bob".to_string())),
-                ],
-                "9.9.9",
-                Some(250),
-                1
+            publisher_activity(
+                vec![("1.0.0".to_string(), Some(100), Some("alice".to_string()))],
+                "2.0.0",
+                None,
+                Some("alice")
             ),
-            vec!["bob".to_string()]
+            PublisherActivity::default(),
+            "without a current timestamp the history is unknown, not empty"
         );
+    }
+
+    #[test]
+    fn publisher_activity_caps_names_but_still_finds_the_current_account() {
+        let mut entries: Vec<(String, Option<i64>, Option<String>)> = (0..MAX_PUBLISHERS + 5)
+            .map(|index| {
+                (
+                    format!("{index}.0.0"),
+                    Some(index as i64 + 1),
+                    Some(format!("user{index}")),
+                )
+            })
+            .collect();
+        entries.push(("old.0.0".to_string(), Some(0), Some("veteran".to_string())));
+        let activity = publisher_activity(entries, "current", Some(10_000), Some("veteran"));
+        assert_eq!(activity.names.len(), MAX_PUBLISHERS);
+        assert_eq!(activity.last_at, Some(0));
     }
 
     #[test]

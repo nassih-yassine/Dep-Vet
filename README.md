@@ -577,9 +577,9 @@ describes it:
   npm, Composer, NuGet, and — for releases inside the 30-day window — PyPI and
   crates.io.
 - **Publisher changed** (INFO): a different existing maintainer shipped this
-  version. If that account is not among the last 10 releases' publishers, the
-  detail says so. A brand-new account is the stronger "not a maintainer"
-  warning.
+  version. If that account has never published this package before, the detail
+  says so; otherwise it names when the account last released it. A brand-new
+  account is the stronger "not a maintainer" warning.
 - **Release burst** (INFO): five or more releases inside 30 days on a package
   with history.
 - **Repository changed** (INFO): the source repository differs from the previous
@@ -1181,10 +1181,12 @@ clean.
 - **Advice is a pointer, not a guarantee.** `fixed in` is what OSV publishes for
   that advisory; `newest` is the highest published version and may be a breaking
   major or still vulnerable. dep-vet never upgrades, rewrites, or tests anything.
-- **Publisher history is bounded.** npm and crates.io expose a publisher per
-  version; dep-vet keeps the publishers from the last 10 releases (deduplicated) for
-  comparison, not a full account history. Silence beyond that window is not evidence of no
-  change.
+- **Publisher history is complete where the registry exposes it.** npm and
+  crates.io name the account behind every version, so dep-vet compares against
+  every prior publisher (deduplicated, capped at 1,000 names) and can say when
+  the current account last released the package. PyPI, RubyGems, NuGet,
+  Composer, Maven, JSR, and Go expose no per-release identity, so their reports
+  keep the immediately previous publisher only.
 - **Missing signals are labelled, not guessed.** PyPI has no maintainer list or
   download count; crates.io has no file list, so `build.rs` cannot be detected;
   Go modules have no execution, owners, downloads, or repository link in the
