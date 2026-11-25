@@ -8196,3 +8196,44 @@ fn maven_plan_reports_missing_poms_and_ranges_as_incomplete() {
             .any(|entry| entry["reason"].as_str().unwrap().contains("ranges"))
     );
 }
+
+#[test]
+fn maven_plan_reads_a_local_pom() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("pom.xml"),
+        maven_pom(
+            r#"<groupId>com.example</groupId><artifactId>local-app</artifactId><version>0.1.0</version>
+            <properties><lib.version>1.2.3</lib.version></properties>
+            <dependencies><dependency>
+              <groupId>com.example</groupId><artifactId>lib</artifactId><version>${lib.version}</version>
+            </dependency></dependencies>"#,
+        ),
+    )
+    .unwrap();
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/com/example/lib/1.2.3/lib-1.2.3.pom".to_string(),
+        (
+            200,
+            maven_pom(
+                r#"<groupId>com.example</groupId><artifactId>lib</artifactId><version>1.2.3</version>"#,
+            ),
+        ),
+    );
+    let registry = MockRegistry::start(routes);
+
+    let pom = directory.path().join("pom.xml");
+    let output = registry
+        .command()
+        .args(["plan", "maven", pom.to_str().unwrap(), "--json"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["root"], "com.example:local-app@0.1.0");
+    assert_eq!(value["nodes"][1]["name"], "com.example:lib");
+    assert_eq!(value["nodes"][1]["version"], "1.2.3");
+}

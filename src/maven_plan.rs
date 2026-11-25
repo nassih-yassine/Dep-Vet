@@ -7,6 +7,7 @@
 //! version that cannot be determined is reported as unresolved.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::path::Path;
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -313,12 +314,27 @@ impl<'a> PomClient<'a> {
         if !visiting.insert(key.clone()) {
             return Err(format!("parent cycle at {group}:{artifact}:{version}"));
         }
-        let mut model = self.raw(group, artifact, version)?;
+        let model = self.raw(group, artifact, version)?;
+        let result = self.finish_model(model, depth, visiting);
+        if result.is_ok() {
+            visiting.remove(&key);
+        }
+        result
+    }
+
+    fn finish_model(
+        &mut self,
+        mut model: Model,
+        depth: usize,
+        visiting: &mut HashSet<(String, String, String)>,
+    ) -> Result<Model, String> {
         if let Some((parent_group, parent_artifact, parent_version)) = model.parent.clone() {
             let parent_version = interpolate(&parent_version, &model);
             if parent_version.contains("${") {
                 return Err(format!(
-                    "parent version of {group}:{artifact} uses an unresolved property: {parent_version}"
+                    "parent version of {}:{} uses an unresolved property: {parent_version}",
+                    model.group.as_deref().unwrap_or("?"),
+                    model.artifact
                 ));
             }
             let parent = self.effective(
@@ -343,7 +359,6 @@ impl<'a> PomClient<'a> {
             model.parent = Some((parent_group, parent_artifact, parent_version));
         }
         self.expand_imports(&mut model, depth, visiting)?;
-        visiting.remove(&key);
         Ok(model)
     }
 
@@ -437,15 +452,33 @@ pub fn plan(http: &HttpClient, input: &str) -> Result<PlanReport, String> {
         .effective(group, artifact, version, 0, &mut HashSet::new())
         .map_err(|error| format!("could not resolve {requested}: {error}"))?;
     let root_id = format!("{group}:{artifact}@{version}");
+    Ok(build_report(
+        &mut client,
+        root_model,
+        root_id,
+        format!("{group}:{artifact}"),
+        version.to_string(),
+        requested,
+    ))
+}
 
+#[allow(clippy::too_many_arguments)]
+fn build_report(
+    client: &mut PomClient,
+    root_model: Model,
+    root_id: String,
+    root_name: String,
+    root_version: String,
+    requested: String,
+) -> PlanReport {
     let mut report = PlanReport {
         ecosystem: Ecosystem::Maven,
-        requested: requested.clone(),
+        requested,
         root: root_id.clone(),
         nodes: vec![PlannedNode {
             id: root_id.clone(),
-            name: format!("{group}:{artifact}"),
-            version: version.to_string(),
+            name: root_name.clone(),
+            version: root_version.clone(),
             direct: true,
             optional: false,
             peer: false,
@@ -460,10 +493,9 @@ pub fn plan(http: &HttpClient, input: &str) -> Result<PlanReport, String> {
     // version selected for a group:artifact is the one Maven would use at that
     // distance. Later versions are recorded as conflicts, not expanded.
     let mut chosen: HashMap<(String, String), String> = HashMap::new();
-    chosen.insert(
-        (group.to_string(), artifact.to_string()),
-        version.to_string(),
-    );
+    if let Some((group, artifact)) = root_name.split_once(':') {
+        chosen.insert((group.to_string(), artifact.to_string()), root_version);
+    }
     struct Queued {
         from: String,
         parent: Model,
@@ -618,7 +650,34 @@ pub fn plan(http: &HttpClient, input: &str) -> Result<PlanReport, String> {
         }
     }
 
-    Ok(report)
+    report
+}
+
+/// Resolve the dependencies declared by a local `pom.xml`. The project itself
+/// is not fetched: only its parent, BOMs, and dependencies are. A parent that
+/// exists only next to the project (a multi-module reactor) is reported as
+/// unresolved rather than approximated.
+pub fn plan_pom(http: &HttpClient, path: &Path) -> Result<PlanReport, String> {
+    let body = std::fs::read_to_string(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let raw = parse_model(&body).map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut client = PomClient::new(http);
+    let model = client.finish_model(raw, 0, &mut HashSet::new())?;
+    let name = match &model.group {
+        Some(group) if !model.artifact.is_empty() => format!("{group}:{}", model.artifact),
+        _ if !model.artifact.is_empty() => model.artifact.clone(),
+        _ => "project".to_string(),
+    };
+    let version = model.version.clone().unwrap_or_else(|| "local".to_string());
+    let root_id = format!("{name}@{version}");
+    Ok(build_report(
+        &mut client,
+        model,
+        root_id,
+        name,
+        version,
+        path.display().to_string(),
+    ))
 }
 
 #[cfg(test)]

@@ -198,7 +198,7 @@ pub enum Command {
         /// Ecosystem: npm or maven
         ecosystem: String,
 
-        /// Package with optional version or range: express@5
+        /// Package with optional version or range (express@5), or a pom.xml path
         package: String,
 
         /// Print machine-readable JSON instead of a human tree

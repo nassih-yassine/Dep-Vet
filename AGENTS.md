@@ -264,7 +264,10 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   ignored. The node/depth caps are the npm planner's (`MAX_NODES`,
   `MAX_DEPTH`), and any required unresolved edge or truncation exits `3`.
   `quick-xml` is the only XML dependency; do not hand-parse POMs with string
-  splitting.
+  splitting. `plan_pom` reads a local `pom.xml` through the same model: it
+  fetches the parent and BOMs but never the project itself, and a parent that
+  only exists in the same reactor is unresolved (multi-module is not
+  approximated).
 - **Maven trees come from Maven, not from a resolver.** `maven-tree.txt`,
   `dependency-tree.txt`, and `mvn-dependency-tree.txt` are parsed line-wise from
   `mvn dependency:tree -DoutputFile=...` (or the copied log). Only `+-`/`\-`
@@ -884,5 +887,5 @@ pre-push hook plus CI on every push.
 
 ## Not built yet
 
-A `tree pom.xml` project resolver (a single Maven coordinate is already resolved by `plan maven`; dependency trees can be audited from `mvn dependency:tree` output). SARIF/SBOM are built.
+Multi-module Maven reactor resolution and profiles (a single coordinate and a single `pom.xml` already resolve). SARIF/SBOM are built.
 Roadmap only: do not describe these as existing in code, README, or help text.
