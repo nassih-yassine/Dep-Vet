@@ -841,7 +841,9 @@ impl Finding {
             | "workflow-pr-target-checkout"
             | "workflow-script-injection"
             | "workflow-curl-pipe-shell"
-            | "workflow-secret-echo" => Confidence::High,
+            | "workflow-secret-echo"
+            | "mcp-plaintext-secret"
+            | "mcp-insecure-url" => Confidence::High,
             "typosquat"
             | "publisher-not-maintainer"
             | "publisher-changed"

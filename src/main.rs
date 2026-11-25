@@ -235,6 +235,16 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             emit(&output, report.exit_code())
         }
 
+        Command::McpConfig { path, json } => {
+            let report = dep_vet::mcp_config::scan(path.as_deref())?;
+            let output = if *json {
+                dep_vet::report::render_mcp_config_json(&report)?
+            } else {
+                dep_vet::report::render_mcp_config_human(&report, use_color(cli))
+            };
+            emit(&output, report.exit_code())
+        }
+
         Command::Workflows { path, json } => {
             let default = std::path::Path::new(".github/workflows");
             let report = dep_vet::workflows::scan(path.as_deref().unwrap_or(default))?;

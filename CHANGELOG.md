@@ -25,6 +25,14 @@
   Comments are ignored; a local `./` action is not flagged. Exit `1` for
   warnings, `2` for a HIGH finding, `3` when the path cannot be read. Findings
   name the file and line and are not package allowlist entries.
+- **MCP configs are scanned, never started.** `dep-vet mcp-config` reads
+  `.mcp.json`, `claude_desktop_config.json`, `.cursor/mcp.json`, and
+  `.vscode/mcp.json` with `serde_json`, supports both `mcpServers` and
+  `servers`, and reports network launchers, unpinned packages, literal secrets,
+  non-https URLs, unknown fetch hosts, and text aimed at a model. Secret values
+  are redacted; `${VAR}`, `op://`, and placeholders are not treated as secrets.
+  Loopback `http` URLs are allowed. Malformed JSON and unreadable paths exit
+  `3`; finding no config files is a clean, empty result.
 - **Install policy thresholds and license rules are configurable.** A new
   `[policy]` section in `.depvet.toml` accepts `min_age_days`,
   `min_weekly_downloads`, `require_provenance`, `max_advisory_severity`,

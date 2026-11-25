@@ -102,6 +102,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/typosquat.rs` | Levenshtein, homoglyph folding, per-ecosystem candidate lists |
 | `src/watch.rs` | `watch` command: notify watcher, target filtering, debounce |
 | `src/workflows.rs` | line-wise GitHub Actions scan: triggers, `uses`, `run`, permissions |
+| `src/mcp_config.rs` | MCP server config scan: launchers, pins, secrets, URLs, text |
 | `src/report.rs` | human rendering and JSON envelope |
 | `src/cli.rs` | clap command surface |
 | `src/progress.rs` | stderr-only progress bar for `audit`/`lock` |
@@ -207,6 +208,16 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   or file over 5 MB exits `3`. Findings are file-scoped and not allowlistable.
   Running it on this repository reports its own cargo-dist and rustup
   `curl | sh` lines as HIGH: that is the rule working, not a regression.
+- **The MCP scan never starts a server.** `src/mcp_config.rs` parses JSON with
+  `serde_json` and supports both `mcpServers` and `servers`. Literal secret
+  values are redacted from the detail and must not be printed by tests; `${…}`,
+  `op://`, `file://`, `env:`, and placeholder values do not count as secrets.
+  Only a version after `@`/`==` that starts with a digit pins an npm/PyPI
+  package, and only `@sha256:` pins a Docker image. Loopback `http` is allowed
+  because local MCP servers use it; every other `http` URL is HIGH. URL
+  evidence drops userinfo, the query, and the fragment so tokens cannot leak
+  into a report. Malformed JSON and unreadable paths exit `3`; an empty search
+  is a clean result.
 - **Ecosystem drives seeds and honesty.** npm uses `typosquat::POPULAR`, PyPI
   uses `POPULAR_PYPI`, and `Profile::PYPI` disables maintainers and downloads so
   they show as `not checked`. The `PackageSource` trait is still deferred: two

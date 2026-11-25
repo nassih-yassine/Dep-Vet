@@ -21,6 +21,7 @@ pub mod license;
 pub mod lockfile;
 pub mod maven;
 pub mod mcp;
+pub mod mcp_config;
 pub mod model;
 pub mod netpolicy;
 pub mod nuget;
