@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.1 — 2026-11-25
 
 - **The MCP tools now describe their parameters.** Every `inputSchema` property
   carries a description, and the three tool descriptions state what the tool
