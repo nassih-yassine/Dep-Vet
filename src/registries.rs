@@ -198,6 +198,79 @@ fn validate_auth(reference: &str) -> Result<(), RegistryError> {
     Ok(())
 }
 
+/// A validated route: what a name matches and where it is fetched from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Route {
+    pub ecosystem: Ecosystem,
+    pub pattern: String,
+    pub base: String,
+    /// Environment variable holding the token. Never the token itself.
+    pub auth_env: Option<String>,
+}
+
+/// Routes in trust order: per-user entries first, then the project's. A
+/// project file therefore cannot redirect a scope the user already pinned.
+#[derive(Debug, Default, Clone)]
+pub struct Router {
+    routes: Vec<Route>,
+}
+
+impl Router {
+    pub fn new(project: &[RegistryEntry], user: &[RegistryEntry]) -> Self {
+        let routes = user.iter().chain(project.iter()).map(|entry| Route {
+            ecosystem: entry.ecosystem,
+            pattern: entry.r#match.trim().to_string(),
+            base: entry.url.trim_end_matches('/').to_string(),
+            auth_env: entry
+                .auth
+                .as_deref()
+                .and_then(|value| value.strip_prefix("env:"))
+                .map(str::to_string),
+        });
+        Self {
+            routes: routes.collect(),
+        }
+    }
+
+    /// First matching route, or `None` for the public registry.
+    pub fn route(&self, ecosystem: Ecosystem, name: &str) -> Option<&Route> {
+        let name = name.to_ascii_lowercase();
+        self.routes
+            .iter()
+            .find(|route| route.ecosystem == ecosystem && pattern_matches(&route.pattern, &name))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.routes.is_empty()
+    }
+}
+
+/// npm scopes match the whole scope; anything else is a name prefix. A scope
+/// pattern never matches a package that merely starts with the same letters.
+fn pattern_matches(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.trim().to_ascii_lowercase();
+    if pattern.starts_with('@') {
+        return name
+            .strip_prefix(&pattern)
+            .is_some_and(|rest| rest.starts_with('/') && rest.len() > 1);
+    }
+    name.starts_with(&pattern)
+}
+
+/// The token for a route, read at request time. A missing variable is an error
+/// naming the variable, never an unauthenticated request that 401s later.
+pub fn token(route: &Route) -> Result<Option<String>, String> {
+    match route.auth_env.as_deref() {
+        None => Ok(None),
+        Some(name) => std::env::var(name).map(Some).map_err(|_| {
+            format!(
+                "registry auth for {} needs ${name}, which is not set",
+                route.pattern
+            )
+        }),
+    }
+}
+
 /// Loads the per-user registry file. A missing file is not an error; it is the
 /// normal case for anyone without private registries.
 pub fn load_user_config() -> Result<Vec<RegistryEntry>, String> {
@@ -346,6 +419,69 @@ mod tests {
             validate(&entries, false, true),
             Err(RegistryError::EmptyMatch { .. })
         ));
+    }
+
+    fn route(pattern: &str, url: &str) -> RegistryEntry {
+        entry(Ecosystem::Npm, pattern, url)
+    }
+
+    #[test]
+    fn a_scope_pattern_matches_the_whole_scope_only() {
+        let router = Router::new(&[route("@deliverect", "https://npm.internal.example")], &[]);
+        assert_eq!(
+            router
+                .route(Ecosystem::Npm, "@deliverect/ui")
+                .map(|r| r.base.as_str()),
+            Some("https://npm.internal.example")
+        );
+        assert!(router.route(Ecosystem::Npm, "@deliverect2/ui").is_none());
+        assert!(router.route(Ecosystem::Npm, "deliverect").is_none());
+        assert!(router.route(Ecosystem::Npm, "@deliverect").is_none());
+    }
+
+    #[test]
+    fn a_plain_pattern_is_a_name_prefix() {
+        let router = Router::new(&[route("internal-", "https://npm.internal.example")], &[]);
+        assert!(router.route(Ecosystem::Npm, "internal-lib").is_some());
+        assert!(router.route(Ecosystem::Npm, "notinternal-lib").is_none());
+    }
+
+    #[test]
+    fn the_user_config_wins_over_the_project_file() {
+        let router = Router::new(
+            &[route("@deliverect", "https://project.example")],
+            &[route("@deliverect", "https://user.example")],
+        );
+        assert_eq!(
+            router
+                .route(Ecosystem::Npm, "@deliverect/ui")
+                .map(|r| r.base.as_str()),
+            Some("https://user.example")
+        );
+    }
+
+    #[test]
+    fn routes_are_scoped_to_their_ecosystem() {
+        let router = Router::new(
+            &[entry(
+                Ecosystem::Pypi,
+                "internal-",
+                "https://pypi.internal.example",
+            )],
+            &[],
+        );
+        assert!(router.route(Ecosystem::Pypi, "internal-lib").is_some());
+        assert!(router.route(Ecosystem::Npm, "internal-lib").is_none());
+    }
+
+    #[test]
+    fn a_missing_token_variable_names_itself() {
+        let mut entries = vec![route("@deliverect", "https://npm.internal.example")];
+        entries[0].auth = Some("env:DEPVET_TEST_UNSET_TOKEN_XYZ".to_string());
+        let router = Router::new(&entries, &[]);
+        let route = router.route(Ecosystem::Npm, "@deliverect/ui").unwrap();
+        let error = token(route).unwrap_err();
+        assert!(error.contains("DEPVET_TEST_UNSET_TOKEN_XYZ"), "{error}");
     }
 
     #[test]
