@@ -2,6 +2,15 @@
 
 ## 0.17.0 — 2026-11-26
 
+- **npm 0.17.0 was published from a workstation, without provenance.** Trusted
+  publishing is still blocked by account-level 2FA, and the `npm-publish`
+  workflow failed with `ENEEDAUTH` because its environment has no token. The
+  package was rebuilt from the attested release assets with
+  `scripts/build-npm-packages.py` (checksums and attestations verified) and
+  published by hand as `@nassihyas/dep-vet@0.17.0`. It runs the same binaries
+  but carries no provenance attestation; `npx @nassihyas/dep-vet@0.17.0
+  --version` reports the release. CI remains the intended path.
+
 - **Security fixes from the pre-release review.** A repository `.npmrc` could
   expand `${VAR}` into a route URL and send CI tokens to its own host; project
   files are now parsed without environment expansion, and a project
