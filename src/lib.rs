@@ -30,6 +30,7 @@ pub mod model;
 pub mod netpolicy;
 pub mod nuget;
 pub mod osv;
+pub mod pip_config;
 pub mod plan;
 pub mod pool;
 pub mod progress;
