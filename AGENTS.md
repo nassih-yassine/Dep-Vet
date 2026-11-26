@@ -113,6 +113,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/mcp_config.rs` | MCP server config scan: launchers, pins, secrets, URLs, text |
 | `src/report.rs` | human rendering and JSON envelope |
 | `src/cli.rs` | clap command surface |
+| `src/jobs.rs` | `--jobs`/`DEPVET_JOBS` resolution, cap, and error text |
+| `src/pool.rs` | ordered worker pool: index queue, per-item panic containment |
+| `src/memo.rs` | keyed single-flight memo (scorecard lookups) |
 | `src/progress.rs` | stderr-only progress bar for `audit`/`lock` |
 | `src/version.rs` | major-line helper for upgrade advice |
 | `src/date.rs` | hand-rolled RFC 3339 → epoch (deliberately no date crate) |

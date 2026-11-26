@@ -66,21 +66,7 @@ fn main() -> ExitCode {
         return ExitCode::from(TOOL_ERROR);
     }
     dep_vet::netpolicy::warn_once();
-    let available = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(1);
-    let requested_jobs = std::env::var("DEPVET_JOBS").ok();
-    let jobs = match dep_vet::jobs::resolve(cli.jobs, requested_jobs.as_deref(), available) {
-        Ok(jobs) => jobs,
-        Err(error) => {
-            eprintln!("dep-vet: {error}");
-            eprintln!(
-                "dep-vet could not start the check; this is not a verdict (exit {TOOL_ERROR})."
-            );
-            return ExitCode::from(TOOL_ERROR);
-        }
-    };
-    match execute(&cli, jobs) {
+    match execute(&cli) {
         Ok(code) => {
             dep_vet::update::maybe_hint(&cli, code);
             ExitCode::from(code)
@@ -114,7 +100,7 @@ fn usage_exit(error: clap::Error) -> ExitCode {
     }
 }
 
-fn execute(cli: &Cli, jobs: usize) -> anyhow::Result<u8> {
+fn execute(cli: &Cli) -> anyhow::Result<u8> {
     // Hooks run on every Bash tool call and must never fail before they read
     // stdin; the guard child owns config and network errors.
     if let Command::Hook { action } = &cli.command {
@@ -135,6 +121,18 @@ fn execute(cli: &Cli, jobs: usize) -> anyhow::Result<u8> {
             } => run_hook_uninstall(target, *project, *user, *write),
         };
     }
+    // Only the commands that fan out read the environment; an explicit
+    // `--jobs` is still validated everywhere, because the user typed it.
+    let requested = if cli.runs_audits() {
+        std::env::var("DEPVET_JOBS").ok()
+    } else {
+        None
+    };
+    let available = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let jobs = dep_vet::jobs::resolve(cli.jobs, requested.as_deref(), available)
+        .map_err(|error| anyhow::anyhow!(error))?;
     let http = Arc::new(HttpClient::from_env(cli.no_cache));
     let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
     let mut auditor = Auditor::new(&http, allowlist.policy());
@@ -567,9 +565,9 @@ struct Auditor {
     scorecard: Option<dep_vet::scorecard::ScorecardClient>,
     /// Repository to scorecard, memoised for the life of the run. A monorepo
     /// tree repeats the same repository dozens of times, and `watch` and the
-    /// MCP server reuse this `Auditor` across reports.
-    scorecards:
-        std::sync::Mutex<std::collections::HashMap<String, Option<dep_vet::scorecard::Scorecard>>>,
+    /// MCP server reuse this `Auditor` across reports. Single-flight, so
+    /// concurrent workers do not all ask deps.dev for the same project.
+    scorecards: dep_vet::memo::LookupMemo<dep_vet::scorecard::Scorecard>,
     policy: dep_vet::allowlist::Policy,
 }
 
@@ -589,7 +587,7 @@ impl Auditor {
             scorecard: Some(dep_vet::scorecard::ScorecardClient::from_env(Arc::clone(
                 http,
             ))),
-            scorecards: std::sync::Mutex::new(std::collections::HashMap::new()),
+            scorecards: dep_vet::memo::LookupMemo::new(),
             policy: policy.clone(),
         }
     }
@@ -603,25 +601,13 @@ impl Auditor {
         let Some(repository) = meta.repository.as_deref() else {
             return;
         };
-        let cached = {
-            let cache = self
-                .scorecards
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.get(repository).cloned()
-        };
-        if let Some(cached) = cached {
-            meta.scorecard = cached;
-            return;
-        }
-        // The lock is not held across the lookup: a slow deps.dev answer must
-        // not serialise every audit sharing this repository.
-        let looked_up = client.lookup(repository);
-        self.scorecards
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(repository.to_string(), looked_up.clone());
-        meta.scorecard = looked_up;
+        // Key on the normalised project, not the raw URL: `github.com/Owner/Repo`
+        // and `github.com/owner/repo` are one deps.dev project.
+        let key =
+            dep_vet::scorecard::project_key(repository).unwrap_or_else(|| repository.to_string());
+        meta.scorecard = self
+            .scorecards
+            .get_or_lookup(&key, || client.lookup(repository));
     }
 
     /// The hook budget is 8 seconds; repository reputation is context, not the

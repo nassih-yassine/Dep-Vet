@@ -15,9 +15,10 @@
   `--jobs 4` against `--jobs 8`.
 
 - **Bulk work is deduplicated within a run.** A tree that pins several
-  versions of one package asks npm's download endpoint once, and a monorepo
-  asks deps.dev for the same repository scorecard once per `Auditor` (which
-  `watch` and the MCP server reuse across reports). The HTTP cache opens in WAL
+  versions of one package asks npm's download endpoint once, and concurrent
+  workers asking about one repository share a single deps.dev scorecard lookup
+  (`memo::LookupMemo`), memoised for the `Auditor` that `watch` and the MCP
+  server reuse across reports. The HTTP cache opens in WAL
   with a five-second busy timeout so a second dep-vet process waits instead of
   failing with "database is locked".
 

@@ -3,6 +3,15 @@
 //! Nothing here touches the public npm registry. The server records the paths
 //! it was asked for, so encoding and retry behaviour are observable.
 
+/// A binary invocation with the developer's environment neutralised. `cargo
+/// test` inherits `DEPVET_JOBS` from the shell otherwise, and a typo there
+/// would fail every audit-spawning test with exit 3.
+fn dep_vet() -> Command {
+    let mut command = Command::cargo_bin("dep-vet").unwrap();
+    command.env_remove("DEPVET_JOBS");
+    command
+}
+
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -199,7 +208,7 @@ impl MockRegistry {
     }
 
     fn command_with(&self, extra: &[(&str, &str)]) -> Command {
-        let mut command = Command::cargo_bin("dep-vet").unwrap();
+        let mut command = dep_vet();
         command
             .env("DEPVET_ALLOW_INSECURE_BASES", "1")
             .env("DEPVET_REGISTRY_BASE", &self.base)
@@ -221,6 +230,8 @@ impl MockRegistry {
             .env("DEPVET_SCORECARD_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("DEPVET_HOOK_TEST_BASE", &self.base)
+            // A developer's own DEPVET_JOBS must not change the suite.
+            .env_remove("DEPVET_JOBS")
             .env("NO_COLOR", "1");
         for (key, value) in extra {
             command.env(key, value);
@@ -713,8 +724,7 @@ fn hook_install_writes_only_with_write_and_is_idempotent() {
     let directory = tempfile::tempdir().unwrap();
     let settings = directory.path().join(".claude").join("settings.json");
 
-    let first = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let first = dep_vet()
         .current_dir(directory.path())
         .args(["hook", "install", "claude"])
         .assert()
@@ -726,8 +736,7 @@ fn hook_install_writes_only_with_write_and_is_idempotent() {
     assert!(first.contains("hook claude"), "{first}");
     assert!(!settings.exists(), "no --write means no file");
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["hook", "install", "claude", "--write"])
         .assert()
@@ -748,8 +757,7 @@ fn hook_install_writes_only_with_write_and_is_idempotent() {
         "{body}"
     );
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["hook", "install", "claude", "--write"])
         .assert()
@@ -770,8 +778,7 @@ fn hook_install_preserves_other_settings_and_can_be_removed() {
     )
     .unwrap();
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["hook", "install", "claude", "--write"])
         .assert()
@@ -782,8 +789,7 @@ fn hook_install_preserves_other_settings_and_can_be_removed() {
     assert_eq!(value["theme"], "dark");
     assert_eq!(value["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["hook", "uninstall", "claude", "--write"])
         .assert()
@@ -806,8 +812,7 @@ fn hook_install_refuses_malformed_settings_without_writing() {
     let settings = claude.join("settings.json");
     std::fs::write(&settings, "{not json").unwrap();
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["hook", "install", "claude", "--write"])
         .assert()
@@ -818,8 +823,7 @@ fn hook_install_refuses_malformed_settings_without_writing() {
 #[test]
 fn hook_install_supports_the_user_location() {
     let home = tempfile::tempdir().unwrap();
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .env("HOME", home.path())
         .current_dir(home.path())
         .args(["hook", "install", "claude", "--user", "--write"])
@@ -839,8 +843,7 @@ fn hook_never_fails_on_a_broken_project_config() {
     })
     .to_string();
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["hook", "claude"])
         .write_stdin(edit)
@@ -918,10 +921,44 @@ fn hook_ignores_agent_registry_overrides() {
 }
 
 #[test]
+fn a_broken_jobs_variable_does_not_disable_the_hook_or_offline_commands() {
+    let registry = registry_with(&[PackageFixture::clean("expresss")], None);
+
+    // The hook must read stdin and answer, whatever the environment says: a
+    // guard that exits 3 before reading is silently off.
+    let output = registry
+        .command()
+        .env("DEPVET_JOBS", "many")
+        .args(["hook", "claude"])
+        .write_stdin(hook_input("npm i expresss"))
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        value["hookSpecificOutput"]["permissionDecision"], "deny",
+        "the hook answered nothing: {value}"
+    );
+
+    // A command that never audits must not fail on a variable it ignores.
+    let repo = Repo::new();
+    repo.write("package-lock.json", &lockfile_json(&[("a-pkg", "1.0.0")]));
+    registry
+        .command()
+        .env("DEPVET_JOBS", "many")
+        .current_dir(repo.path())
+        .args(["sbom", "package-lock.json"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("a-pkg"));
+}
+
+#[test]
 fn hook_install_strict_writes_an_absolute_pathed_handler() {
     let directory = tempfile::tempdir().unwrap();
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["hook", "install", "claude", "--strict", "--write"])
         .assert()
@@ -944,7 +981,7 @@ fn hook_times_out_and_allows() {
     use std::net::TcpListener;
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let mut command = Command::cargo_bin("dep-vet").unwrap();
+    let mut command = dep_vet();
     command
         .env("DEPVET_ALLOW_INSECURE_BASES", "1")
         .env("DEPVET_REGISTRY_BASE", &base)
@@ -965,7 +1002,7 @@ fn hook_times_out_and_allows() {
     );
     drop(listener);
 
-    let mut strict = Command::cargo_bin("dep-vet").unwrap();
+    let mut strict = dep_vet();
     strict
         .env("DEPVET_ALLOW_INSECURE_BASES", "1")
         .env("DEPVET_REGISTRY_BASE", &base)
@@ -1029,6 +1066,7 @@ fn mcp_session_in(
         )
         .env("DEPVET_OSV_BASE", &registry.base)
         .env("DEPVET_NO_CACHE", "1")
+        .env_remove("DEPVET_JOBS")
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1559,8 +1597,7 @@ fn mcp_refuses_lockfiles_outside_the_working_directory() {
 
 #[test]
 fn mcp_print_config_is_ready_to_paste() {
-    let output = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let output = dep_vet()
         .args(["mcp", "--print-config"])
         .assert()
         .code(0)
@@ -1609,8 +1646,7 @@ fn sbom_emits_cyclonedx_with_purls_hashes_and_edges() {
     let lock = directory.path().join("package-lock.json");
     std::fs::write(&lock, sbom_lockfile()).unwrap();
 
-    let output = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let output = dep_vet()
         .args(["sbom", lock.to_str().unwrap(), "--format", "cyclonedx"])
         .assert()
         .code(0)
@@ -1657,8 +1693,7 @@ fn sbom_emits_spdx_with_project_relationships_and_checksums() {
     let lock = directory.path().join("package-lock.json");
     std::fs::write(&lock, sbom_lockfile()).unwrap();
 
-    let output = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let output = dep_vet()
         .args(["sbom", lock.to_str().unwrap(), "--format", "spdx"])
         .assert()
         .code(0)
@@ -1707,8 +1742,7 @@ fn sbom_writes_to_a_file_and_leaves_stdout_empty() {
     let lock = directory.path().join("package-lock.json");
     std::fs::write(&lock, sbom_lockfile()).unwrap();
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .args([
             "sbom",
             lock.to_str().unwrap(),
@@ -1736,8 +1770,7 @@ fn sbom_supports_a_non_npm_lockfile_without_claiming_edges() {
     )
     .unwrap();
 
-    let output = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let output = dep_vet()
         .args(["sbom", lock.to_str().unwrap(), "--format", "cyclonedx"])
         .assert()
         .code(0)
@@ -2116,8 +2149,7 @@ fn tree_builds_nested_npm_edges_and_reports_json() {
         }"#,
     );
 
-    let output = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let output = dep_vet()
         .args(["tree", lock.to_str().unwrap(), "--json"])
         .assert()
         .code(0)
@@ -2172,8 +2204,7 @@ fn tree_notes_optional_dependencies_that_are_absent() {
         }"#,
     );
 
-    let output = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let output = dep_vet()
         .args(["tree", lock.to_str().unwrap(), "--json"])
         .assert()
         .code(0)
@@ -2206,8 +2237,7 @@ fn tree_prints_a_human_graph_without_network() {
         }"#,
     );
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .args(["tree", lock.to_str().unwrap()])
         .assert()
         .code(0)
@@ -2221,8 +2251,7 @@ fn tree_refuses_a_lockfile_it_cannot_graph_yet() {
     let lock = directory.path().join("Cargo.lock");
     std::fs::write(&lock, "version = 3\n").unwrap();
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .args(["tree", lock.to_str().unwrap()])
         .assert()
         .code(3);
@@ -2308,8 +2337,7 @@ fn json_and_sarif_formats_cannot_be_combined() {
     let repo = Repo::new();
     repo.write("package-lock.json", &lockfile_json(&[("pkg-a", "1.0.0")]));
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(repo.path())
         .args(["audit", "package-lock.json", "--json", "--format", "sarif"])
         .assert()
@@ -2607,17 +2635,26 @@ fn jobs_must_be_a_sane_number() {
         .code(3)
         .stderr(predicate::str::contains("jobs is capped at 32"));
 
+    // Only the commands that fan out read the environment; one that does
+    // must say what is wrong.
     registry
         .command_with(&[("DEPVET_JOBS", "many")])
-        .args(["npm", "jobs-pkg"])
+        .args(["guard", "--check", "--", "npm i jobs-pkg"])
         .assert()
         .code(3)
         .stderr(predicate::str::contains("DEPVET_JOBS is not a number"));
 
+    // A command that never fans out ignores the variable instead of failing.
+    registry
+        .command_with(&[("DEPVET_JOBS", "many")])
+        .args(["npm", "jobs-pkg"])
+        .assert()
+        .code(0);
+
     // The flag wins over a broken environment value.
     registry
         .command_with(&[("DEPVET_JOBS", "many")])
-        .args(["npm", "jobs-pkg", "--jobs", "2"])
+        .args(["guard", "--check", "--jobs", "2", "--", "npm i jobs-pkg"])
         .assert()
         .code(0);
 }
@@ -2885,7 +2922,7 @@ fn force_color_produces_ansi() {
 }
 
 fn binary() -> Command {
-    Command::cargo_bin("dep-vet").unwrap()
+    dep_vet()
 }
 
 #[test]
@@ -7198,6 +7235,7 @@ fn watch_reruns_after_the_lockfile_changes() {
         )
         .env("DEPVET_OSV_BASE", &registry.base)
         .env("DEPVET_NO_CACHE", "1")
+        .env_remove("DEPVET_JOBS")
         .env("NO_COLOR", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -8067,8 +8105,7 @@ fn workflows_scan_finds_high_risk_patterns() {
     std::fs::create_dir_all(&workflows).unwrap();
     std::fs::write(workflows.join("ci.yml"), UNSAFE_WORKFLOW).unwrap();
 
-    let output = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let output = dep_vet()
         .current_dir(directory.path())
         .args(["workflows", "--json"])
         .assert()
@@ -8105,8 +8142,7 @@ fn workflows_scan_finds_high_risk_patterns() {
             })
     }));
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["workflows"])
         .assert()
@@ -8124,8 +8160,7 @@ fn workflows_scan_takes_an_explicit_file() {
     let file = directory.path().join("release.yaml");
     std::fs::write(&file, "- uses: some/action@main\n").unwrap();
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .args(["workflows", file.to_str().unwrap()])
         .assert()
         .code(1)
@@ -8136,8 +8171,7 @@ fn workflows_scan_takes_an_explicit_file() {
 #[test]
 fn workflows_scan_of_a_missing_path_is_a_tool_error() {
     let directory = tempfile::tempdir().unwrap();
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["workflows"])
         .assert()
@@ -8148,8 +8182,7 @@ fn workflows_scan_of_a_missing_path_is_a_tool_error() {
 #[test]
 fn workflows_scan_of_an_empty_directory_is_clean() {
     let directory = tempfile::tempdir().unwrap();
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .args(["workflows", directory.path().to_str().unwrap()])
         .assert()
         .code(0)
@@ -8171,8 +8204,7 @@ fn mcp_config_flags_unpinned_servers_and_plaintext_secrets() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join(".mcp.json"), UNSAFE_MCP_CONFIG).unwrap();
 
-    let output = Command::cargo_bin("dep-vet")
-        .unwrap()
+    let output = dep_vet()
         .current_dir(directory.path())
         .args(["mcp-config", "--json"])
         .assert()
@@ -8203,8 +8235,7 @@ fn mcp_config_flags_unpinned_servers_and_plaintext_secrets() {
         "the secret value must never be echoed"
     );
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["mcp-config"])
         .assert()
@@ -8225,8 +8256,7 @@ fn mcp_config_finds_cursor_configs_and_local_servers_stay_clean() {
     )
     .unwrap();
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(directory.path())
         .args(["mcp-config"])
         .assert()
@@ -8238,8 +8268,7 @@ fn mcp_config_finds_cursor_configs_and_local_servers_stay_clean() {
 #[test]
 fn mcp_config_rejects_a_missing_path_or_malformed_json() {
     let directory = tempfile::tempdir().unwrap();
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .args([
             "mcp-config",
             directory.path().join("nope.json").to_str().unwrap(),
@@ -8250,8 +8279,7 @@ fn mcp_config_rejects_a_missing_path_or_malformed_json() {
 
     let broken = directory.path().join("broken.json");
     std::fs::write(&broken, "{ not json").unwrap();
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .args(["mcp-config", broken.to_str().unwrap()])
         .assert()
         .code(3)
@@ -8274,8 +8302,7 @@ fn mcp_config_user_scan_adds_home_configs() {
     )
     .unwrap();
 
-    Command::cargo_bin("dep-vet")
-        .unwrap()
+    dep_vet()
         .current_dir(project.path())
         .env("HOME", home.path())
         .env_remove("USERPROFILE")

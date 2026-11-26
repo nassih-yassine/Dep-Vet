@@ -399,6 +399,20 @@ impl Cli {
         self.fail_on.unwrap_or(FailOn::Warn).threshold()
     }
 
+    /// The commands that fan out over packages. Only they read `DEPVET_JOBS`:
+    /// an environment variable must not disable the hook (which reads stdin
+    /// before it can argue) or an offline command that ignores concurrency.
+    pub fn runs_audits(&self) -> bool {
+        matches!(
+            &self.command,
+            Command::Audit { .. }
+                | Command::Lock { .. }
+                | Command::Watch { .. }
+                | Command::Guard { .. }
+                | Command::Mcp { .. }
+        )
+    }
+
     /// The commands whose exit code comes from findings. Everything else owns
     /// its exit code (`guard` has the hook contract, `update` means "newer",
     /// `plan`/`tree`/`sbom` report structure), so `--fail-on` is rejected

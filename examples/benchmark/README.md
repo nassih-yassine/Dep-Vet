@@ -27,7 +27,7 @@ The script also runs two cold audits, at `--jobs 4` and `--jobs 8`, with the
 cache cleared between them, and prints the speedup. See `--jobs` in the main
 README for what the value means.
 
-Warm is ~82x faster because every packument, advisory, EPSS/KEV lookup, and
+Warm is ~64x faster because every packument, advisory, EPSS/KEV lookup, and
 download count comes from the local SQLite cache. Registry metadata is cached
 for 24 hours; advisories for five minutes, so a warm run more than five minutes
 later will refresh advisory answers.

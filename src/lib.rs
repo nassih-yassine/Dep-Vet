@@ -24,6 +24,7 @@ pub mod maven;
 pub mod maven_plan;
 pub mod mcp;
 pub mod mcp_config;
+pub mod memo;
 pub mod model;
 pub mod netpolicy;
 pub mod nuget;

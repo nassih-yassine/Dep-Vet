@@ -61,6 +61,14 @@ fi
 
 measure "warm" "/tmp/dep-vet-bench-warm.txt"
 
+
+if command -v sqlite3 >/dev/null 2>&1; then
+    db=$(find "$cache" -name '*.db' | head -1)
+    if [ -n "$db" ]; then
+        printf 'cache entries after warm: %s\n' "$(sqlite3 "$db" 'select count(*) from http_cache;')"
+    fi
+fi
+
 # Throughput: the same cold tree at --jobs 4 and --jobs 8. The cache is cleared
 # between runs so both pay the same network cost.
 cold_jobs() {
@@ -82,11 +90,4 @@ ms4=$(cold_jobs 4 /tmp/dep-vet-bench-jobs4.txt)
 ms8=$(cold_jobs 8 /tmp/dep-vet-bench-jobs8.txt)
 if [ "$ms8" -gt 0 ]; then
     printf 'speedup at --jobs 8 vs 4: %sx\n' "$(awk "BEGIN{printf \"%.2f\", $ms4/$ms8}")"
-fi
-
-if command -v sqlite3 >/dev/null 2>&1; then
-    db=$(find "$cache" -name '*.db' | head -1)
-    if [ -n "$db" ]; then
-        printf 'cache entries after warm: %s\n' "$(sqlite3 "$db" 'select count(*) from http_cache;')"
-    fi
 fi
