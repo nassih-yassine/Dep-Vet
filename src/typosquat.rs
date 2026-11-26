@@ -525,6 +525,10 @@ pub fn closest<'a>(name: &str, popular: &'a [&'a str], local: &'a [String]) -> O
             let homoglyph = candidate_normalized == normalized && folded != needle;
             let distance = if homoglyph {
                 0
+            } else if reordered_tokens(&normalized, &candidate_normalized) {
+                // `dateutil-python` and `python-dateutil` are one paste away;
+                // edit distance calls them far apart because every token moved.
+                1
             } else {
                 // Adjacent transpositions are a common typo; count them as one
                 // edit so an old lookalike is not dismissed as a weak match.
@@ -549,6 +553,27 @@ pub fn closest<'a>(name: &str, popular: &'a [&'a str], local: &'a [String]) -> O
 
 /// Folds lookalike characters so `1odash`, `pаypal` (Cyrillic а), and
 /// `ｌｏｄａｓｈ` (fullwidth) compare like their ASCII originals.
+/// The same separator-delimited tokens in a different order. A single token
+/// cannot reorder, so this never fires on a plain rename.
+fn reordered_tokens(left: &str, right: &str) -> bool {
+    if left == right {
+        return false;
+    }
+    fn split(value: &str) -> Vec<&str> {
+        value
+            .split(['-', '_', '.'])
+            .filter(|token| !token.is_empty())
+            .collect()
+    }
+    let (mut left_tokens, mut right_tokens) = (split(left), split(right));
+    if left_tokens.len() < 2 || left_tokens.len() != right_tokens.len() {
+        return false;
+    }
+    left_tokens.sort_unstable();
+    right_tokens.sort_unstable();
+    left_tokens == right_tokens
+}
+
 pub fn normalize(name: &str) -> String {
     name.chars()
         .flat_map(char::to_lowercase)
