@@ -8,13 +8,20 @@ a warm one.
 DEPVET_BIN=./target/release/dep-vet examples/benchmark/run.sh
 ```
 
-Measured 2026-11-25 with dep-vet 0.16.0 (release build, 19 MB binary) on an
-11th-gen Intel i7-11800H, Linux 7.2.15, 16 threads:
+Measured 2026-11-26 with the `--jobs` build (release binary) on an 11th-gen
+Intel i7-11800H, Linux, 16 threads. Each cold run cleared the cache first:
 
 | Run | Wall time | Exit | Packages | Cache |
 |---|---:|---:|---:|---:|
-| Cold | 118.26 s | 3 | 1,090 | 1,866 entries, 115 MiB |
-| Warm | 1.45 s | 3 | 1,090 | no new entries |
+| Cold, `--jobs 4` | 56.61 s | 3 | 1,090 | 1,864 entries, 115 MiB |
+| Cold, `--jobs 8` (default) | 47.21 s | 3 | 1,090 | 1,864 entries, 115 MiB |
+| Cold, `--jobs 16` | 27.90 s | 3 | 1,090 | 1,864 entries |
+| Cold, `--jobs 32` | 21.88 s | 3 | 1,090 | 1,864 entries |
+| Warm | 0.74 s | 3 | 1,090 | no new entries |
+
+All four cold runs report the same 1,090 packages and 305 advisories. The
+pre-`--jobs` build, which audited four at a time, took 118.26 s on the same
+machine and lockfile.
 
 The script also runs two cold audits, at `--jobs 4` and `--jobs 8`, with the
 cache cleared between them, and prints the speedup. See `--jobs` in the main

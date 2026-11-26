@@ -18,6 +18,14 @@ command -v "$BIN" >/dev/null 2>&1 || {
     exit 1
 }
 
+# The run happens inside the cloned project, so a relative path would break.
+case "$BIN" in
+    /*) ;;
+    *)
+        BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+        ;;
+esac
+
 if [ ! -d "$workdir/.git" ]; then
     git clone --quiet "$PROJECT" "$workdir"
 fi

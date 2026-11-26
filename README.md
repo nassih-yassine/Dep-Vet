@@ -426,8 +426,11 @@ network error, `5xx`, or `429`, and a `404` never falls back. `--no-cache`
 bypasses it.
 
 What that buys, measured on a 1,090-package lockfile (OWASP NodeGoat pinned at
-`c5cb68a`, release build, i7-11800H): 118.26 s cold, 1.45 s warm, with 1,866
-cache entries and 115 MiB after the cold run. The script and method are in
+`c5cb68a`, release build, i7-11800H, 16 threads): 47.21 s cold at the default
+`--jobs 8` and 0.74 s warm, with 1,864 cache entries and 115 MiB after the cold
+run. The same tree takes 56.61 s at `--jobs 4`, 27.90 s at `--jobs 16`, and
+21.88 s at `--jobs 32`, with the same 1,090 packages and 305 advisories; the
+previous 4-at-a-time build took 118.26 s. The script and method are in
 [`examples/benchmark`](examples/benchmark/README.md).
 
 `--jobs N` (or `DEPVET_JOBS`) sets how many packages are audited at once. The
