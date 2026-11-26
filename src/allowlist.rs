@@ -614,7 +614,7 @@ mod tests {
 
     #[test]
     fn every_finding_id_emitted_by_signals_is_allowlistable() {
-        let source = include_str!("signals.rs");
+        let source = include_str!("signals/mod.rs");
         let production = source.split("#[cfg(test)]").next().unwrap_or(source);
         let mut ids = Vec::new();
         for line in production.lines() {
@@ -625,7 +625,7 @@ mod tests {
                 ids.push(&rest[..end]);
             }
         }
-        assert!(!ids.is_empty(), "no ids found in signals.rs");
+        assert!(!ids.is_empty(), "no ids found in signals/mod.rs");
         for id in ids {
             assert!(
                 KNOWN_FINDINGS.contains(&id),
