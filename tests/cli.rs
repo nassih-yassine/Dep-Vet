@@ -2589,6 +2589,107 @@ fn fail_on_reaches_the_written_file_and_sarif() {
 }
 
 #[test]
+fn jobs_must_be_a_sane_number() {
+    let package = PackageFixture::clean("jobs-pkg");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["npm", "jobs-pkg", "--jobs", "0"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("jobs must be at least 1"));
+
+    registry
+        .command()
+        .args(["npm", "jobs-pkg", "--jobs", "33"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("jobs is capped at 32"));
+
+    registry
+        .command_with(&[("DEPVET_JOBS", "many")])
+        .args(["npm", "jobs-pkg"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("DEPVET_JOBS is not a number"));
+
+    // The flag wins over a broken environment value.
+    registry
+        .command_with(&[("DEPVET_JOBS", "many")])
+        .args(["npm", "jobs-pkg", "--jobs", "2"])
+        .assert()
+        .code(0);
+}
+
+#[test]
+fn one_job_still_audits_and_keeps_lockfile_order() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("first-pkg", "1.0.0"), ("second-pkg", "1.0.0")]),
+    );
+    let registry = registry_with(
+        &[
+            PackageFixture::clean("first-pkg"),
+            PackageFixture::clean("second-pkg"),
+        ],
+        None,
+    );
+
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--json", "--jobs", "1"])
+        .env("DEPVET_NO_CACHE", "1")
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let names: Vec<&str> = value["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|package| package["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["first-pkg", "second-pkg"]);
+}
+
+#[test]
+fn one_repository_gets_one_scorecard_lookup_per_run() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("first-pkg", "1.0.0"), ("second-pkg", "1.0.0")]),
+    );
+    // Every fixture points at https://github.com/alice/repo, so both packages
+    // resolve to the same deps.dev project.
+    let registry = registry_with(
+        &[
+            PackageFixture::clean("first-pkg"),
+            PackageFixture::clean("second-pkg"),
+        ],
+        None,
+    );
+
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--jobs", "1"])
+        .assert()
+        .code(0);
+
+    let lookups = registry
+        .requests()
+        .iter()
+        .filter(|path| path.starts_with("/v3alpha/projects/"))
+        .count();
+    assert_eq!(lookups, 1, "the same repository was looked up twice");
+}
+
+#[test]
 fn json_output_is_machine_readable() {
     let package = PackageFixture {
         scripts: r#"{"preinstall":"node before.js"}"#,

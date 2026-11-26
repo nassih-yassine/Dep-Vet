@@ -38,6 +38,10 @@ pub struct Cli {
     /// Lowest severity that fails the run (audit, lock, and single-package checks; default: warn)
     #[arg(long, global = true, value_enum)]
     pub fail_on: Option<FailOn>,
+
+    /// Packages to audit at once (default: cores, at most 8; env DEPVET_JOBS)
+    #[arg(long, global = true, value_name = "N")]
+    pub jobs: Option<usize>,
 }
 
 /// The severity threshold behind `--fail-on`. `warn` is the historical

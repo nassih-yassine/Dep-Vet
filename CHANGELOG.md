@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **`--jobs N` (or `DEPVET_JOBS`) sets how many packages are audited at
+  once.** The default is the machine's cores capped at 8, `0` or a value above
+  32 is exit `3`, and `--jobs` wins over the environment. A work queue replaces
+  the old fixed batches of four, so a worker no longer idles behind the slowest
+  package in a batch; output order still follows the sorted lockfile diff.
+  Maven trees stay serial because Central answers a burst with `403`. The MCP
+  lockfile diff and `guard` share the same pool. The bench script now times
+  `--jobs 4` against `--jobs 8`.
+
+- **Bulk work is deduplicated within a run.** A tree that pins several
+  versions of one package asks npm's download endpoint once, and a monorepo
+  asks deps.dev for the same repository scorecard once per `Auditor` (which
+  `watch` and the MCP server reuse across reports). The HTTP cache opens in WAL
+  with a five-second busy timeout so a second dep-vet process waits instead of
+  failing with "database is locked".
+
 - **`--fail-on warn|high` (and `info`) chooses what fails a run.** `audit`,
   `lock`, and the single-package checks now take a threshold: the
   default `warn` keeps today's `0`/`1`/`2` codes, `high` lets warnings pass

@@ -31,6 +31,14 @@ impl Cache {
 
     pub fn open(path: impl AsRef<Path>, ttl_seconds: i64) -> rusqlite::Result<Self> {
         let connection = Connection::open(path)?;
+        // WAL lets a second dep-vet process (an agent hook, a watch loop) read
+        // while another writes, and the timeout waits instead of failing with
+        // "database is locked". Both are best effort: a filesystem that cannot
+        // do WAL still gets a working cache.
+        let _ = connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
+            row.get::<_, String>(0)
+        });
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
 
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version != SCHEMA_VERSION {
@@ -285,6 +293,22 @@ mod tests {
         let cache = Cache::open(&path, 60).unwrap();
         assert_eq!(cache.stale("old").unwrap(), None);
         assert_eq!(cache.stale("new").unwrap().as_deref(), Some("body"));
+    }
+
+    #[test]
+    fn the_cache_uses_wal_and_waits_for_a_locked_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Cache::open(directory.path().join("cache.db"), 60).unwrap();
+        let journal: String = cache
+            .connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal.to_ascii_lowercase(), "wal");
+        let timeout: i64 = cache
+            .connection
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5_000);
     }
 
     #[test]

@@ -186,6 +186,16 @@ pub struct RegistryClient {
     downloads_base: String,
 }
 
+/// Names in first-seen order with duplicates removed.
+fn unique_names(names: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    names
+        .iter()
+        .filter(|name| seen.insert((*name).clone()))
+        .cloned()
+        .collect()
+}
+
 impl RegistryClient {
     pub fn from_env(http: Arc<HttpClient>) -> Self {
         let registry =
@@ -274,6 +284,9 @@ impl RegistryClient {
         &self,
         names: &[String],
     ) -> std::collections::HashMap<String, u64> {
+        // A tree pins several versions of the same package; one count answers
+        // all of them, and the bulk endpoint charges per name.
+        let names = unique_names(names);
         let mut downloads = std::collections::HashMap::new();
         // npm's bulk endpoint rejects scoped packages ("not currently
         // supported in bulk lookups"), so those go one at a time.
@@ -1395,6 +1408,19 @@ mod tests {
             normalize_repository("  https://example.test/x  "),
             "https://example.test/x"
         );
+    }
+
+    #[test]
+    fn duplicate_names_are_queried_once_and_keep_their_order() {
+        let names = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "a".to_string(),
+            "@s/c".to_string(),
+            "b".to_string(),
+        ];
+        assert_eq!(unique_names(&names), vec!["a", "b", "@s/c"]);
+        assert!(unique_names(&[]).is_empty());
     }
 
     #[test]

@@ -36,10 +36,6 @@ struct Pre<'a> {
     advisories: Option<&'a AdvisoryList>,
 }
 
-/// Packages audited at once. Each one can fan out to a few OSV detail
-/// requests, so keep the burst small.
-const MAX_CONCURRENT_AUDITS: usize = 4;
-
 /// Maven Central answers 403 when it sees a burst of search requests, so tree
 /// audits go one coordinate at a time. Google Maven is unaffected.
 const MAVEN_CONCURRENCY: usize = 1;
@@ -70,7 +66,21 @@ fn main() -> ExitCode {
         return ExitCode::from(TOOL_ERROR);
     }
     dep_vet::netpolicy::warn_once();
-    match execute(&cli) {
+    let available = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let requested_jobs = std::env::var("DEPVET_JOBS").ok();
+    let jobs = match dep_vet::jobs::resolve(cli.jobs, requested_jobs.as_deref(), available) {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            eprintln!("dep-vet: {error}");
+            eprintln!(
+                "dep-vet could not start the check; this is not a verdict (exit {TOOL_ERROR})."
+            );
+            return ExitCode::from(TOOL_ERROR);
+        }
+    };
+    match execute(&cli, jobs) {
         Ok(code) => {
             dep_vet::update::maybe_hint(&cli, code);
             ExitCode::from(code)
@@ -104,7 +114,7 @@ fn usage_exit(error: clap::Error) -> ExitCode {
     }
 }
 
-fn execute(cli: &Cli) -> anyhow::Result<u8> {
+fn execute(cli: &Cli, jobs: usize) -> anyhow::Result<u8> {
     // Hooks run on every Bash tool call and must never fail before they read
     // stdin; the guard child owns config and network errors.
     if let Command::Hook { action } = &cli.command {
@@ -132,7 +142,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     match &cli.command {
         Command::Hook { .. } => unreachable!("handled before config and network"),
 
-        Command::Mcp { print_config } => run_mcp(&auditor, &allowlist, *print_config),
+        Command::Mcp { print_config } => run_mcp(&auditor, &allowlist, *print_config, jobs),
 
         Command::Guard {
             check,
@@ -153,7 +163,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 anyhow::bail!("pass a command after `--`, or use --stdin");
             }
             auditor.skip_scorecard();
-            run_guard(&auditor, &allowlist, *check, *json, &command)
+            run_guard(&auditor, &allowlist, *check, *json, &command, jobs)
         }
 
         Command::Npm { package, json } => {
@@ -374,7 +384,15 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             } else {
                 OutputFormat::Human
             });
-            run_audit(&auditor, &allowlist, path, format, output.as_deref(), cli)
+            run_audit(
+                &auditor,
+                &allowlist,
+                path,
+                format,
+                output.as_deref(),
+                cli,
+                jobs,
+            )
         }
 
         Command::Update { check, json } => Ok(dep_vet::update::run(&http, *check, *json)),
@@ -442,17 +460,29 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 &path,
                 || {
                     println!("watching {} (Ctrl-C to stop)", path.display());
-                    if let Err(error) =
-                        run_audit(&auditor, &allowlist, &path, OutputFormat::Human, None, cli)
-                    {
+                    if let Err(error) = run_audit(
+                        &auditor,
+                        &allowlist,
+                        &path,
+                        OutputFormat::Human,
+                        None,
+                        cli,
+                        jobs,
+                    ) {
                         eprintln!("dep-vet: {error}");
                     }
                 },
                 || {
                     println!("\n── change detected ──");
-                    if let Err(error) =
-                        run_audit(&auditor, &allowlist, &path, OutputFormat::Human, None, cli)
-                    {
+                    if let Err(error) = run_audit(
+                        &auditor,
+                        &allowlist,
+                        &path,
+                        OutputFormat::Human,
+                        None,
+                        cli,
+                        jobs,
+                    ) {
                         eprintln!("dep-vet: {error}");
                     }
                 },
@@ -495,7 +525,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             base,
             json,
         } => {
-            let report = diff_lockfile(&auditor, &allowlist, path, base, true)?;
+            let report = diff_lockfile(&auditor, &allowlist, path, base, true, jobs)?;
             let fail_on = cli.fail_threshold();
             let output = if *json {
                 render_lock_json_with(&report, fail_on)?
@@ -535,6 +565,11 @@ struct Auditor {
     composer: ComposerClient,
     osv: OsvClient,
     scorecard: Option<dep_vet::scorecard::ScorecardClient>,
+    /// Repository to scorecard, memoised for the life of the run. A monorepo
+    /// tree repeats the same repository dozens of times, and `watch` and the
+    /// MCP server reuse this `Auditor` across reports.
+    scorecards:
+        std::sync::Mutex<std::collections::HashMap<String, Option<dep_vet::scorecard::Scorecard>>>,
     policy: dep_vet::allowlist::Policy,
 }
 
@@ -554,6 +589,7 @@ impl Auditor {
             scorecard: Some(dep_vet::scorecard::ScorecardClient::from_env(Arc::clone(
                 http,
             ))),
+            scorecards: std::sync::Mutex::new(std::collections::HashMap::new()),
             policy: policy.clone(),
         }
     }
@@ -564,9 +600,28 @@ impl Auditor {
         let Some(client) = &self.scorecard else {
             return;
         };
-        if let Some(repository) = meta.repository.as_deref() {
-            meta.scorecard = client.lookup(repository);
+        let Some(repository) = meta.repository.as_deref() else {
+            return;
+        };
+        let cached = {
+            let cache = self
+                .scorecards
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache.get(repository).cloned()
+        };
+        if let Some(cached) = cached {
+            meta.scorecard = cached;
+            return;
         }
+        // The lock is not held across the lookup: a slow deps.dev answer must
+        // not serialise every audit sharing this repository.
+        let looked_up = client.lookup(repository);
+        self.scorecards
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(repository.to_string(), looked_up.clone());
+        meta.scorecard = looked_up;
     }
 
     /// The hook budget is 8 seconds; repository reputation is context, not the
@@ -1128,6 +1183,7 @@ fn audit_specs(
     auditor: &Auditor,
     allowlist: &dep_vet::allowlist::Allowlist,
     parsed: &dep_vet::intent::ParseOutcome,
+    jobs: usize,
 ) -> (Vec<PackageReport>, Vec<String>) {
     let specs: Vec<(Ecosystem, PackageSpec)> = parsed
         .intents
@@ -1143,28 +1199,20 @@ fn audit_specs(
     let now = now_seconds();
     let mut packages = Vec::new();
     let mut errors = Vec::new();
-    for batch in specs.chunks(MAX_CONCURRENT_AUDITS) {
-        let outcomes: Vec<Result<PackageReport, String>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = batch
-                .iter()
-                .map(|(ecosystem, spec)| {
-                    scope.spawn(move || audit_intent(auditor, *ecosystem, spec, now))
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|handle| {
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| Err("audit thread panicked".to_string()))
-                })
-                .collect()
-        });
-        for outcome in outcomes {
-            match outcome {
-                Ok(report) => packages.push(report),
-                Err(error) => errors.push(error),
-            }
+    let outcomes = dep_vet::pool::run(
+        specs.len(),
+        jobs,
+        |index| {
+            let (ecosystem, spec) = &specs[index];
+            audit_intent(auditor, *ecosystem, spec, now)
+        },
+        || {},
+    );
+    for outcome in outcomes {
+        match outcome {
+            Some(Ok(report)) => packages.push(report),
+            Some(Err(error)) => errors.push(error),
+            None => errors.push("audit worker panicked".to_string()),
         }
     }
     for report in &mut packages {
@@ -1177,6 +1225,7 @@ fn run_mcp(
     auditor: &Auditor,
     allowlist: &dep_vet::allowlist::Allowlist,
     print_config: bool,
+    jobs: usize,
 ) -> anyhow::Result<u8> {
     if print_config {
         let executable = std::env::current_exe()?;
@@ -1194,7 +1243,7 @@ fn run_mcp(
     let stdin = io::stdin();
     let stdout = io::stdout();
     dep_vet::mcp::serve(stdin.lock(), &mut stdout.lock(), |name, arguments| {
-        mcp_call(auditor, allowlist, name, arguments)
+        mcp_call(auditor, allowlist, name, arguments, jobs)
     })?;
     Ok(0)
 }
@@ -1261,6 +1310,7 @@ fn mcp_call(
     allowlist: &dep_vet::allowlist::Allowlist,
     name: &str,
     arguments: &serde_json::Value,
+    jobs: usize,
 ) -> dep_vet::mcp::ToolResult {
     match name {
         "vet_package" => {
@@ -1309,7 +1359,7 @@ fn mcp_call(
                 return Err((-32602, "command is too large".to_string()));
             }
             let parsed = dep_vet::intent::parse(command);
-            let (packages, errors) = audit_specs(auditor, allowlist, &parsed);
+            let (packages, errors) = audit_specs(auditor, allowlist, &parsed, jobs);
             let report = dep_vet::guard::GuardReport {
                 command: command.to_string(),
                 parse: parsed,
@@ -1325,7 +1375,7 @@ fn mcp_call(
                 .as_str()
                 .ok_or((-32602, "lockfile is required".to_string()))?;
             let base = arguments["base"].as_str().unwrap_or("HEAD");
-            run_mcp_lockfile(auditor, allowlist, lockfile, base)
+            run_mcp_lockfile(auditor, allowlist, lockfile, base, jobs)
         }
         _ => Err((-32602, format!("unknown tool '{name}'"))),
     }
@@ -1355,9 +1405,10 @@ fn run_mcp_lockfile(
     allowlist: &dep_vet::allowlist::Allowlist,
     lockfile: &str,
     base: &str,
+    jobs: usize,
 ) -> dep_vet::mcp::ToolResult {
     let path = mcp_lockfile_path(lockfile).map_err(|error| (-32602, error))?;
-    let report = diff_lockfile(auditor, allowlist, &path, base, false)
+    let report = diff_lockfile(auditor, allowlist, &path, base, false, jobs)
         .map_err(|error| (-32603, error.to_string()))?;
     let intents: Vec<serde_json::Value> = report
         .new_packages
@@ -1408,6 +1459,7 @@ fn run_guard(
     check: bool,
     json: bool,
     command: &str,
+    jobs: usize,
 ) -> anyhow::Result<u8> {
     let parsed = dep_vet::intent::parse(command);
     let specs: Vec<(Ecosystem, PackageSpec)> = parsed
@@ -1426,28 +1478,20 @@ fn run_guard(
     let mut errors = Vec::new();
     if check {
         let now = now_seconds();
-        for batch in specs.chunks(MAX_CONCURRENT_AUDITS) {
-            let outcomes: Vec<Result<PackageReport, String>> = std::thread::scope(|scope| {
-                let handles: Vec<_> = batch
-                    .iter()
-                    .map(|(ecosystem, spec)| {
-                        scope.spawn(move || audit_intent(auditor, *ecosystem, spec, now))
-                    })
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|handle| {
-                        handle
-                            .join()
-                            .unwrap_or_else(|_| Err("audit thread panicked".to_string()))
-                    })
-                    .collect()
-            });
-            for outcome in outcomes {
-                match outcome {
-                    Ok(report) => packages.push(report),
-                    Err(error) => errors.push(error),
-                }
+        let outcomes = dep_vet::pool::run(
+            specs.len(),
+            jobs,
+            |index| {
+                let (ecosystem, spec) = &specs[index];
+                audit_intent(auditor, *ecosystem, spec, now)
+            },
+            || {},
+        );
+        for outcome in outcomes {
+            match outcome {
+                Some(Ok(report)) => packages.push(report),
+                Some(Err(error)) => errors.push(error),
+                None => errors.push("audit worker panicked".to_string()),
             }
         }
         for report in &mut packages {
@@ -1476,6 +1520,7 @@ fn run_audit(
     format: OutputFormat,
     destination: Option<&std::path::Path>,
     cli: &Cli,
+    jobs: usize,
 ) -> anyhow::Result<u8> {
     let lock_format = lockfile::detect(path)?;
     let contents = lockfile::read(path)?;
@@ -1489,9 +1534,10 @@ fn run_audit(
         &[],
         now,
         true,
+        jobs,
     );
     let (jsr_reports, jsr_errors) =
-        audit_packages(auditor, Ecosystem::Jsr, &contents.jsr, &[], now, true);
+        audit_packages(auditor, Ecosystem::Jsr, &contents.jsr, &[], now, true, jobs);
     reports.extend(jsr_reports);
     errors.extend(jsr_errors);
     errors.extend(skipped_errors(&contents));
@@ -1547,6 +1593,7 @@ fn diff_lockfile(
     path: &std::path::Path,
     base: &str,
     allow_progress: bool,
+    jobs: usize,
 ) -> anyhow::Result<LockReport> {
     let format = lockfile::detect(path)?;
     let ecosystem = format.ecosystem();
@@ -1564,8 +1611,15 @@ fn diff_lockfile(
     };
 
     let now = now_seconds();
-    let (mut new_packages, mut errors) =
-        audit_packages(auditor, ecosystem, &added, &local, now, allow_progress);
+    let (mut new_packages, mut errors) = audit_packages(
+        auditor,
+        ecosystem,
+        &added,
+        &local,
+        now,
+        allow_progress,
+        jobs,
+    );
     let added_jsr = lockfile::added(&current.jsr, &base_contents.jsr);
     let (jsr_reports, jsr_errors) = audit_packages(
         auditor,
@@ -1574,6 +1628,7 @@ fn diff_lockfile(
         &[],
         now,
         allow_progress,
+        jobs,
     );
     new_packages.extend(jsr_reports);
     errors.extend(jsr_errors);
@@ -1664,6 +1719,7 @@ fn audit_packages(
     local: &[String],
     now: i64,
     allow_progress: bool,
+    jobs: usize,
 ) -> (Vec<PackageReport>, Vec<LockFetchError>) {
     let mut reports = Vec::new();
     let mut errors = Vec::new();
@@ -1700,93 +1756,78 @@ fn audit_packages(
         downloads[*index] = count;
     }
 
+    // Maven Central rate-limits bursts, so its trees stay serial. Everything
+    // else uses the caller's jobs; `jobs::resolve` already capped it.
     let concurrency = if ecosystem == Ecosystem::Maven {
-        MAVEN_CONCURRENCY
+        MAVEN_CONCURRENCY.min(jobs)
     } else {
-        MAX_CONCURRENT_AUDITS
+        jobs
     };
-    for (chunk_index, batch) in packages.chunks(concurrency).enumerate() {
-        let outcomes: Vec<Result<PackageReport, LockFetchError>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = batch
-                .iter()
-                .enumerate()
-                .map(|(offset, package)| {
-                    let index = chunk_index * concurrency + offset;
-                    let pre = Pre {
-                        downloads: downloads.get(index).copied().flatten(),
-                        advisories: advisories.get(index).and_then(Option::as_ref),
-                    };
-                    (
-                        package,
-                        scope.spawn(move || {
-                            // Lockfile contents are still input: validate
-                            // before they become a URL.
-                            let spec = spec_for(ecosystem, &package.name, &package.version)
-                                .map_err(|error| LockFetchError {
-                                    package: package.spec(),
-                                    message: error.to_string(),
-                                })?;
-                            let audited = match ecosystem {
-                                Ecosystem::Npm => auditor
-                                    .audit_npm(&spec, local, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                                Ecosystem::Pypi => auditor
-                                    .audit_pypi(&spec, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                                Ecosystem::CratesIo => auditor
-                                    .audit_crates(&spec, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                                Ecosystem::Go => auditor
-                                    .audit_go(&spec, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                                Ecosystem::Jsr => auditor
-                                    .audit_jsr(&spec, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                                Ecosystem::RubyGems => auditor
-                                    .audit_gem(&spec, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                                Ecosystem::NuGet => auditor
-                                    .audit_nuget(&spec, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                                Ecosystem::Maven => auditor
-                                    .audit_maven(&spec, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                                Ecosystem::Composer => auditor
-                                    .audit_composer(&spec, now, Some(pre))
-                                    .map_err(|e| e.to_string()),
-                            };
-                            audited.map_err(|message| LockFetchError {
-                                package: package.spec(),
-                                message,
-                            })
-                        }),
-                    )
-                })
-                .collect();
+    let outcomes = dep_vet::pool::run(
+        packages.len(),
+        concurrency,
+        |index| {
+            let package = &packages[index];
+            let pre = Pre {
+                downloads: downloads.get(index).copied().flatten(),
+                advisories: advisories.get(index).and_then(Option::as_ref),
+            };
+            // Lockfile contents are still input: validate before they become a URL.
+            let spec = spec_for(ecosystem, &package.name, &package.version).map_err(|error| {
+                LockFetchError {
+                    package: package.spec(),
+                    message: error.to_string(),
+                }
+            })?;
+            let audited = match ecosystem {
+                Ecosystem::Npm => auditor
+                    .audit_npm(&spec, local, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+                Ecosystem::Pypi => auditor
+                    .audit_pypi(&spec, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+                Ecosystem::CratesIo => auditor
+                    .audit_crates(&spec, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+                Ecosystem::Go => auditor
+                    .audit_go(&spec, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+                Ecosystem::Jsr => auditor
+                    .audit_jsr(&spec, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+                Ecosystem::RubyGems => auditor
+                    .audit_gem(&spec, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+                Ecosystem::NuGet => auditor
+                    .audit_nuget(&spec, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+                Ecosystem::Maven => auditor
+                    .audit_maven(&spec, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+                Ecosystem::Composer => auditor
+                    .audit_composer(&spec, now, Some(pre))
+                    .map_err(|e| e.to_string()),
+            };
+            audited.map_err(|message| LockFetchError {
+                package: package.spec(),
+                message,
+            })
+        },
+        || progress.advance(),
+    );
+    drop(progress);
 
-            handles
-                .into_iter()
-                .map(|(package, handle)| {
-                    handle.join().unwrap_or_else(|_| {
-                        Err(LockFetchError {
-                            package: package.spec(),
-                            message: "audit worker panicked".to_string(),
-                        })
-                    })
-                })
-                .collect()
-        });
-
-        for outcome in outcomes {
-            match outcome {
-                Ok(report) => reports.push(report),
-                // One unpublished dependency must not hide the rest.
-                Err(error) => errors.push(error),
-            }
-            progress.advance();
+    // A panicking worker is reported per package, not as a lost slot.
+    for (index, outcome) in outcomes.into_iter().enumerate() {
+        match outcome {
+            Some(Ok(report)) => reports.push(report),
+            Some(Err(error)) => errors.push(error),
+            None => errors.push(LockFetchError {
+                package: packages[index].spec(),
+                message: "audit worker panicked".to_string(),
+            }),
         }
     }
-    drop(progress);
 
     (reports, errors)
 }

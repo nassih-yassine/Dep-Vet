@@ -430,6 +430,12 @@ What that buys, measured on a 1,090-package lockfile (OWASP NodeGoat pinned at
 cache entries and 115 MiB after the cold run. The script and method are in
 [`examples/benchmark`](examples/benchmark/README.md).
 
+`--jobs N` (or `DEPVET_JOBS`) sets how many packages are audited at once. The
+default is the machine's cores capped at 8; the cap is 32, and `0` or a larger
+value is exit `3`. Maven trees stay one coordinate at a time because Central
+answers a burst with `403`. The bench script times `--jobs 4` against
+`--jobs 8` as well.
+
 Network errors, `429`, and `5xx` retry up to three times with exponential
 backoff; `Retry-After` is honoured up to five seconds. The passive update hint is
 the exception: one attempt, two seconds, cached for 24 hours, with a six-hour

@@ -163,9 +163,13 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   existing "advisory check unavailable" INFO fires. Advisory details use
   `get_with_source`; `oldest_stale` folds batch and detail ages so
   `advisories-stale` reports the oldest data it relied on.
-- **Cache lifecycle:** entries older than `RETENTION_SECONDS` (30 days) are
-  deleted on open, and `PRAGMA user_version` drops the table when the schema
-  changes. Never add a column without bumping `SCHEMA_VERSION`.
+- **Cache lifecycle:** the cache opens in WAL mode with a five-second
+  `busy_timeout`, so a second process (an agent hook, a watch loop) waits
+  instead of failing with "database is locked"; both are best effort on a
+  filesystem that cannot do WAL. Entries older than `RETENTION_SECONDS`
+  (30 days) are deleted on open, and `PRAGMA user_version` drops the table
+  when the schema changes. Never add a column without bumping
+  `SCHEMA_VERSION`.
 - **`querybatch` returns advisory IDs only.** Summary, aliases, and severity
   come from `GET /v1/vulns/{id}`. Treating the batch as full records shows
   "advisory without a summary" for every real advisory.
@@ -384,9 +388,14 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   local typosquat list on purpose (every package in a tree resembles another),
   and its cold cost is one audit per package. It shares `audit_packages` with
   `lock`, so concurrency and error collection stay identical.
-- **Lockfile audits run 4 packages at a time.** `MAX_CONCURRENT_AUDITS` in
-  `main.rs` bounds the burst; output order still follows the sorted diff, and
-  per-package failures stay in `errors`.
+- **`--jobs` bounds the burst, never the order.** `jobs::resolve` takes
+  `--jobs`, then `DEPVET_JOBS`, then the machine's cores capped at 8, and
+  rejects `0` or anything over 32 with exit 3. `pool::run` hands out indices
+  from an atomic, so no worker waits behind a slow package; results land by
+  index, so output still follows the sorted diff and per-package failures
+  (including a panicking worker) stay in `errors`. Maven trees stay at
+  `MAVEN_CONCURRENCY` (1) because Central answers bursts with 403. The MCP
+  lockfile diff and `guard` use the same pool.
 - **The npm candidate list is generated, not hand-edited.** `ANCHORS` are part
   of the written seed (`set(seed) | set(ANCHORS)`), and the refresh workflow
   fails if any anchor is missing from `data/popular-npm.txt` or if the diff
