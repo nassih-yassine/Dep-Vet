@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Dependency confusion is detected for routed names.** After fetching a
+  private package, dep-vet asks the public registry once whether the same name
+  exists there. A public copy at the same or a higher version is HIGH, older
+  versions only are WARN, and a failed probe is INFO, never silence. The probe
+  sends no token and can be turned off per entry with `probe_public = false`
+  for a registry that intentionally mirrors public packages.
+
 - **Private npm registries.** `[[registries]]` in `.depvet.toml` routes a
   scope or name prefix to a company registry; `auth = "env:VAR"` is only read
   from `~/.config/dep-vet/registries.toml`, so a repository can route but never

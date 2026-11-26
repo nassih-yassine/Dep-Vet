@@ -213,6 +213,7 @@ fn parse_project(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMet
     let license = pypi_license(&project.info);
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: project.info.name,
         version,
         first_published_at,

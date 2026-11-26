@@ -167,6 +167,7 @@ fn parse_metadata(
     };
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: spec.name.clone(),
         version: release.version.clone(),
         latest_version: Some(latest(&releases).version.clone()),

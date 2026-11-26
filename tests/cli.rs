@@ -2700,7 +2700,7 @@ fn one_job_still_audits_and_keeps_lockfile_order() {
 }
 
 #[test]
-fn a_routed_scope_uses_the_private_registry_and_never_the_public_one() {
+fn a_routed_scope_is_fetched_privately_and_probed_without_a_token() {
     let private = registry_with(&[PackageFixture::clean("@acme/lib")], None);
     let public = registry_with(&[PackageFixture::clean("plain-pkg")], None);
 
@@ -2759,10 +2759,26 @@ fn a_routed_scope_uses_the_private_registry_and_never_the_public_one() {
 
     // The public registry must not learn the private name, not even for a
     // download count the private package cannot have.
-    let leaked: Vec<String> = public.requests();
+    // The only public request that may carry the routed name is the
+    // dependency-confusion probe, unauthenticated and never a download query.
+    let public_requests = public.recorded();
+    let probe: Vec<&RecordedRequest> = public_requests
+        .iter()
+        .filter(|request| request.path.contains("acme"))
+        .collect();
+    assert_eq!(probe.len(), 1, "expected exactly one unauthenticated probe");
     assert!(
-        leaked.iter().all(|path| !path.contains("acme")),
-        "a routed name reached the public registry: {leaked:?}"
+        probe
+            .iter()
+            .all(|request| !request.path.starts_with("/downloads")),
+        "the public download API was asked about a private name"
+    );
+    assert!(
+        probe
+            .iter()
+            .flat_map(|request| request.headers.iter())
+            .all(|(name, _)| name != "authorization"),
+        "the probe carried the private token"
     );
 
     // A public package in the same run carries no token.
@@ -2778,6 +2794,60 @@ fn a_routed_scope_uses_the_private_registry_and_never_the_public_one() {
             .all(|(name, _)| name != "authorization"),
         "the private token was sent to the public registry"
     );
+}
+
+#[test]
+fn a_routed_name_that_exists_publicly_is_a_dependency_confusion_high() {
+    let private = registry_with(&[PackageFixture::clean("@acme/lib")], None);
+    let mut routes = HashMap::new();
+    // The public registry has the same name at a higher version.
+    routes.insert(
+        "/@acme%2Flib".to_string(),
+        (
+            200,
+            r#"{"name":"@acme/lib","dist-tags":{"latest":"2.0.0"},"versions":{"1.0.0":{},"2.0.0":{}}}"#
+                .to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let public = MockRegistry::start(routes);
+
+    let repo = Repo::new();
+    repo.write(
+        ".depvet.toml",
+        &format!(
+            "[[registries]]\necosystem = \"npm\"\nmatch = \"@acme\"\nurl = \"{}\"\n",
+            private.base
+        ),
+    );
+
+    let output = private
+        .command_with(&[
+            ("DEPVET_REGISTRY_BASE", public.base.as_str()),
+            (
+                "DEPVET_DOWNLOADS_BASE",
+                &format!("{}/downloads", public.base),
+            ),
+        ])
+        .current_dir(repo.path())
+        .args(["npm", "@acme/lib", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let finding = value["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["id"] == "dependency-confusion")
+        .expect("the confusion finding");
+    assert_eq!(finding["severity"], "high");
+    assert!(public.requests().iter().any(|path| path == "/@acme%2Flib"));
 }
 
 #[test]

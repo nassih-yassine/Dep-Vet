@@ -26,6 +26,14 @@ pub struct RegistryEntry {
     /// `env:NAME`. Rejected outside the user-level file.
     #[serde(default)]
     pub auth: Option<String>,
+    /// Ask the public registry whether the name also exists there. On by
+    /// default; off for a registry that intentionally mirrors public packages.
+    #[serde(default = "default_true")]
+    pub probe_public: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -206,6 +214,7 @@ pub struct Route {
     pub base: String,
     /// Environment variable holding the token. Never the token itself.
     pub auth_env: Option<String>,
+    pub probe_public: bool,
 }
 
 /// Routes in trust order: per-user entries first, then the project's. A
@@ -226,6 +235,7 @@ impl Router {
                 .as_deref()
                 .and_then(|value| value.strip_prefix("env:"))
                 .map(str::to_string),
+            probe_public: entry.probe_public,
         });
         Self {
             routes: routes.collect(),
@@ -326,6 +336,7 @@ mod tests {
             r#match: pattern.to_string(),
             url: url.to_string(),
             auth: None,
+            probe_public: true,
         }
     }
 

@@ -156,6 +156,7 @@ fn parse_package(
         .map(|_| "this package is archived by its publisher".to_string());
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: spec.name.clone(),
         version,
         first_published_at,

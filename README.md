@@ -303,8 +303,12 @@ auth = "env:ACME_NPM_TOKEN"
 ```
 
 The token is sent as a bearer header to that host only. It never enters the
-cache, a report, or a redirect, and the public registry never sees a routed
-name (not even a download count). `https` is required; `http` only works under
+cache, a report, or a redirect, and the public download API never sees a routed
+name. Unless the entry sets `probe_public = false`, dep-vet also asks the public
+registry once whether the name exists there, because that is the
+dependency-confusion check: a public copy at the same or a higher version is a
+HIGH finding, older-only versions are a WARN, and a failed probe is INFO, never
+silence. The probe is unauthenticated. `https` is required; `http` only works under
 `DEPVET_ALLOW_INSECURE_BASES=1` for a local mirror. The reusable CI workflow
 uses the base revision's `.depvet.toml`, so a pull request cannot add a route.
 Each routed request is still exit `3` when the host cannot be read: an

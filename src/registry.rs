@@ -57,6 +57,24 @@ pub struct PackageMeta {
     pub scorecard: Option<crate::scorecard::Scorecard>,
     /// SPDX-normalised license from the registry, when it published one.
     pub license: Option<String>,
+    /// For a routed name: whether the same name exists on the public registry.
+    pub public: PublicProbe,
+}
+
+/// What the public registry says about a privately routed name.
+///
+/// `NotApplicable` is the normal case (the package is public). `Unchecked`
+/// means the probe failed and must never read as "absent". `Known` carries
+/// what the public registry actually lists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PublicProbe {
+    #[default]
+    NotApplicable,
+    Unchecked,
+    Known {
+        latest: Option<String>,
+        versions: Vec<String>,
+    },
 }
 
 /// What the previous release looked like. Empty means "no history", never
@@ -265,7 +283,39 @@ impl RegistryClient {
             }
             Err(error) => return Err(RegistryError::Http(error.to_string())),
         };
-        parse_packument(spec, &body, &url, Some(&self.http))
+        let mut meta = parse_packument(spec, &body, &url, Some(&self.http))?;
+        // A routed name that also exists publicly is the dependency-confusion
+        // setup: the public copy is what an unpinned resolver would install.
+        if let Some(route) = self.route(&spec.name)
+            && route.probe_public
+        {
+            meta.public = self.probe_public_name(&spec.name);
+        }
+        Ok(meta)
+    }
+
+    /// One public-registry lookup for a routed name. A 404 is an answer (the
+    /// name is free); anything else that fails is `Unchecked`, never "absent".
+    fn probe_public_name(&self, name: &str) -> PublicProbe {
+        let url = format!(
+            "{}/{}",
+            self.registry_base.trim_end_matches('/'),
+            encode_name(name)
+        );
+        match self.http.get(&url) {
+            Ok(body) => match serde_json::from_str::<Packument>(&body) {
+                Ok(packument) => PublicProbe::Known {
+                    latest: packument.dist_tags.get("latest").cloned(),
+                    versions: packument.versions.keys().cloned().collect(),
+                },
+                Err(_) => PublicProbe::Unchecked,
+            },
+            Err(HttpError::Status { status: 404, .. }) => PublicProbe::Known {
+                latest: None,
+                versions: Vec::new(),
+            },
+            Err(_) => PublicProbe::Unchecked,
+        }
     }
 
     /// The version and dependency maps `plan` needs, without parsing a
@@ -774,6 +824,7 @@ fn parse_packument(
     );
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: packument.name.unwrap_or_else(|| spec.name.clone()),
         version,
         first_published_at: packument

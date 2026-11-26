@@ -170,6 +170,7 @@ fn parse_versions(
         .map(|_| "this version is deprecated or unlisted on NuGet".to_string());
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: spec.name.clone(),
         version,
         first_published_at,
