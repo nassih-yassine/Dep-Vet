@@ -319,6 +319,13 @@ Scope routes are also discovered, after the explicit entries above, from
 private `registry=` there becomes the default npm registry only when
 `DEPVET_REGISTRY_BASE` is unset. `DEPVET_NO_NPMRC=1` turns discovery off.
 
+For Python, dep-vet also reads pip's own configuration (`PIP_INDEX_URL`,
+`PIP_EXTRA_INDEX_URL`, and `pip.conf`). A configured index replaces PyPI for
+every name, exactly as it does for `pip install`, and packages are read from
+that index's simple API. Only the primary index is used today; extra indexes
+are parsed but not consulted. `DEPVET_PYPI_BASE` still wins, and
+`DEPVET_NO_PIP_CONFIG=1` turns discovery off.
+
 The token is sent as a bearer header to that host only. It never enters the
 cache, a report, or a redirect, and the public download API never sees a routed
 name. Unless the entry sets `probe_public = false`, dep-vet also asks the public

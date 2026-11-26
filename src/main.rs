@@ -115,6 +115,36 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     let user_registries =
         dep_vet::registries::load_user_config().map_err(|error| anyhow::anyhow!(error))?;
     let mut npm_default: Option<String> = None;
+    let mut pypi_simple: Option<String> = None;
+    // pip's index replaces PyPI, the same way `pip install` uses it. Only read
+    // when no DEPVET_PYPI_BASE override exists.
+    if dep_vet::pip_config::enabled() && std::env::var_os("DEPVET_PYPI_BASE").is_none() {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let discovery =
+            dep_vet::pip_config::discover(|key| std::env::var(key).ok(), home.as_deref())
+                .map_err(|error| anyhow::anyhow!(error))?;
+        let default = "https://pypi.org/simple";
+        if let Some(base) = dep_vet::pip_config::indexes(&discovery, default)
+            .into_iter()
+            .next()
+            .filter(|base| base != default)
+        {
+            let probe = dep_vet::registries::RegistryEntry {
+                ecosystem: dep_vet::model::Ecosystem::Pypi,
+                r#match: "@pip-default".to_string(),
+                url: base.clone(),
+                auth: None,
+                probe_public: true,
+            };
+            dep_vet::registries::validate(
+                std::slice::from_ref(&probe),
+                std::env::var("DEPVET_ALLOW_INSECURE_BASES").is_ok_and(|value| value == "1"),
+                true,
+            )
+            .map_err(|error| anyhow::anyhow!("pip config: {error}"))?;
+            pypi_simple = Some(base);
+        }
+    }
     let mut router = dep_vet::registries::Router::new(allowlist.registries(), &user_registries);
     if dep_vet::npmrc::enabled() {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
@@ -152,7 +182,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         cli.no_cache,
         &registry_bases,
     ));
-    let mut auditor = Auditor::new(&http, allowlist.policy(), &router, npm_default);
+    let mut auditor = Auditor::new(&http, allowlist.policy(), &router, npm_default, pypi_simple);
 
     match &cli.command {
         Command::Hook { .. } => unreachable!("handled before config and network"),

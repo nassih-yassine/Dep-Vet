@@ -30,6 +30,9 @@ pub struct PypiClient {
     base: String,
     /// Names routed to a private index, by the same configuration npm uses.
     router: Option<crate::registries::Router>,
+    /// pip's configured index. It replaces PyPI for every name, which is what
+    /// `pip install` does with the same setting.
+    simple: Option<String>,
 }
 
 impl PypiClient {
@@ -44,6 +47,7 @@ impl PypiClient {
             http,
             base: base.into(),
             router: None,
+            simple: None,
         }
     }
 
@@ -51,6 +55,12 @@ impl PypiClient {
     /// index's simple API only; it never falls back to PyPI's JSON API.
     pub fn with_router(mut self, router: crate::registries::Router) -> Self {
         self.router = Some(router);
+        self
+    }
+
+    /// pip's index, used for every name that has no explicit route.
+    pub fn with_simple_base(mut self, base: Option<String>) -> Self {
+        self.simple = base;
         self
     }
 
@@ -66,7 +76,13 @@ impl PypiClient {
 
     pub fn fetch(&self, spec: &PackageSpec) -> Result<PackageMeta, PypiError> {
         if let Some(route) = self.route(&spec.name) {
-            return self.fetch_simple(spec, route);
+            let token = crate::registries::token(route).map_err(PypiError::Http)?;
+            return self.fetch_simple_at(spec, &route.base, token.as_deref(), route.probe_public);
+        }
+        if let Some(base) = self.simple.clone() {
+            // A general index proxies public names too, so a public copy is
+            // expected rather than suspicious: no confusion probe here.
+            return self.fetch_simple_at(spec, &base, None, false);
         }
         let url = self.project_url(&spec.name);
         let body = match self.http.get(&url) {
@@ -100,23 +116,22 @@ impl PypiClient {
     /// The PEP 691 simple index a private mirror actually publishes. Fields the
     /// index cannot answer (maintainers, license, repository, history) stay
     /// empty and surface as not checked.
-    fn fetch_simple(
+    fn fetch_simple_at(
         &self,
         spec: &PackageSpec,
-        route: &crate::registries::Route,
+        index_base: &str,
+        token: Option<&str>,
+        probe_public: bool,
     ) -> Result<PackageMeta, PypiError> {
         use crate::registry::PublicProbe;
         let folded = crate::pypi_simple::fold(&spec.name);
-        let url = format!("{}/{folded}/", route.base.trim_end_matches('/'));
-        let authorization = match crate::registries::token(route).map_err(PypiError::Http)? {
-            Some(token) => {
-                use base64::Engine as _;
-                let pair =
-                    base64::engine::general_purpose::STANDARD.encode(format!("__token__:{token}"));
-                Some(format!("Basic {pair}"))
-            }
-            None => None,
-        };
+        let url = format!("{}/{folded}/", index_base.trim_end_matches('/'));
+        let authorization = token.map(|token| {
+            use base64::Engine as _;
+            let pair =
+                base64::engine::general_purpose::STANDARD.encode(format!("__token__:{token}"));
+            format!("Basic {pair}")
+        });
         let mut headers = vec![("Accept", "application/vnd.pypi.simple.v1+json")];
         if let Some(authorization) = authorization.as_deref() {
             headers.push(("Authorization", authorization));
@@ -148,7 +163,7 @@ impl PypiClient {
                 None => PypiError::PackageNotFound(spec.name.clone()),
             });
         }
-        let public = if route.probe_public {
+        let public = if probe_public {
             self.probe_public(&spec.name)
         } else {
             PublicProbe::NotApplicable
