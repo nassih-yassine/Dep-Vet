@@ -40,8 +40,10 @@ Dep-Vet runs as one local binary. It makes these outbound requests:
   names (`~/.config/dep-vet/registries.toml`); a repository file may route but
   never carry a credential. The token is not written to the cache or a report
   and is not sent to any other host (ureq drops `Authorization` on redirects).
-  A routed package's name is never sent to the public registry, not even for a
-  download count.
+  A routed package's name is never sent to the public download API. Unless the
+  entry sets `probe_public = false`, dep-vet makes one unauthenticated public
+  lookup of the name, which is the dependency-confusion check itself; the
+  answer becomes a HIGH, WARN, or INFO finding.
 
 That is the whole list. There is no account, no API key, no analytics, no crash
 reporting, and no upload of lockfile paths, source, reports, or findings.

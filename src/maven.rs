@@ -227,6 +227,7 @@ fn parse_search(
     };
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: spec.name.clone(),
         version: release.v.clone(),
         first_published_at,
@@ -296,6 +297,7 @@ fn google_meta(
 
     let (group, artifact) = spec.name.split_once(':').unwrap_or((&spec.name, ""));
     Ok(PackageMeta {
+        public: Default::default(),
         name: spec.name.clone(),
         version: version.clone(),
         // Google's metadata carries no publish times.

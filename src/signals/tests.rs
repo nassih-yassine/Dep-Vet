@@ -7,6 +7,7 @@ const NOW: i64 = 1_800_000_000; // 2027-01-15
 
 fn meta() -> PackageMeta {
     PackageMeta {
+        public: Default::default(),
         name: "some-package".to_string(),
         version: "1.0.0".to_string(),
         first_published_at: Some(NOW - 400 * date::SECONDS_PER_DAY),
@@ -279,6 +280,60 @@ fn an_added_lookalike_dependency_is_a_warning() {
         finding(&findings, "dependency-added").severity,
         Severity::Warn
     );
+}
+
+fn confusion(public: crate::registry::PublicProbe) -> Option<Finding> {
+    let mut meta = meta();
+    meta.name = "@acme/lib".to_string();
+    meta.version = "1.0.0".to_string();
+    meta.public = public;
+    confusion_finding(&meta)
+}
+
+#[test]
+fn a_public_copy_at_or_above_this_version_is_high() {
+    use crate::registry::PublicProbe;
+    for latest in ["1.0.0", "2.0.0"] {
+        let finding = confusion(PublicProbe::Known {
+            latest: Some(latest.to_string()),
+            versions: vec![latest.to_string()],
+        })
+        .expect("a finding");
+        assert_eq!(finding.id, "dependency-confusion");
+        assert_eq!(finding.severity, Severity::High, "{latest}");
+    }
+}
+
+#[test]
+fn a_public_copy_only_below_this_version_is_a_warning() {
+    use crate::registry::PublicProbe;
+    let finding = confusion(PublicProbe::Known {
+        latest: Some("0.9.0".to_string()),
+        versions: vec!["0.9.0".to_string()],
+    })
+    .expect("a finding");
+    assert_eq!(finding.severity, Severity::Warn);
+}
+
+#[test]
+fn an_absent_public_name_is_not_a_finding() {
+    use crate::registry::PublicProbe;
+    assert!(
+        confusion(PublicProbe::Known {
+            latest: None,
+            versions: vec![],
+        })
+        .is_none()
+    );
+    assert!(confusion(PublicProbe::NotApplicable).is_none());
+}
+
+#[test]
+fn a_failed_probe_is_information_not_silence() {
+    use crate::registry::PublicProbe;
+    let finding = confusion(PublicProbe::Unchecked).expect("a finding");
+    assert_eq!(finding.id, "dependency-confusion-unchecked");
+    assert_eq!(finding.severity, Severity::Info);
 }
 
 #[test]

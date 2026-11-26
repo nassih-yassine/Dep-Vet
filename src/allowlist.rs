@@ -39,6 +39,8 @@ pub const KNOWN_FINDINGS: &[&str] = &[
     "release-after-dormancy",
     "install-scripts-changed",
     "dependency-added",
+    "dependency-confusion",
+    "dependency-confusion-unchecked",
     "publisher-changed",
     "release-burst",
     "repository-changed",

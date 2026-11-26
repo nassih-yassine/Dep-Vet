@@ -223,6 +223,7 @@ fn parse_crate(
     let latest_version = response.krate.max_stable_version.clone();
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: response.krate.name,
         version,
         first_published_at: response

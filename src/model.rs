@@ -876,7 +876,8 @@ impl Finding {
             | "workflow-curl-pipe-shell"
             | "workflow-secret-echo"
             | "mcp-plaintext-secret"
-            | "mcp-insecure-url" => Confidence::High,
+            | "mcp-insecure-url"
+            | "dependency-confusion" => Confidence::High,
             "typosquat"
             | "publisher-not-maintainer"
             | "publisher-changed"
@@ -894,7 +895,8 @@ impl Finding {
             | "policy-provenance"
             | "policy-advisory-severity"
             | "policy-license"
-            | "no-repository" => Confidence::Medium,
+            | "no-repository"
+            | "dependency-confusion-unchecked" => Confidence::Medium,
             "policy-license-denied" => Confidence::High,
             _ => Confidence::Medium,
         }

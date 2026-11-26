@@ -131,7 +131,9 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 Routing is not a credential store. `[[registries]]` in a repository file may
 pick a host; `auth` is only honoured in `~/.config/dep-vet/registries.toml`.
 Never send a token to a host the route did not name, never put it in a URL or
-cache key, and never ask the public registry about a routed name.
+cache key, and never ask the public *downloads* API about a routed name. The
+dependency-confusion probe is the one deliberate public lookup of the name: it
+is unauthenticated, opt-out per entry, and a failed probe is INFO, never clean.
 
 The full inventory of 100+ traps lives in
 [`agent-docs/traps.md`](agent-docs/traps.md), in the order they were learned.

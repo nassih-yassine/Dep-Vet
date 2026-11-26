@@ -188,6 +188,7 @@ fn parse_module(spec: &PackageSpec, body: &str, url: &str) -> Result<PackageMeta
         });
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: response.package_key.name,
         version: release.version_key.version.clone(),
         first_published_at,

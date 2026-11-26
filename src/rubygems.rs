@@ -216,6 +216,7 @@ fn parse_versions(
         .map(|_| "this version is yanked".to_string());
 
     Ok(PackageMeta {
+        public: Default::default(),
         name: spec.name.clone(),
         version: release.number.clone(),
         first_published_at,

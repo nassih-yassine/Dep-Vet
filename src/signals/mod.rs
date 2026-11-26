@@ -80,6 +80,9 @@ pub fn report_with_policy(
             .is_some_and(|first| now - first >= ESTABLISHED_AGE_DAYS * date::SECONDS_PER_DAY);
     let established = outmatched || aged;
     let mut findings = assess(&meta, ecosystem, local, &profile, now);
+    if let Some(finding) = confusion_finding(&meta) {
+        findings.push(finding);
+    }
     if established {
         findings.retain(|finding| finding.id != "typosquat");
     }
@@ -184,6 +187,94 @@ pub fn report_with_policy(
 /// Advice is driven only by advisories and by a lookalike name. A package whose
 /// findings are all install scripts, deprecation, or freshness gets nothing, so
 /// the report never becomes an "out of date" nag.
+/// A routed package that also exists on the public registry is the classic
+/// dependency-confusion target: an unpinned resolver takes the public copy.
+/// HIGH when that copy is the same or newer, WARN when only older versions
+/// exist, INFO when the probe could not run (never silence).
+fn confusion_finding(meta: &PackageMeta) -> Option<Finding> {
+    use crate::registry::PublicProbe;
+    let (latest, versions) = match &meta.public {
+        PublicProbe::NotApplicable => return None,
+        PublicProbe::Unchecked => {
+            return Some(Finding {
+                id: "dependency-confusion-unchecked",
+                severity: Severity::Info,
+                title: "the public registry was not checked".to_string(),
+                detail: "this name comes from a private registry; the probe for a public \
+                         copy failed, so a squatter is not ruled out"
+                    .to_string(),
+                allowed: false,
+                evidence: vec![Evidence {
+                    label: "private registry".to_string(),
+                    value: meta.registry_url.clone(),
+                    url: Some(meta.registry_url.clone()),
+                }],
+            });
+        }
+        PublicProbe::Known { latest, versions } => (latest, versions),
+    };
+    if versions.is_empty() {
+        return None;
+    }
+    let internal = semver::Version::parse(&meta.version).ok();
+    let public = latest
+        .as_ref()
+        .and_then(|version| semver::Version::parse(version).ok())
+        .or_else(|| {
+            versions
+                .iter()
+                .filter_map(|version| semver::Version::parse(version).ok())
+                .max()
+        });
+    let public_url = format!("https://www.npmjs.com/package/{}", meta.name);
+    let (severity, detail) = match (internal, public) {
+        (Some(internal), Some(public)) if public >= internal => (
+            Severity::High,
+            format!(
+                "the public registry has {public} for '{}'; this build resolves {internal} from a \
+                 private registry, so a resolver that falls back to the public copy installs \
+                 someone else's package",
+                meta.name
+            ),
+        ),
+        (Some(internal), Some(public)) => (
+            Severity::Warn,
+            format!(
+                "the public registry has '{}' up to {public}, below this {internal}; a future \
+                 version bump on the public side would shadow this private one",
+                meta.name
+            ),
+        ),
+        _ => (
+            Severity::Warn,
+            format!(
+                "the public registry publishes '{}' but the versions could not be ordered \
+                 against {}",
+                meta.name, meta.version
+            ),
+        ),
+    };
+    Some(Finding {
+        id: "dependency-confusion",
+        severity,
+        title: "this private name also exists on the public registry".to_string(),
+        detail,
+        allowed: false,
+        evidence: vec![
+            Evidence {
+                label: "private registry".to_string(),
+                value: meta.registry_url.clone(),
+                url: Some(meta.registry_url.clone()),
+            },
+            Evidence {
+                label: "public copy".to_string(),
+                value: public_url.clone(),
+                url: Some(public_url),
+            },
+        ],
+    })
+}
+
 fn upgrade_advice(
     meta: &PackageMeta,
     advisories: Option<&AdvisoryList>,
