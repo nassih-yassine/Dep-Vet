@@ -2,6 +2,7 @@
 
 pub mod allowlist;
 pub mod archive;
+pub mod auditor;
 pub mod branding;
 pub mod cache;
 pub mod cli;
