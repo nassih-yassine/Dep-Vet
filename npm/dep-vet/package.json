@@ -1,6 +1,6 @@
 {
   "name": "@nassihyas/dep-vet",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "mcpName": "io.github.nassih-yassine/dep-vet",
   "description": "Vet npm, PyPI, crates.io and more for supply-chain risk before installing. Rust CLI, no account, no code execution.",
   "keywords": [

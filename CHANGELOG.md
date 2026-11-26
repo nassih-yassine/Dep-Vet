@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.17.0 — 2026-11-26
 
 - **Security fixes from the pre-release review.** A repository `.npmrc` could
   expand `${VAR}` into a route URL and send CI tokens to its own host; project
