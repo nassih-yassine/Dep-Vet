@@ -50,6 +50,11 @@ pub enum PolicyError {
 pub struct Overrides {
     pub active: bool,
     pub bases: Vec<String>,
+    /// Registry base URLs from configuration. A route the user (or the base
+    /// revision of a repository) declared is allowed to resolve to a private
+    /// address, because that is what an internal registry is. Everything else,
+    /// including archives and provenance, stays public-only.
+    pub configured: Vec<String>,
 }
 
 impl Overrides {
@@ -59,11 +64,29 @@ impl Overrides {
             .filter(|(key, _)| key.starts_with("DEPVET_") && key.ends_with("_BASE"))
             .map(|(_, value)| value)
             .collect();
-        Self { active, bases }
+        Self {
+            active,
+            bases,
+            configured: Vec::new(),
+        }
     }
 
     fn parsed(&self) -> impl Iterator<Item = Url> + '_ {
         self.bases.iter().filter_map(|base| Url::parse(base).ok())
+    }
+
+    /// Permits exact host:port declared as a registry route, without the
+    /// development gate. Only routing uses this; the gate still governs
+    /// `DEPVET_*_BASE`.
+    pub fn permits_configured(&self, host: &str, port: Option<u16>) -> bool {
+        self.configured.iter().any(|base| {
+            Url::parse(base).ok().is_some_and(|parsed| {
+                parsed
+                    .host_str()
+                    .is_some_and(|allowed| allowed.eq_ignore_ascii_case(host))
+                    && parsed.port_or_known_default() == port
+            })
+        })
     }
 
     fn allows(&self, url: &Url) -> bool {
@@ -375,12 +398,13 @@ pub fn filter_resolved_addresses(
     addresses: impl IntoIterator<Item = IpAddr>,
     overrides: &Overrides,
 ) -> Result<Vec<SocketAddr>, PolicyError> {
-    let override_ok = overrides.active
+    let override_ok = (overrides.active
         && overrides.parsed().any(|base| {
             base.host_str().is_some_and(|allowed| {
                 allowed.eq_ignore_ascii_case(host) && base.port_or_known_default() == Some(port)
             })
-        });
+        }))
+        || overrides.permits_configured(host, Some(port));
     let override_ip = host
         .strip_prefix('[')
         .and_then(|host| host.strip_suffix(']'))
@@ -459,7 +483,32 @@ mod tests {
         Overrides {
             active: true,
             bases: vec![base.to_string()],
+            configured: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_configured_registry_host_may_resolve_privately() {
+        let private = IpAddr::from([10, 1, 2, 3]);
+        let host = "npm.internal.example";
+        let mut overrides = Overrides::default();
+        assert!(
+            filter_resolved_addresses(host, 443, [private], &overrides).is_err(),
+            "an undeclared host must stay public-only"
+        );
+        overrides.configured.push(format!("https://{host}/"));
+        assert!(
+            filter_resolved_addresses(host, 443, [private], &overrides).is_ok(),
+            "a configured registry may resolve to a private address"
+        );
+        assert!(
+            filter_resolved_addresses(host, 8443, [private], &overrides).is_err(),
+            "the exception is exact host:port"
+        );
+        assert!(
+            filter_resolved_addresses("other.example", 443, [private], &overrides).is_err(),
+            "the exception does not leak to other hosts"
+        );
     }
 
     #[test]
