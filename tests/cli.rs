@@ -2510,6 +2510,82 @@ fn fail_on_is_rejected_where_it_cannot_change_the_exit_code() {
         .assert()
         .code(3)
         .stderr(predicate::str::contains("--fail-on applies to"));
+
+    // The explicit default is still an explicit request: a wrapper that always
+    // passes `--fail-on "$LEVEL"` must not behave differently per value.
+    registry
+        .command()
+        .args([
+            "guard",
+            "--fail-on",
+            "warn",
+            "--check",
+            "--",
+            "npm i guard-pkg",
+        ])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("--fail-on applies to"));
+
+    // `watch` never exits with a verdict, so the flag would only change the
+    // printed line. Refuse it there too.
+    registry
+        .command()
+        .args(["watch", "--fail-on", "high", "package-lock.json"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("--fail-on applies to"));
+}
+
+#[test]
+fn fail_on_reaches_the_written_file_and_sarif() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("warn-pkg", "1.0.0")]),
+    );
+    let package = PackageFixture {
+        scripts: r#"{"preinstall":"node before.js"}"#,
+        ..PackageFixture::clean("warn-pkg")
+    };
+    let registry = registry_with(&[package], None);
+
+    // `-o` writes the report; its exit_code must match the process.
+    let written = repo.path().join("report.json");
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args([
+            "audit",
+            "package-lock.json",
+            "--json",
+            "--fail-on",
+            "high",
+            "-o",
+            written.to_str().unwrap(),
+        ])
+        .assert()
+        .code(0);
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&written).unwrap()).unwrap();
+    assert_eq!(value["exit_code"], 0);
+    assert_eq!(value["verdict"], "warn");
+
+    // SARIF's invocation carries the same code.
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args([
+            "audit",
+            "package-lock.json",
+            "--format",
+            "sarif",
+            "--fail-on",
+            "high",
+        ])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("\"exitCode\": 0"));
 }
 
 #[test]

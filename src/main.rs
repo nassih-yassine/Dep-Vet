@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use dep_vet::cli::{Cli, Command, FailOn, OutputFormat, SbomFormat};
+use dep_vet::cli::{Cli, Command, OutputFormat, SbomFormat};
 use dep_vet::composer::{ComposerClient, ComposerError};
 use dep_vet::crates::{CratesClient, CratesError};
 use dep_vet::go::{GoClient, GoError};
@@ -56,7 +56,7 @@ fn main() -> ExitCode {
             std::env::set_var("DEPVET_ALLOW_INSECURE_BASES", "1");
         }
     }
-    if cli.fail_on != FailOn::Warn && !cli.honours_fail_on() {
+    if cli.fail_on.is_some() && !cli.honours_fail_on() {
         eprintln!(
             "dep-vet: --fail-on applies to audit, lock, and the single-package checks; \
              this command keeps its own exit codes"
@@ -496,7 +496,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             json,
         } => {
             let report = diff_lockfile(&auditor, &allowlist, path, base, true)?;
-            let fail_on = cli.fail_on.threshold();
+            let fail_on = cli.fail_threshold();
             let output = if *json {
                 render_lock_json_with(&report, fail_on)?
             } else {
@@ -1505,7 +1505,7 @@ fn run_audit(
         errors,
         notes: contents.notes,
     };
-    let fail_on = cli.fail_on.threshold();
+    let fail_on = cli.fail_threshold();
     let output = match format {
         OutputFormat::Human => render_audit_human_with(&report, use_color(cli), fail_on),
         OutputFormat::Json => render_audit_json_with(&report, fail_on)?,
@@ -1792,7 +1792,7 @@ fn audit_packages(
 }
 
 fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result<u8> {
-    let fail_on = cli.fail_on.threshold();
+    let fail_on = cli.fail_threshold();
     let output = if json {
         dep_vet::report::render_json_with(report, fail_on)?
     } else {

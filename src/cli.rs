@@ -35,9 +35,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub dev_registry: bool,
 
-    /// Lowest severity that fails the run (audit, lock, and single-package checks)
-    #[arg(long, global = true, value_enum, default_value = "warn")]
-    pub fail_on: FailOn,
+    /// Lowest severity that fails the run (audit, lock, and single-package checks; default: warn)
+    #[arg(long, global = true, value_enum)]
+    pub fail_on: Option<FailOn>,
 }
 
 /// The severity threshold behind `--fail-on`. `warn` is the historical
@@ -389,6 +389,12 @@ pub enum Command {
 }
 
 impl Cli {
+    /// `--fail-on` resolved against its default. `None` in the parsed struct is
+    /// what lets an explicit `--fail-on warn` be told apart from no flag.
+    pub fn fail_threshold(&self) -> crate::model::Severity {
+        self.fail_on.unwrap_or(FailOn::Warn).threshold()
+    }
+
     /// The commands whose exit code comes from findings. Everything else owns
     /// its exit code (`guard` has the hook contract, `update` means "newer",
     /// `plan`/`tree`/`sbom` report structure), so `--fail-on` is rejected
@@ -398,7 +404,6 @@ impl Cli {
             &self.command,
             Command::Audit { .. }
                 | Command::Lock { .. }
-                | Command::Watch { .. }
                 | Command::Npm { .. }
                 | Command::Pypi { .. }
                 | Command::Crates { .. }

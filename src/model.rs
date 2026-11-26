@@ -1469,5 +1469,17 @@ mod tests {
             notes: vec![],
         };
         assert_eq!(lock.exit_code_with(Severity::High), 2);
+
+        // `lock` has its own aggregation loop; an INFO-only diff must not pass
+        // under `--fail-on info`.
+        let info_only = LockReport {
+            lockfile: "package-lock.json".into(),
+            base: "main".into(),
+            new_packages: vec![report(vec![finding(Severity::Info)])],
+            errors: vec![],
+            notes: vec![],
+        };
+        assert_eq!(info_only.exit_code(), 0);
+        assert_eq!(info_only.exit_code_with(Severity::Info), 1);
     }
 }

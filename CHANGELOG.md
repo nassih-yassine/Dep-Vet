@@ -3,15 +3,15 @@
 ## Unreleased
 
 - **`--fail-on warn|high` (and `info`) chooses what fails a run.** `audit`,
-  `lock`, `watch`, and the single-package checks now take a threshold: the
+  `lock`, and the single-package checks now take a threshold: the
   default `warn` keeps today's `0`/`1`/`2` codes, `high` lets warnings pass
   with exit `0`, and `info` fails on any finding, because "we noticed
   something" is not "nothing found". JSON and SARIF reports carry the same
   effective `exit_code` as the process. Commands that own their exit code
-  (`guard`, `update`, `plan`, `tree`, `sbom`, `inspect`, `diff`, `workflows`,
-  `mcp-config`) reject the flag with exit `3` instead of silently ignoring it;
-  `guard`'s hook contract is unchanged, and `3` is never folded into another
-  code.
+  (`guard`, `hook`, `update`, `plan`, `tree`, `sbom`, `watch`, `inspect`,
+  `diff`, `workflows`, `mcp-config`, `mcp`) reject the flag, even an explicit
+  `--fail-on warn`, with exit `3` instead of silently ignoring it; `guard`'s
+  hook contract is unchanged, and `3` is never folded into another code.
 
 - **The docs' release pins are test-enforced.** README and
   `examples/github-action.yml` quoted `v0.16.0` while the reusable workflow
