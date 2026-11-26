@@ -9,6 +9,9 @@ use crate::registry::PackageMeta;
 use crate::typosquat;
 use crate::version::leading_number;
 
+/// Shortest added dependency that can escalate `dependency-added` to WARN.
+const MIN_ACCUSABLE_NAME: usize = 5;
+
 /// A package younger than this has no track record.
 pub const FRESH_DAYS: i64 = 7;
 /// A version newer than this on a package with no history is worth a look.
@@ -920,18 +923,23 @@ pub fn assess(
             .filter(|dependency| !meta.release.previous_dependencies.contains(dependency))
             .collect();
         if !added.is_empty() {
-            let lookalike = added.iter().any(|dependency| {
-                suspect_for(
-                    &PackageMeta {
-                        name: (*dependency).clone(),
-                        ..meta.clone()
-                    },
-                    ecosystem,
-                    local,
-                    profile,
-                )
-                .is_some()
-            });
+            // Four-letter names sit within one edit of half of a 500-name
+            // seed (`unty`/`funty`), so an accusation needs a longer name.
+            let lookalike = added
+                .iter()
+                .filter(|dependency| dependency.chars().count() >= MIN_ACCUSABLE_NAME)
+                .any(|dependency| {
+                    suspect_for(
+                        &PackageMeta {
+                            name: (*dependency).clone(),
+                            ..meta.clone()
+                        },
+                        ecosystem,
+                        local,
+                        profile,
+                    )
+                    .is_some()
+                });
             findings.push(Finding {
                 id: "dependency-added",
                 severity: if lookalike {

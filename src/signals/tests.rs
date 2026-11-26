@@ -282,6 +282,21 @@ fn an_added_lookalike_dependency_is_a_warning() {
 }
 
 #[test]
+fn a_four_letter_added_name_is_too_weak_to_accuse() {
+    // `smallvec` 1.16.6 adds the real `unty` crate; one edit from `funty`.
+    // Short names sit within one edit of half a 500-name seed, so the
+    // escalation needs at least five characters to mean anything.
+    let mut meta = transition();
+    meta.release.previous_dependencies = vec![];
+    meta.release.dependencies = vec!["unty".to_string()];
+    let findings = assess(&meta, Ecosystem::CratesIo, &[], &Profile::CRATES, NOW);
+    assert_eq!(
+        finding(&findings, "dependency-added").severity,
+        Severity::Info
+    );
+}
+
+#[test]
 fn unchanged_dependencies_produce_nothing() {
     let mut meta = transition();
     meta.release.dependencies = vec!["chalk".to_string()];
