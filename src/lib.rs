@@ -36,6 +36,7 @@ pub mod pool;
 pub mod progress;
 pub mod provenance;
 pub mod pypi;
+pub mod pypi_simple;
 pub mod registries;
 pub mod registry;
 pub mod report;
