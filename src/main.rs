@@ -150,18 +150,26 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         }
     }
     let mut router = dep_vet::registries::Router::new(allowlist.registries(), &user_registries);
-    let mut npmrc_entries: Vec<dep_vet::registries::RegistryEntry> = Vec::new();
+    let mut trusted_discovered: Vec<dep_vet::registries::RegistryEntry> = Vec::new();
     if dep_vet::npmrc::enabled() {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let cwd = std::env::current_dir().ok();
-        let discovered = dep_vet::npmrc::discover(home.as_deref(), cwd.as_deref(), |key| {
-            std::env::var(key).ok()
-        });
-        let entries =
-            dep_vet::npmrc::as_entries(&discovered).map_err(|error| anyhow::anyhow!(error))?;
-        npmrc_entries = entries.clone();
-        router = router.extend_discovered(&entries);
-        if let Some(base) = discovered.default_registry.clone() {
+        let (user_npmrc, project_npmrc) =
+            dep_vet::npmrc::discover_split(home.as_deref(), cwd.as_deref(), |key| {
+                std::env::var(key).ok()
+            });
+        // The project's routes are honoured but never trusted: they cannot
+        // expand the environment, reach a private address, or switch the
+        // confusion probe off.
+        let user_entries =
+            dep_vet::npmrc::as_entries(&user_npmrc).map_err(|error| anyhow::anyhow!(error))?;
+        let project_entries =
+            dep_vet::npmrc::as_entries(&project_npmrc).map_err(|error| anyhow::anyhow!(error))?;
+        router = router
+            .extend_discovered(&user_entries, true)
+            .extend_discovered(&project_entries, false);
+        trusted_discovered = user_entries;
+        if let Some(base) = user_npmrc.default_registry.clone() {
             let probe = dep_vet::registries::RegistryEntry {
                 ecosystem: dep_vet::model::Ecosystem::Npm,
                 r#match: "@npmrc-default".to_string(),
@@ -178,19 +186,16 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             npm_default = Some(base);
         }
     }
-    // Every host a route or discovered index may use, so netpolicy permits
-    // exactly those and nothing else.
-    let mut registry_bases: Vec<String> = allowlist
-        .registries()
+    // Only what the user configured or their own files discovered may resolve
+    // to a private address. A repository file can route to public hosts; an
+    // internal address needs an explicit user-level opt-in.
+    let trusted: Vec<dep_vet::registries::RegistryEntry> = user_registries
         .iter()
-        .chain(user_registries.iter())
-        .chain(npmrc_entries.iter())
-        .map(|entry| entry.url.clone())
+        .chain(trusted_discovered.iter())
+        .cloned()
         .collect();
-    registry_bases.extend(pypi_simple.iter().cloned());
-    if let Some(base) = &npm_default {
-        registry_bases.push(base.clone());
-    }
+    let registry_bases =
+        dep_vet::registries::netpolicy_exemptions(&trusted, &pypi_simple, npm_default.as_deref());
     let http = Arc::new(HttpClient::from_env_with_registries(
         cli.no_cache,
         &registry_bases,

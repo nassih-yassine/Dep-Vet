@@ -215,6 +215,9 @@ pub struct Route {
     /// Environment variable holding the token. Never the token itself.
     pub auth_env: Option<String>,
     pub probe_public: bool,
+    /// True when the entry came from the per-user file. Only trusted routes
+    /// may reach a private address or switch the confusion probe off.
+    pub trusted: bool,
 }
 
 /// Routes in trust order: per-user entries first, then the project's. A
@@ -226,17 +229,23 @@ pub struct Router {
 
 impl Router {
     pub fn new(project: &[RegistryEntry], user: &[RegistryEntry]) -> Self {
-        let routes = user.iter().chain(project.iter()).map(|entry| Route {
-            ecosystem: entry.ecosystem,
-            pattern: entry.r#match.trim().to_string(),
-            base: entry.url.trim_end_matches('/').to_string(),
-            auth_env: entry
-                .auth
-                .as_deref()
-                .and_then(|value| value.strip_prefix("env:"))
-                .map(str::to_string),
-            probe_public: entry.probe_public,
-        });
+        let routes = user
+            .iter()
+            .map(|entry| (entry, true))
+            .chain(project.iter().map(|entry| (entry, false)))
+            .map(|(entry, trusted)| Route {
+                ecosystem: entry.ecosystem,
+                pattern: entry.r#match.trim().to_string(),
+                base: entry.url.trim_end_matches('/').to_string(),
+                auth_env: entry
+                    .auth
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix("env:"))
+                    .map(str::to_string),
+                // A repository file cannot switch the security check off.
+                probe_public: entry.probe_public || !trusted,
+                trusted,
+            });
         Self {
             routes: routes.collect(),
         }
@@ -244,7 +253,7 @@ impl Router {
 
     /// Append discovered routes (npmrc) after the explicit ones: a repository
     /// or user entry always wins over what a file happened to suggest.
-    pub fn extend_discovered(mut self, entries: &[RegistryEntry]) -> Self {
+    pub fn extend_discovered(mut self, entries: &[RegistryEntry], trusted: bool) -> Self {
         self.routes.extend(entries.iter().map(|entry| {
             Route {
                 ecosystem: entry.ecosystem,
@@ -255,7 +264,8 @@ impl Router {
                     .as_deref()
                     .and_then(|value| value.strip_prefix("env:"))
                     .map(str::to_string),
-                probe_public: entry.probe_public,
+                probe_public: entry.probe_public || !trusted,
+                trusted,
             }
         }));
         self
@@ -297,6 +307,36 @@ pub fn token(route: &Route) -> Result<Option<String>, String> {
                 route.pattern
             )
         }),
+    }
+}
+
+/// Hosts that may resolve to a private address: only what the user configured
+/// or discovered from their own files. A repository's `.depvet.toml` or
+/// `.npmrc` can route to public hosts, never to an address the user did not
+/// opt into reaching.
+pub fn netpolicy_exemptions(
+    trusted_entries: &[RegistryEntry],
+    pip_indexes: &[String],
+    npm_default: Option<&str>,
+) -> Vec<String> {
+    let mut bases: Vec<String> = trusted_entries
+        .iter()
+        .map(|entry| entry.url.clone())
+        .collect();
+    bases.extend(pip_indexes.iter().cloned());
+    if let Some(base) = npm_default {
+        bases.push(base.to_string());
+    }
+    bases
+}
+
+/// The public npm registry the confusion probe asks. `DEPVET_PUBLIC_REGISTRY_BASE`
+/// exists for tests and mirrors, behind the same gate as every override.
+pub fn public_registry_base() -> String {
+    let gate = std::env::var("DEPVET_ALLOW_INSECURE_BASES").is_ok_and(|value| value == "1");
+    match std::env::var("DEPVET_PUBLIC_REGISTRY_BASE") {
+        Ok(value) if gate && !value.is_empty() => value,
+        _ => "https://registry.npmjs.org".to_string(),
     }
 }
 
@@ -512,6 +552,36 @@ mod tests {
         let route = router.route(Ecosystem::Npm, "@deliverect/ui").unwrap();
         let error = token(route).unwrap_err();
         assert!(error.contains("DEPVET_TEST_UNSET_TOKEN_XYZ"), "{error}");
+    }
+
+    #[test]
+    fn a_repository_route_cannot_disable_the_confusion_probe() {
+        let mut project = vec![route("@acme", "https://npm.example/")];
+        project[0].probe_public = false;
+        let router = Router::new(&project, &[]);
+        let route = router.route(Ecosystem::Npm, "@acme/x").unwrap();
+        assert!(
+            route.probe_public,
+            "a repository file switched the check off"
+        );
+        assert!(!route.trusted);
+    }
+
+    #[test]
+    fn only_trusted_bases_are_exempt_from_the_public_address_rule() {
+        let user = vec![route("@acme", "https://user.example/")];
+        let project = vec![route("@other", "https://project.example/")];
+        let exemptions =
+            netpolicy_exemptions(&user, &["https://pip.example/simple".to_string()], None);
+        assert!(exemptions.contains(&"https://user.example/".to_string()));
+        assert!(exemptions.contains(&"https://pip.example/simple".to_string()));
+        assert!(
+            !exemptions
+                .iter()
+                .any(|base| base.contains("project.example")),
+            "a repository route granted private-address access"
+        );
+        let _ = project;
     }
 
     #[test]

@@ -315,9 +315,12 @@ auth = "env:ACME_NPM_TOKEN"
 
 Scope routes are also discovered, after the explicit entries above, from
 `~/.npmrc` and the project's `.npmrc` (`@acme:registry=...`). Tokens in an
-`.npmrc` are never read: keep `auth = "env:..."` in the per-user file. A
-private `registry=` there becomes the default npm registry only when
-`DEPVET_REGISTRY_BASE` is unset. `DEPVET_NO_NPMRC=1` turns discovery off.
+`.npmrc` are never read: keep `auth = "env:..."` in the per-user file. Only the
+user file may set a private `registry=` default (and only when
+`DEPVET_REGISTRY_BASE` is unset); a project `.npmrc` cannot, and it never
+expands `${VAR}`, so a repository cannot read the environment. The reusable CI
+workflow sets `DEPVET_NO_NPMRC=1`. Discovery can be turned off with
+`DEPVET_NO_NPMRC=1`.
 
 For Python, dep-vet also reads pip's own configuration (`PIP_INDEX_URL`,
 `PIP_EXTRA_INDEX_URL`, and `pip.conf`). A configured index replaces PyPI for
@@ -332,11 +335,20 @@ name. Unless the entry sets `probe_public = false`, dep-vet also asks the public
 registry once whether the name exists there, because that is the
 dependency-confusion check: a public copy at the same or a higher version is a
 HIGH finding, older-only versions are a WARN, and a failed probe is INFO, never
-silence. The probe is unauthenticated. `https` is required; `http` only works under
-`DEPVET_ALLOW_INSECURE_BASES=1` for a local mirror. The reusable CI workflow
-uses the base revision's `.depvet.toml`, so a pull request cannot add a route.
-Each routed request is still exit `3` when the host cannot be read: an
-unreachable private registry is not a clean package.
+silence. The probe is unauthenticated, always asks the public registry itself
+(never a mirror routing could point elsewhere), and its answer is never cached.
+
+Trust is split by where a route came from. A repository file may route names to
+a **public** host; only your own configuration (`~/.config/dep-vet/registries.toml`,
+your `~/.npmrc`, or pip's own config) may point at a private address or switch
+the probe off. Mirror the entry into the user file when a company registry
+lives on an internal address.
+
+`https` is required; `http` only works under `DEPVET_ALLOW_INSECURE_BASES=1`
+for a local mirror. The reusable CI workflow uses the base revision's
+`.depvet.toml` and ignores `.npmrc`, so a pull request can neither add a route
+nor point one at its own host. Each routed request is still exit `3` when the
+host cannot be read: an unreachable private registry is not a clean package.
 
 ## CI/CD Integration (GitHub Actions)
 

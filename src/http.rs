@@ -200,6 +200,14 @@ impl HttpClient {
             .map(|(body, _)| body)
     }
 
+    /// GET without reading or writing the cache. Only the dependency-confusion
+    /// probe uses this: a cached 404 from a different configuration must not
+    /// answer "is this name public".
+    pub fn get_uncached(&self, url: &str) -> Result<String, HttpError> {
+        self.guard()?;
+        self.fetch_get(url)
+    }
+
     /// Validate and fetch a URL that registry data selected (archives,
     /// provenance), following at most three redirects with validation on
     /// every hop.

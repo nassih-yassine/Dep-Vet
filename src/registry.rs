@@ -205,6 +205,10 @@ pub struct RegistryClient {
     downloads_base: String,
     /// Private routes for names that must not reach the public registry.
     router: Option<Router>,
+    /// True when the default base came from a discovered private mirror rather
+    /// than an explicit override: the public download API knows nothing about
+    /// those names.
+    private_default: bool,
 }
 
 /// Names in first-seen order with duplicates removed.
@@ -222,14 +226,21 @@ impl RegistryClient {
     /// the public registry. The discovered value only ever applies when no
     /// environment override exists.
     pub fn from_env_with_default(http: Arc<HttpClient>, discovered: Option<String>) -> Self {
-        let registry = if std::env::var_os("DEPVET_REGISTRY_BASE").is_some() {
-            std::env::var("DEPVET_REGISTRY_BASE").unwrap_or_else(|_| DEFAULT_REGISTRY.to_string())
+        let (registry, private_default) = if std::env::var_os("DEPVET_REGISTRY_BASE").is_some() {
+            (
+                std::env::var("DEPVET_REGISTRY_BASE")
+                    .unwrap_or_else(|_| DEFAULT_REGISTRY.to_string()),
+                false,
+            )
         } else {
-            discovered.unwrap_or_else(|| DEFAULT_REGISTRY.to_string())
+            match discovered {
+                Some(base) => (base, true),
+                None => (DEFAULT_REGISTRY.to_string(), false),
+            }
         };
         let downloads = std::env::var("DEPVET_DOWNLOADS_BASE")
             .unwrap_or_else(|_| DEFAULT_DOWNLOADS.to_string());
-        Self::new(http, registry, downloads)
+        Self::new(http, registry, downloads).with_private_default(private_default)
     }
 
     pub fn from_env(http: Arc<HttpClient>) -> Self {
@@ -250,6 +261,7 @@ impl RegistryClient {
             registry_base: registry_base.into(),
             downloads_base: downloads_base.into(),
             router: None,
+            private_default: false,
         }
     }
 
@@ -265,6 +277,11 @@ impl RegistryClient {
         self.router
             .as_ref()
             .and_then(|router| router.route(Ecosystem::Npm, name))
+    }
+
+    fn with_private_default(mut self, private_default: bool) -> Self {
+        self.private_default = private_default;
+        self
     }
 
     fn base_for(&self, name: &str) -> &str {
@@ -311,12 +328,15 @@ impl RegistryClient {
     /// One public-registry lookup for a routed name. A 404 is an answer (the
     /// name is free); anything else that fails is `Unchecked`, never "absent".
     fn probe_public_name(&self, name: &str) -> PublicProbe {
+        // The probe asks the public registry, never the configured base: a
+        // repository-supplied default registry could otherwise answer 404 and
+        // silence the finding. It is deliberately uncached.
         let url = format!(
             "{}/{}",
-            self.registry_base.trim_end_matches('/'),
+            crate::registries::public_registry_base().trim_end_matches('/'),
             encode_name(name)
         );
-        match self.http.get(&url) {
+        match self.http.get_uncached(&url) {
             Ok(body) => match serde_json::from_str::<Packument>(&body) {
                 Ok(packument) => PublicProbe::Known {
                     latest: packument.dist_tags.get("latest").cloned(),
@@ -379,8 +399,12 @@ impl RegistryClient {
         names: &[String],
     ) -> std::collections::HashMap<String, u64> {
         // A tree pins several versions of the same package; one count answers
-        // all of them, and the bulk endpoint charges per name. A routed name is
-        // not on the public registry at all: asking would leak the name.
+        // all of them, and the bulk endpoint charges per name. A routed name,
+        // or any name while the default registry is a private mirror, is not
+        // on the public registry: asking would leak the name.
+        if self.private_default {
+            return std::collections::HashMap::new();
+        }
         let names: Vec<String> = unique_names(names)
             .into_iter()
             .filter(|name| self.route(name).is_none())

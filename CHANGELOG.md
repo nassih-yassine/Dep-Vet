@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Security fixes from the pre-release review.** A repository `.npmrc` could
+  expand `${VAR}` into a route URL and send CI tokens to its own host; project
+  files are now parsed without environment expansion, and a project
+  `registry=` is ignored. Only user-level configuration may point a route at a
+  private address or set `probe_public = false`, so a pull request cannot widen
+  that access or switch the check off. The confusion probe is pinned to the
+  public registry and never cached (a mirror could otherwise answer 404 and
+  silence it). Package names are no longer sent to the public downloads API
+  when the default registry is a discovered private mirror, and the reusable
+  workflow sets `DEPVET_NO_NPMRC=1` because only `.depvet.toml` is replaced
+  from the base revision.
+
 - **pip's index replaces PyPI for Python audits.** `PIP_INDEX_URL`,
   `PIP_EXTRA_INDEX_URL`, and `pip.conf` are read the way pip reads them; the
   primary index is used for every name and packages come from its PEP 691

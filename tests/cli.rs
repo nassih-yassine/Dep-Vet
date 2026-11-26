@@ -2734,6 +2734,7 @@ fn a_routed_scope_is_fetched_privately_and_probed_without_a_token() {
     private
         .command_with(&[
             ("DEPVET_REGISTRY_BASE", public.base.as_str()),
+            ("DEPVET_PUBLIC_REGISTRY_BASE", public.base.as_str()),
             (
                 "DEPVET_DOWNLOADS_BASE",
                 &format!("{}/downloads", public.base),
@@ -2818,17 +2819,23 @@ fn a_routed_name_that_exists_publicly_is_a_dependency_confusion_high() {
     let public = MockRegistry::start(routes);
 
     let repo = Repo::new();
-    repo.write(
-        ".depvet.toml",
-        &format!(
+    let home = tempfile::tempdir().unwrap();
+    let config_dir = home.path().join(".config").join("dep-vet");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("registries.toml"),
+        format!(
             "[[registries]]\necosystem = \"npm\"\nmatch = \"@acme\"\nurl = \"{}\"\n",
             private.base
         ),
-    );
+    )
+    .unwrap();
 
     let output = private
         .command_with(&[
+            ("HOME", home.path().to_str().unwrap()),
             ("DEPVET_REGISTRY_BASE", public.base.as_str()),
+            ("DEPVET_PUBLIC_REGISTRY_BASE", public.base.as_str()),
             (
                 "DEPVET_DOWNLOADS_BASE",
                 &format!("{}/downloads", public.base),
@@ -2942,16 +2949,18 @@ fn an_npmrc_scope_route_is_honoured_after_explicit_config() {
     let home = tempfile::tempdir().unwrap();
 
     let repo = Repo::new();
-    repo.write(
-        ".npmrc",
-        &format!("@acme:registry={}\n//x/:_authToken=ignored\n", private.base),
-    );
+    std::fs::write(
+        home.path().join(".npmrc"),
+        format!("@acme:registry={}\n//x/:_authToken=ignored\n", private.base),
+    )
+    .unwrap();
 
     private
         .command_with(&[
             ("DEPVET_NO_NPMRC", "0"),
             ("HOME", home.path().to_str().unwrap()),
             ("DEPVET_REGISTRY_BASE", public.base.as_str()),
+            ("DEPVET_PUBLIC_REGISTRY_BASE", public.base.as_str()),
             (
                 "DEPVET_DOWNLOADS_BASE",
                 &format!("{}/downloads", public.base),
@@ -3051,6 +3060,45 @@ fn every_pip_index_is_tried_in_order() {
     assert!(
         missing.requests().iter().any(|path| path == "/demo-pkg/"),
         "the primary index was skipped"
+    );
+}
+
+#[test]
+fn a_private_default_registry_stops_public_download_queries() {
+    let private = registry_with(&[PackageFixture::clean("internal-pkg")], None);
+    let public = registry_with(&[], None);
+    let home = tempfile::tempdir().unwrap();
+    // Only the user's own file may replace the default registry.
+    std::fs::write(
+        home.path().join(".npmrc"),
+        format!("registry={}\n", private.base),
+    )
+    .unwrap();
+    let repo = Repo::new();
+
+    private
+        .command_with(&[
+            ("DEPVET_NO_NPMRC", "0"),
+            ("HOME", home.path().to_str().unwrap()),
+            // The default registry is the private mirror; downloads must not
+            // be asked of the public one for names it cannot know.
+            (
+                "DEPVET_DOWNLOADS_BASE",
+                &format!("{}/downloads", public.base),
+            ),
+        ])
+        .env_remove("DEPVET_REGISTRY_BASE")
+        .current_dir(repo.path())
+        .args(["npm", "internal-pkg", "--json"])
+        .assert()
+        .code(0);
+
+    assert!(
+        public
+            .requests()
+            .iter()
+            .all(|path| !path.starts_with("/downloads")),
+        "a private registry's package names reached the public downloads API"
     );
 }
 

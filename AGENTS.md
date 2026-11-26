@@ -136,7 +136,10 @@ cache key, and never ask the public *downloads* API about a routed name. The
 dependency-confusion probe is the one deliberate public lookup of the name: it
 is unauthenticated, opt-out per entry, and a failed probe is INFO, never clean.
 `.npmrc` discovery adds scope routes after explicit config and never reads a
-token; `DEPVET_NO_NPMRC=1` disables it, and tests set it. pip's index replaces
+token; `DEPVET_NO_NPMRC=1` disables it, and tests set it. Trust follows the
+source: only user-level files may exempt a host from the public-address rule or
+disable the confusion probe, and a project `.npmrc` is parsed without `${VAR}`
+expansion and without `registry=`. pip's index replaces
 PyPI for every Python name (`DEPVET_NO_PIP_CONFIG=1` disables it), is read from
 the simple API, and is never probed for dependency confusion.
 

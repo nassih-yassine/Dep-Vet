@@ -43,7 +43,15 @@ Dep-Vet runs as one local binary. It makes these outbound requests:
   A routed package's name is never sent to the public download API. Unless the
   entry sets `probe_public = false`, dep-vet makes one unauthenticated public
   lookup of the name, which is the dependency-confusion check itself; the
-  answer becomes a HIGH, WARN, or INFO finding.
+  answer becomes a HIGH, WARN, or INFO finding. The probe asks the public
+  registry directly, never a configured mirror, and is never cached.
+- Route trust follows the source: a repository's `.depvet.toml` or `.npmrc`
+  may route names to public hosts, but only user-level configuration
+  (`~/.config/dep-vet/registries.toml`, `~/.npmrc`, pip's own config) may
+  resolve to a private address or disable the probe. A project `.npmrc` never
+  expands `${VAR}` and its `registry=` is ignored, and the reusable CI workflow
+  sets `DEPVET_NO_NPMRC=1` because only `.depvet.toml` is substituted from the
+  base revision.
 
 That is the whole list. There is no account, no API key, no analytics, no crash
 reporting, and no upload of lockfile paths, source, reports, or findings.
