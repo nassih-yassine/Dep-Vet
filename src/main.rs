@@ -1,28 +1,18 @@
-use std::io::{self, IsTerminal, Write};
+use std::io::{self};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
-use dep_vet::auditor::{Auditor, Pre};
+use commands::output::{emit, emit_package, now_seconds, use_color};
+use dep_vet::auditor::Auditor;
 use dep_vet::cli::{Cli, Command, OutputFormat, SbomFormat};
 use dep_vet::http::HttpClient;
 use dep_vet::lockfile;
 use dep_vet::model::Ecosystem;
-use dep_vet::model::{
-    AuditReport, LockFetchError, LockReport, PackageReport, PackageSpec,
-    TOOL_ERROR_EXIT_CODE as TOOL_ERROR,
-};
+use dep_vet::model::{PackageSpec, TOOL_ERROR_EXIT_CODE as TOOL_ERROR};
 use dep_vet::osv::OsvClient;
 use dep_vet::registry::RegistryClient;
-use dep_vet::report::{
-    render_audit_human_with, render_audit_json_with, render_human_with, render_lock_human_with,
-    render_lock_json_with,
-};
-
-/// Maven Central answers 403 when it sees a burst of search requests, so tree
-/// audits go one coordinate at a time. Google Maven is unaffected.
-const MAVEN_CONCURRENCY: usize = 1;
+use dep_vet::report::{render_lock_human_with, render_lock_json_with};
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
@@ -84,25 +74,27 @@ fn usage_exit(error: clap::Error) -> ExitCode {
     }
 }
 
+mod commands;
+
 fn execute(cli: &Cli) -> anyhow::Result<u8> {
     // Hooks run on every Bash tool call and must never fail before they read
     // stdin; the guard child owns config and network errors.
     if let Command::Hook { action } = &cli.command {
         return match action {
-            dep_vet::cli::HookAction::Claude { strict } => run_hook(*strict),
+            dep_vet::cli::HookAction::Claude { strict } => commands::hooks::run(*strict),
             dep_vet::cli::HookAction::Install {
                 target,
                 project,
                 user,
                 strict,
                 write,
-            } => run_hook_install(target, *project, *user, *strict, *write),
+            } => commands::hooks::install(target, *project, *user, *strict, *write),
             dep_vet::cli::HookAction::Uninstall {
                 target,
                 project,
                 user,
                 write,
-            } => run_hook_uninstall(target, *project, *user, *write),
+            } => commands::hooks::uninstall(target, *project, *user, *write),
         };
     }
     // Only the commands that fan out read the environment; an explicit
@@ -124,7 +116,9 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     match &cli.command {
         Command::Hook { .. } => unreachable!("handled before config and network"),
 
-        Command::Mcp { print_config } => run_mcp(&auditor, &allowlist, *print_config, jobs),
+        Command::Mcp { print_config } => {
+            commands::mcp::run(&auditor, &allowlist, *print_config, jobs)
+        }
 
         Command::Guard {
             check,
@@ -164,9 +158,9 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             to,
             json,
         } => {
-            let ecosystem = inspect_ecosystem(ecosystem)?;
-            let from_spec = inspect_spec(ecosystem, from)?;
-            let to_spec = inspect_spec(ecosystem, to)?;
+            let ecosystem = commands::audit::inspect_ecosystem(ecosystem)?;
+            let from_spec = commands::audit::inspect_spec(ecosystem, from)?;
+            let to_spec = commands::audit::inspect_spec(ecosystem, to)?;
             if !from_spec.name.eq_ignore_ascii_case(&to_spec.name) {
                 anyhow::bail!("diff needs two versions of the same package");
             }
@@ -219,7 +213,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             package,
             json,
         } => {
-            let ecosystem = inspect_ecosystem(ecosystem)?;
+            let ecosystem = commands::audit::inspect_ecosystem(ecosystem)?;
             let report = match ecosystem {
                 Ecosystem::Npm => {
                     let http = Arc::new(HttpClient::from_env(cli.no_cache));
@@ -276,8 +270,8 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             package,
             json,
         } => {
-            let ecosystem = inspect_ecosystem(ecosystem)?;
-            let spec = inspect_spec(ecosystem, package)?;
+            let ecosystem = commands::audit::inspect_ecosystem(ecosystem)?;
+            let spec = commands::audit::inspect_spec(ecosystem, package)?;
             let http = Arc::new(HttpClient::from_env(cli.no_cache));
             let limits = allowlist.inspect().limits();
             let prepared =
@@ -366,7 +360,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             } else {
                 OutputFormat::Human
             });
-            run_audit(
+            commands::audit::run_audit(
                 &auditor,
                 &allowlist,
                 path,
@@ -442,7 +436,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 &path,
                 || {
                     println!("watching {} (Ctrl-C to stop)", path.display());
-                    if let Err(error) = run_audit(
+                    if let Err(error) = commands::audit::run_audit(
                         &auditor,
                         &allowlist,
                         &path,
@@ -456,7 +450,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
                 },
                 || {
                     println!("\n── change detected ──");
-                    if let Err(error) = run_audit(
+                    if let Err(error) = commands::audit::run_audit(
                         &auditor,
                         &allowlist,
                         &path,
@@ -507,7 +501,8 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             base,
             json,
         } => {
-            let report = diff_lockfile(&auditor, &allowlist, path, base, true, jobs)?;
+            let report =
+                commands::audit::diff_lockfile(&auditor, &allowlist, path, base, true, jobs)?;
             let fail_on = cli.fail_threshold();
             let output = if *json {
                 render_lock_json_with(&report, fail_on)?
@@ -533,527 +528,6 @@ fn local_candidates(cli: &Cli) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn run_guard_child(command: &str) -> (u8, Option<String>) {
-    use std::io::Read as _;
-    use std::process::{Command as Process, Stdio};
-
-    let Ok(executable) = std::env::current_exe() else {
-        return (3, None);
-    };
-    // The guard caps at the same boundary; do it before argv so a huge hook
-    // input cannot hit E2BIG.
-    let (command, _) = dep_vet::intent::cap_command(command);
-    let mut child = Process::new(executable);
-    // Pass the command on stdin: Windows caps a process command line at about
-    // 32,767 characters, so a large command cannot be one argv element.
-    child
-        .args(["guard", "--check", "--json", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for (key, _) in std::env::vars_os() {
-        let key = key.to_string_lossy();
-        if key.starts_with("DEPVET_")
-            && !matches!(key.as_ref(), "DEPVET_CACHE_DIR" | "DEPVET_DEBUG")
-        {
-            child.env_remove(key.as_ref());
-        }
-    }
-    // Test seam: debug builds only. The hook otherwise ignores agent-settable
-    // registry overrides, so `tests/cli.rs` must be able to point the child at
-    // its local fake registry without weakening a release binary.
-    if cfg!(debug_assertions)
-        && let Some(test_base) = std::env::var_os("DEPVET_HOOK_TEST_BASE")
-    {
-        child
-            .env("DEPVET_REGISTRY_BASE", &test_base)
-            .env(
-                "DEPVET_DOWNLOADS_BASE",
-                format!("{}/downloads", test_base.to_string_lossy()),
-            )
-            .env("DEPVET_OSV_BASE", &test_base)
-            .env("DEPVET_SCORECARD_BASE", &test_base)
-            .env("DEPVET_EPSS_BASE", &test_base)
-            .env(
-                "DEPVET_KEV_BASE",
-                format!("{}/kev.json", test_base.to_string_lossy()),
-            )
-            .env("DEPVET_NO_CACHE", "1")
-            .env("DEPVET_ALLOW_INSECURE_BASES", "1");
-    }
-    let Ok(mut child) = child.spawn() else {
-        return (3, None);
-    };
-    if let Some(mut input) = child.stdin.take() {
-        use std::io::Write as _;
-        let _ = input.write_all(command.as_bytes());
-        // Dropping closes the pipe so the child sees EOF.
-    }
-    // Drain stdout concurrently: a report larger than the pipe buffer would
-    // otherwise block the child while we wait for it to exit, and the deadline
-    // would turn a real verdict into "allow".
-    let mut pipe = match child.stdout.take() {
-        Some(pipe) => pipe,
-        None => return (3, None),
-    };
-    let reader = std::thread::spawn(move || {
-        let mut body = String::new();
-        let _ = pipe.read_to_string(&mut body);
-        body
-    });
-
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_secs(dep_vet::hook::HOOK_BUDGET_SECONDS);
-    let mut timed_out = false;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                timed_out = true;
-                break;
-            }
-            Err(_) => {
-                let _ = child.kill();
-                timed_out = true;
-                break;
-            }
-        }
-    }
-    let status = child.wait().ok();
-    let body = reader.join().unwrap_or_default();
-    if timed_out {
-        return (3, None);
-    }
-    (
-        status.and_then(|status| status.code()).unwrap_or(3) as u8,
-        Some(body),
-    )
-}
-
-fn hook_settings_path(project: bool, user: bool) -> anyhow::Result<std::path::PathBuf> {
-    if project && user {
-        anyhow::bail!("choose either --project or --user");
-    }
-    if user {
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .ok_or_else(|| anyhow::anyhow!("could not find the home directory"))?;
-        return Ok(std::path::PathBuf::from(home)
-            .join(".claude")
-            .join("settings.json"));
-    }
-    Ok(std::path::PathBuf::from(".claude").join("settings.json"))
-}
-
-fn run_hook_install(
-    target: &str,
-    project: bool,
-    user: bool,
-    strict: bool,
-    write: bool,
-) -> anyhow::Result<u8> {
-    if target != "claude" {
-        anyhow::bail!("unknown hook target '{target}'; supported: claude");
-    }
-    let path = hook_settings_path(project, user)?;
-    let before = match std::fs::read_to_string(&path) {
-        Ok(body) => body,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error.into()),
-    };
-    let executable = std::env::current_exe()?;
-    let command = dep_vet::hook::settings::command_line(&executable, strict);
-    let after = dep_vet::hook::settings::merge(
-        &path.display().to_string(),
-        &before,
-        &command,
-        dep_vet::hook::settings::TIMEOUT_SECONDS,
-    )?;
-    println!(
-        "{}\n{}",
-        path.display(),
-        dep_vet::hook::settings::diff(&before, &after)
-    );
-    if write {
-        dep_vet::hook::settings::atomic_write(&path, &after)?;
-        println!("wrote {}", path.display());
-    } else {
-        println!("dry run; pass --write to save");
-    }
-    Ok(0)
-}
-
-fn run_hook_uninstall(target: &str, project: bool, user: bool, write: bool) -> anyhow::Result<u8> {
-    if target != "claude" {
-        anyhow::bail!("unknown hook target '{target}'; supported: claude");
-    }
-    let path = hook_settings_path(project, user)?;
-    let before = match std::fs::read_to_string(&path) {
-        Ok(body) => body,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error.into()),
-    };
-    let executable = std::env::current_exe()?;
-    for strict in [false, true] {
-        let command = dep_vet::hook::settings::command_line(&executable, strict);
-        let after =
-            dep_vet::hook::settings::remove(&path.display().to_string(), &before, &command)?;
-        if after != before {
-            println!(
-                "{}\n{}",
-                path.display(),
-                dep_vet::hook::settings::diff(&before, &after)
-            );
-            if write {
-                dep_vet::hook::settings::atomic_write(&path, &after)?;
-                println!("wrote {}", path.display());
-            } else {
-                println!("dry run; pass --write to save");
-            }
-            return Ok(0);
-        }
-    }
-    println!("no dep-vet hook in {}", path.display());
-    Ok(0)
-}
-
-fn run_hook(strict: bool) -> anyhow::Result<u8> {
-    use std::io::Read as _;
-    let mut stdin = std::io::stdin().take(dep_vet::hook::MAX_STDIN_BYTES + 1);
-    let mut body = String::new();
-    let _ = stdin.read_to_string(&mut body);
-    let Some(command) = dep_vet::hook::read_command(&body) else {
-        return Ok(0);
-    };
-    let (exit_code, guard_json) = run_guard_child(&command);
-    if exit_code == 3 && !strict && std::env::var_os("DEPVET_DEBUG").is_some() {
-        for note in dep_vet::hook::notes(guard_json.as_deref()) {
-            eprintln!("dep-vet hook: not checked: {note}");
-        }
-    }
-    let decision = dep_vet::hook::decide(exit_code, guard_json.as_deref(), strict);
-    if let Some(output) = dep_vet::hook::render(&decision) {
-        println!("{output}");
-    }
-    Ok(0)
-}
-
-fn audit_intent(
-    auditor: &Auditor,
-    ecosystem: Ecosystem,
-    spec: &PackageSpec,
-    now: i64,
-) -> Result<PackageReport, String> {
-    let result: Result<PackageReport, String> = match ecosystem {
-        Ecosystem::Npm => auditor
-            .audit_npm(spec, &[], now, None)
-            .map_err(|error| error.to_string()),
-        Ecosystem::Pypi => auditor
-            .audit_pypi(spec, now, None)
-            .map_err(|error| error.to_string()),
-        Ecosystem::CratesIo => auditor
-            .audit_crates(spec, now, None)
-            .map_err(|error| error.to_string()),
-        Ecosystem::Go => auditor
-            .audit_go(spec, now, None)
-            .map_err(|error| error.to_string()),
-        Ecosystem::Jsr => auditor
-            .audit_jsr(spec, now, None)
-            .map_err(|error| error.to_string()),
-        Ecosystem::RubyGems => auditor
-            .audit_gem(spec, now, None)
-            .map_err(|error| error.to_string()),
-        Ecosystem::NuGet => auditor
-            .audit_nuget(spec, now, None)
-            .map_err(|error| error.to_string()),
-        Ecosystem::Maven => auditor
-            .audit_maven(spec, now, None)
-            .map_err(|error| error.to_string()),
-        Ecosystem::Composer => auditor
-            .audit_composer(spec, now, None)
-            .map_err(|error| error.to_string()),
-    };
-    result
-}
-
-fn audit_specs(
-    auditor: &Auditor,
-    allowlist: &dep_vet::allowlist::Allowlist,
-    parsed: &dep_vet::intent::ParseOutcome,
-    jobs: usize,
-) -> (Vec<PackageReport>, Vec<String>) {
-    let specs: Vec<(Ecosystem, PackageSpec)> = parsed
-        .intents
-        .iter()
-        .flat_map(|intent| {
-            intent
-                .specs
-                .iter()
-                .cloned()
-                .map(move |spec| (intent.ecosystem, spec))
-        })
-        .collect();
-    let now = now_seconds();
-    let mut packages = Vec::new();
-    let mut errors = Vec::new();
-    let outcomes = dep_vet::pool::run(
-        specs.len(),
-        jobs,
-        |index| {
-            let (ecosystem, spec) = &specs[index];
-            audit_intent(auditor, *ecosystem, spec, now)
-        },
-        || {},
-    );
-    for outcome in outcomes {
-        match outcome {
-            Some(Ok(report)) => packages.push(report),
-            Some(Err(error)) => errors.push(error),
-            None => errors.push("audit worker panicked".to_string()),
-        }
-    }
-    for report in &mut packages {
-        allowlist.apply(report);
-    }
-    (packages, errors)
-}
-
-fn run_mcp(
-    auditor: &Auditor,
-    allowlist: &dep_vet::allowlist::Allowlist,
-    print_config: bool,
-    jobs: usize,
-) -> anyhow::Result<u8> {
-    if print_config {
-        let executable = std::env::current_exe()?;
-        let path = executable.display().to_string();
-        let snippet = serde_json::json!({
-            "mcpServers": {
-                "dep-vet": {"command": path, "args": ["mcp"]}
-            }
-        });
-        println!("{}", serde_json::to_string_pretty(&snippet)?);
-        println!();
-        println!("claude mcp add dep-vet -- {path} mcp");
-        return Ok(0);
-    }
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    dep_vet::mcp::serve(stdin.lock(), &mut stdout.lock(), |name, arguments| {
-        mcp_call(auditor, allowlist, name, arguments, jobs)
-    })?;
-    Ok(0)
-}
-
-fn tool_result(structured: serde_json::Value, text: String) -> serde_json::Value {
-    serde_json::json!({
-        "content": [{"type": "text", "text": text}],
-        "structuredContent": structured,
-        "isError": false
-    })
-}
-
-fn package_summary(report: &PackageReport) -> String {
-    let verdict = report
-        .findings
-        .iter()
-        .map(|finding| finding.severity)
-        .chain(report.advisories.iter().map(|advisory| advisory.severity))
-        .max()
-        .unwrap_or(dep_vet::model::Severity::Info);
-    let mut lines = vec![format!(
-        "{} {}@{}: {} (exit {})",
-        report.name,
-        report.ecosystem,
-        report.version,
-        verdict.label().to_ascii_lowercase(),
-        verdict.exit_code()
-    )];
-    for finding in report.findings.iter().take(3) {
-        let url = finding
-            .evidence
-            .iter()
-            .find_map(|evidence| evidence.url.clone())
-            .unwrap_or_default();
-        lines.push(format!(
-            "- [{}] {} ({}) — {url}",
-            finding.severity.label(),
-            finding.title,
-            finding.id
-        ));
-    }
-    for advisory in report.advisories.iter().take(3) {
-        lines.push(format!(
-            "- [{}] {} — https://osv.dev/vulnerability/{}",
-            advisory.severity.label(),
-            advisory.summary,
-            advisory.id
-        ));
-    }
-    if !report.not_checked.is_empty() {
-        lines.push(format!("not checked: {}", report.not_checked.join(", ")));
-    }
-    lines.push("Direct packages only; transitive dependencies were not checked.".to_string());
-    let mut text = lines.join("\n");
-    if text.len() > 20_000 {
-        text.truncate(20_000);
-        text.push_str("\n_truncated_");
-    }
-    text
-}
-
-fn mcp_call(
-    auditor: &Auditor,
-    allowlist: &dep_vet::allowlist::Allowlist,
-    name: &str,
-    arguments: &serde_json::Value,
-    jobs: usize,
-) -> dep_vet::mcp::ToolResult {
-    match name {
-        "vet_package" => {
-            let ecosystem = arguments["ecosystem"]
-                .as_str()
-                .ok_or((-32602, "ecosystem is required".to_string()))
-                .and_then(|value| {
-                    inspect_ecosystem(value).map_err(|error| (-32602, error.to_string()))
-                })?;
-            let package = arguments["name"]
-                .as_str()
-                .ok_or((-32602, "name is required".to_string()))?;
-            let version = arguments["version"].as_str();
-            let raw = match version {
-                Some(version) => {
-                    let separator = if ecosystem == dep_vet::model::Ecosystem::Pypi {
-                        "=="
-                    } else {
-                        "@"
-                    };
-                    format!("{package}{separator}{version}")
-                }
-                None => package.to_string(),
-            };
-            let spec =
-                inspect_spec(ecosystem, &raw).map_err(|error| (-32602, error.to_string()))?;
-            let mut report = audit_intent(auditor, ecosystem, &spec, now_seconds())
-                .map_err(|error| (-32603, error))?;
-            allowlist.apply(&mut report);
-            let text = package_summary(&report);
-            let guard = dep_vet::guard::GuardReport {
-                command: String::new(),
-                parse: dep_vet::intent::ParseOutcome::default(),
-                packages: vec![report],
-                errors: Vec::new(),
-            };
-            let structured: serde_json::Value =
-                serde_json::from_str(&guard.to_json()).unwrap_or_else(|_| serde_json::json!({}));
-            Ok(tool_result(structured, text))
-        }
-        "vet_command" => {
-            let command = arguments["command"]
-                .as_str()
-                .ok_or((-32602, "command is required".to_string()))?;
-            if command.len() > dep_vet::intent::MAX_COMMAND_BYTES {
-                return Err((-32602, "command is too large".to_string()));
-            }
-            let parsed = dep_vet::intent::parse(command);
-            let (packages, errors) = audit_specs(auditor, allowlist, &parsed, jobs);
-            let report = dep_vet::guard::GuardReport {
-                command: command.to_string(),
-                parse: parsed,
-                packages,
-                errors,
-            };
-            let structured: serde_json::Value =
-                serde_json::from_str(&report.to_json()).unwrap_or_else(|_| serde_json::json!({}));
-            Ok(tool_result(structured, report.to_human()))
-        }
-        "vet_lockfile_change" => {
-            let lockfile = arguments["lockfile"]
-                .as_str()
-                .ok_or((-32602, "lockfile is required".to_string()))?;
-            let base = arguments["base"].as_str().unwrap_or("HEAD");
-            run_mcp_lockfile(auditor, allowlist, lockfile, base, jobs)
-        }
-        _ => Err((-32602, format!("unknown tool '{name}'"))),
-    }
-}
-
-fn mcp_lockfile_path(input: &str) -> Result<std::path::PathBuf, String> {
-    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-    let cwd = cwd.canonicalize().map_err(|error| error.to_string())?;
-    let candidate = std::path::Path::new(input);
-    let joined = if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        cwd.join(candidate)
-    };
-    let resolved = joined.canonicalize().map_err(|error| error.to_string())?;
-    if !resolved.starts_with(&cwd) {
-        return Err("lockfile path is outside the working directory".to_string());
-    }
-    if !resolved.is_file() {
-        return Err("lockfile is not a regular file".to_string());
-    }
-    Ok(resolved)
-}
-
-fn run_mcp_lockfile(
-    auditor: &Auditor,
-    allowlist: &dep_vet::allowlist::Allowlist,
-    lockfile: &str,
-    base: &str,
-    jobs: usize,
-) -> dep_vet::mcp::ToolResult {
-    let path = mcp_lockfile_path(lockfile).map_err(|error| (-32602, error))?;
-    let report = diff_lockfile(auditor, allowlist, &path, base, false, jobs)
-        .map_err(|error| (-32603, error.to_string()))?;
-    let intents: Vec<serde_json::Value> = report
-        .new_packages
-        .iter()
-        .map(|package| {
-            serde_json::json!({
-                "ecosystem": package.ecosystem.to_string(),
-                "kind": "install",
-                "specs": [{
-                    "name": package.name,
-                    "version": package.version,
-                }],
-                "lockfile": null,
-            })
-        })
-        .collect();
-    let errors: Vec<String> = report
-        .errors
-        .iter()
-        .map(|error| format!("{}: {}", error.package, error.message))
-        .collect();
-    let structured = serde_json::json!({
-        "command": format!("lockfile change: {lockfile} vs {base}"),
-        "intents": intents,
-        "lockfile": report.lockfile,
-        "base": report.base,
-        "packages": report.new_packages,
-        "errors": errors,
-        "error_details": &report.errors,
-        "notes": report.notes,
-        "verdict": report.verdict().label().to_ascii_lowercase(),
-        "exit_code": report.exit_code(),
-        "unofficial_registry": dep_vet::netpolicy::insecure_active(),
-    });
-    let mut result = tool_result(
-        structured,
-        dep_vet::report::render_lock_human(&report, false),
-    );
-    if report.exit_code() == 3 {
-        result["isError"] = serde_json::json!(true);
-    }
-    Ok(result)
 }
 
 fn run_guard(
@@ -1086,7 +560,7 @@ fn run_guard(
             jobs,
             |index| {
                 let (ecosystem, spec) = &specs[index];
-                audit_intent(auditor, *ecosystem, spec, now)
+                commands::audit::audit_intent(auditor, *ecosystem, spec, now)
             },
             || {},
         );
@@ -1114,385 +588,4 @@ fn run_guard(
         report.to_human()
     };
     emit(&output, report.exit_code())
-}
-
-fn run_audit(
-    auditor: &Auditor,
-    allowlist: &dep_vet::allowlist::Allowlist,
-    path: &std::path::Path,
-    format: OutputFormat,
-    destination: Option<&std::path::Path>,
-    cli: &Cli,
-    jobs: usize,
-) -> anyhow::Result<u8> {
-    let lock_format = lockfile::detect(path)?;
-    let contents = lockfile::read(path)?;
-    // No tree context: every package would otherwise look suspicious
-    // to every other one. The seed list is the comparison set.
-    let now = now_seconds();
-    let (mut reports, mut errors) = audit_packages(
-        auditor,
-        lock_format.ecosystem(),
-        &contents.packages,
-        &[],
-        now,
-        true,
-        jobs,
-    );
-    let (jsr_reports, jsr_errors) =
-        audit_packages(auditor, Ecosystem::Jsr, &contents.jsr, &[], now, true, jobs);
-    reports.extend(jsr_reports);
-    errors.extend(jsr_errors);
-    errors.extend(skipped_errors(&contents));
-    attach_dependency_paths(lock_format, path, &mut reports);
-    for report in &mut reports {
-        allowlist.apply(report);
-    }
-    let report = AuditReport {
-        lockfile: path.display().to_string(),
-        packages: reports,
-        errors,
-        notes: contents.notes,
-    };
-    let fail_on = cli.fail_threshold();
-    let output = match format {
-        OutputFormat::Human => render_audit_human_with(&report, use_color(cli), fail_on),
-        OutputFormat::Json => render_audit_json_with(&report, fail_on)?,
-        OutputFormat::Sarif => dep_vet::sarif::render_with(&report, fail_on)?,
-    };
-    if let Some(path) = destination {
-        std::fs::write(path, format!("{output}\n"))?;
-        return Ok(report.exit_code_with(fail_on));
-    }
-    emit(&output, report.exit_code_with(fail_on))
-}
-
-/// Add the root-to-package chains the lockfile already encodes. A format with
-/// no graph, or a graph that cannot be read, leaves reports without paths
-/// rather than inventing one.
-fn attach_dependency_paths(
-    format: lockfile::Format,
-    path: &std::path::Path,
-    reports: &mut [PackageReport],
-) {
-    if format != lockfile::Format::Npm || reports.is_empty() {
-        return;
-    }
-    let Ok(body) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(graph) = dep_vet::graph::npm_from_package_lock(&body) else {
-        return;
-    };
-    dep_vet::graph::attach_dependency_paths(&graph, reports);
-}
-
-/// Shared differential lockfile audit for the CLI and MCP. Keeping one
-/// implementation is what makes JSR entries, notes, skipped entries, and
-/// dependency paths identical on both surfaces.
-fn diff_lockfile(
-    auditor: &Auditor,
-    allowlist: &dep_vet::allowlist::Allowlist,
-    path: &std::path::Path,
-    base: &str,
-    allow_progress: bool,
-    jobs: usize,
-) -> anyhow::Result<LockReport> {
-    let format = lockfile::detect(path)?;
-    let ecosystem = format.ecosystem();
-    let current = lockfile::read(path)?;
-    let base_contents = lockfile::at_ref(path, base)?;
-    let added = lockfile::added(&current.packages, &base_contents.packages);
-    let local: Vec<String> = if ecosystem == Ecosystem::Npm {
-        base_contents
-            .packages
-            .iter()
-            .map(|package| package.name.to_ascii_lowercase())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let now = now_seconds();
-    let (mut new_packages, mut errors) = audit_packages(
-        auditor,
-        ecosystem,
-        &added,
-        &local,
-        now,
-        allow_progress,
-        jobs,
-    );
-    let added_jsr = lockfile::added(&current.jsr, &base_contents.jsr);
-    let (jsr_reports, jsr_errors) = audit_packages(
-        auditor,
-        Ecosystem::Jsr,
-        &added_jsr,
-        &[],
-        now,
-        allow_progress,
-        jobs,
-    );
-    new_packages.extend(jsr_reports);
-    errors.extend(jsr_errors);
-    attach_dependency_paths(format, path, &mut new_packages);
-    errors.extend(skipped_errors(&current));
-    for report in &mut new_packages {
-        allowlist.apply(report);
-    }
-
-    let mut notes: Vec<String> = base_contents
-        .notes
-        .iter()
-        .map(|note| format!("base: {note}"))
-        .collect();
-    notes.extend(current.notes);
-
-    Ok(LockReport {
-        lockfile: path.display().to_string(),
-        base: base.to_string(),
-        new_packages,
-        errors,
-        notes,
-    })
-}
-
-fn skipped_errors(contents: &lockfile::LockContents) -> Vec<LockFetchError> {
-    contents
-        .skipped
-        .iter()
-        .map(|(entry, reason)| LockFetchError {
-            package: entry.clone(),
-            message: reason.clone(),
-        })
-        .collect()
-}
-
-fn inspect_ecosystem(value: &str) -> anyhow::Result<Ecosystem> {
-    Ok(match value.to_ascii_lowercase().as_str() {
-        "npm" => Ecosystem::Npm,
-        "pypi" => Ecosystem::Pypi,
-        "crates" => Ecosystem::CratesIo,
-        "go" => Ecosystem::Go,
-        "jsr" => Ecosystem::Jsr,
-        "gem" | "rubygems" => Ecosystem::RubyGems,
-        "nuget" => Ecosystem::NuGet,
-        "maven" => Ecosystem::Maven,
-        "composer" => Ecosystem::Composer,
-        other => anyhow::bail!("unknown ecosystem '{other}'"),
-    })
-}
-
-fn inspect_spec(ecosystem: Ecosystem, input: &str) -> anyhow::Result<PackageSpec> {
-    Ok(match ecosystem {
-        Ecosystem::Npm => PackageSpec::parse(input)?,
-        Ecosystem::Pypi => PackageSpec::parse_pypi(input)?,
-        Ecosystem::CratesIo => PackageSpec::parse_crates(input)?,
-        Ecosystem::Go => PackageSpec::parse_go(input)?,
-        Ecosystem::Jsr => PackageSpec::parse_jsr(input)?,
-        Ecosystem::RubyGems => PackageSpec::parse_gem(input)?,
-        Ecosystem::NuGet => PackageSpec::parse_nuget(input)?,
-        Ecosystem::Maven => PackageSpec::parse_maven(input)?,
-        Ecosystem::Composer => PackageSpec::parse_composer(input)?,
-    })
-}
-
-fn spec_for(
-    ecosystem: Ecosystem,
-    name: &str,
-    version: &str,
-) -> Result<PackageSpec, dep_vet::model::SpecError> {
-    match ecosystem {
-        Ecosystem::Npm => PackageSpec::parse(&format!("{name}@{version}")),
-        Ecosystem::Pypi => PackageSpec::parse_pypi(&format!("{name}=={version}")),
-        Ecosystem::CratesIo => PackageSpec::parse_crates(&format!("{name}@{version}")),
-        Ecosystem::Go => PackageSpec::parse_go(&format!("{name}@{version}")),
-        Ecosystem::Jsr => PackageSpec::parse_jsr(&format!("{name}@{version}")),
-        Ecosystem::RubyGems => PackageSpec::parse_gem(&format!("{name}@{version}")),
-        Ecosystem::NuGet => PackageSpec::parse_nuget(&format!("{name}@{version}")),
-        Ecosystem::Maven => PackageSpec::parse_maven(&format!("{name}@{version}")),
-        Ecosystem::Composer => PackageSpec::parse_composer(&format!("{name}@{version}")),
-    }
-}
-
-fn audit_packages(
-    auditor: &Auditor,
-    ecosystem: Ecosystem,
-    packages: &[lockfile::LockedPackage],
-    local: &[String],
-    now: i64,
-    allow_progress: bool,
-    jobs: usize,
-) -> (Vec<PackageReport>, Vec<LockFetchError>) {
-    let mut reports = Vec::new();
-    let mut errors = Vec::new();
-    // A long tree audit looks frozen without this; pipes and CI stay silent,
-    // including CI runners that allocate a pseudo-TTY.
-    let draw = allow_progress
-        && dep_vet::progress::should_draw(
-            io::stderr().is_terminal(),
-            std::env::var_os("CI").is_some(),
-            std::env::var("TERM").is_ok_and(|term| term == "dumb"),
-        );
-    let mut progress = dep_vet::progress::Progress::new(packages.len(), draw);
-
-    // One OSV batch and one downloads batch for the whole tree. Only names
-    // that pass the same validation as the per-package path may become URLs.
-    let mut validated: Vec<(usize, lockfile::LockedPackage)> = Vec::new();
-    for (index, package) in packages.iter().enumerate() {
-        if spec_for(ecosystem, &package.name, &package.version).is_ok() {
-            validated.push((index, package.clone()));
-        }
-    }
-    let valid_packages: Vec<lockfile::LockedPackage> = validated
-        .iter()
-        .map(|(_, package)| package.clone())
-        .collect();
-    let lists = auditor.advisories_for(ecosystem, &valid_packages);
-    let counts = auditor.downloads_for(ecosystem, &valid_packages);
-    let mut advisories = vec![None; packages.len()];
-    let mut downloads = vec![None; packages.len()];
-    for ((index, _), list) in validated.iter().zip(lists) {
-        advisories[*index] = list;
-    }
-    for ((index, _), count) in validated.iter().zip(counts) {
-        downloads[*index] = count;
-    }
-
-    // Maven Central rate-limits bursts, so its trees stay serial. Everything
-    // else uses the caller's jobs; `jobs::resolve` already capped it.
-    let concurrency = if ecosystem == Ecosystem::Maven {
-        MAVEN_CONCURRENCY.min(jobs)
-    } else {
-        jobs
-    };
-    let outcomes = dep_vet::pool::run(
-        packages.len(),
-        concurrency,
-        |index| {
-            let package = &packages[index];
-            let pre = Pre {
-                downloads: downloads.get(index).copied().flatten(),
-                advisories: advisories.get(index).and_then(Option::as_ref),
-            };
-            // Lockfile contents are still input: validate before they become a URL.
-            let spec = spec_for(ecosystem, &package.name, &package.version).map_err(|error| {
-                LockFetchError {
-                    package: package.spec(),
-                    message: error.to_string(),
-                }
-            })?;
-            let audited = match ecosystem {
-                Ecosystem::Npm => auditor
-                    .audit_npm(&spec, local, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-                Ecosystem::Pypi => auditor
-                    .audit_pypi(&spec, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-                Ecosystem::CratesIo => auditor
-                    .audit_crates(&spec, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-                Ecosystem::Go => auditor
-                    .audit_go(&spec, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-                Ecosystem::Jsr => auditor
-                    .audit_jsr(&spec, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-                Ecosystem::RubyGems => auditor
-                    .audit_gem(&spec, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-                Ecosystem::NuGet => auditor
-                    .audit_nuget(&spec, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-                Ecosystem::Maven => auditor
-                    .audit_maven(&spec, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-                Ecosystem::Composer => auditor
-                    .audit_composer(&spec, now, Some(pre))
-                    .map_err(|e| e.to_string()),
-            };
-            audited.map_err(|message| LockFetchError {
-                package: package.spec(),
-                message,
-            })
-        },
-        || progress.advance(),
-    );
-    drop(progress);
-
-    // A panicking worker is reported per package, not as a lost slot.
-    for (index, outcome) in outcomes.into_iter().enumerate() {
-        match outcome {
-            Some(Ok(report)) => reports.push(report),
-            Some(Err(error)) => errors.push(error),
-            None => errors.push(LockFetchError {
-                package: packages[index].spec(),
-                message: "audit worker panicked".to_string(),
-            }),
-        }
-    }
-
-    (reports, errors)
-}
-
-fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result<u8> {
-    let fail_on = cli.fail_threshold();
-    let output = if json {
-        dep_vet::report::render_json_with(report, fail_on)?
-    } else {
-        let mut report_text = render_human_with(report, use_color(cli), fail_on);
-        if dep_vet::netpolicy::insecure_active() {
-            report_text = format!(
-                "UNOFFICIAL REGISTRY: a development override is active; results are not production registry data\n\n{report_text}"
-            );
-        }
-        // The wordmark is for humans at a terminal; pipes and CI get the
-        // report alone.
-        if io::stdout().is_terminal() {
-            format!(
-                "{}\n\n{}",
-                dep_vet::branding::banner(use_color(cli)),
-                report_text
-            )
-        } else {
-            report_text
-        }
-    };
-    emit(&output, report.exit_code_with(fail_on))
-}
-
-fn emit(output: &str, code: u8) -> anyhow::Result<u8> {
-    match write_stdout(output) {
-        Ok(()) => Ok(code),
-        // `dep-vet npm x | head` is not a failure.
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(code),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn write_stdout(output: &str) -> io::Result<()> {
-    let mut stdout = io::stdout().lock();
-    stdout.write_all(output.as_bytes())?;
-    stdout.write_all(b"\n")?;
-    stdout.flush()
-}
-
-fn use_color(cli: &Cli) -> bool {
-    if cli.no_color {
-        return false;
-    }
-    if std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()) {
-        return false;
-    }
-    if std::env::var_os("FORCE_COLOR").is_some() {
-        return true;
-    }
-    io::stdout().is_terminal()
-}
-
-fn now_seconds() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs() as i64)
-        .unwrap_or(0)
 }

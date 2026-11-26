@@ -119,7 +119,8 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/progress.rs` | stderr-only progress bar for `audit`/`lock` |
 | `src/version.rs` | major-line helper for upgrade advice |
 | `src/date.rs` | hand-rolled RFC 3339 → epoch (deliberately no date crate) |
-| `src/main.rs` | wiring, command dispatch, color decision, exit codes |
+| `src/commands/` | `audit` pipeline, `hooks`, `mcp`, stdout reporting |
+| `src/main.rs` | parse, dispatch, exit-code mapping |
 | `tests/cli.rs` | real binary against a local fake registry |
 | `.github/workflows/ci.yml` | fmt, clippy, tests on push and PR |
 | `.github/workflows/dep-vet.yml` | reusable PR workflow: run `lock`, update one sticky comment |
