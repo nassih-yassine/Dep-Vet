@@ -28,6 +28,8 @@ pub enum PypiError {
 pub struct PypiClient {
     http: Arc<HttpClient>,
     base: String,
+    /// Names routed to a private index, by the same configuration npm uses.
+    router: Option<crate::registries::Router>,
 }
 
 impl PypiClient {
@@ -41,7 +43,21 @@ impl PypiClient {
         Self {
             http,
             base: base.into(),
+            router: None,
         }
+    }
+
+    /// Route some names to a private index. A routed name is read from that
+    /// index's simple API only; it never falls back to PyPI's JSON API.
+    pub fn with_router(mut self, router: crate::registries::Router) -> Self {
+        self.router = Some(router);
+        self
+    }
+
+    fn route(&self, name: &str) -> Option<&crate::registries::Route> {
+        self.router
+            .as_ref()
+            .and_then(|router| router.route(crate::model::Ecosystem::Pypi, name))
     }
 
     pub fn project_url(&self, name: &str) -> String {
@@ -49,6 +65,9 @@ impl PypiClient {
     }
 
     pub fn fetch(&self, spec: &PackageSpec) -> Result<PackageMeta, PypiError> {
+        if let Some(route) = self.route(&spec.name) {
+            return self.fetch_simple(spec, route);
+        }
         let url = self.project_url(&spec.name);
         let body = match self.http.get(&url) {
             Ok(body) => body,
@@ -76,6 +95,110 @@ impl PypiClient {
             };
         }
         Ok(meta)
+    }
+
+    /// The PEP 691 simple index a private mirror actually publishes. Fields the
+    /// index cannot answer (maintainers, license, repository, history) stay
+    /// empty and surface as not checked.
+    fn fetch_simple(
+        &self,
+        spec: &PackageSpec,
+        route: &crate::registries::Route,
+    ) -> Result<PackageMeta, PypiError> {
+        use crate::registry::PublicProbe;
+        let folded = crate::pypi_simple::fold(&spec.name);
+        let url = format!("{}/{folded}/", route.base.trim_end_matches('/'));
+        let authorization = match crate::registries::token(route).map_err(PypiError::Http)? {
+            Some(token) => {
+                use base64::Engine as _;
+                let pair =
+                    base64::engine::general_purpose::STANDARD.encode(format!("__token__:{token}"));
+                Some(format!("Basic {pair}"))
+            }
+            None => None,
+        };
+        let mut headers = vec![("Accept", "application/vnd.pypi.simple.v1+json")];
+        if let Some(authorization) = authorization.as_deref() {
+            headers.push(("Authorization", authorization));
+        }
+        let body = self
+            .http
+            .get_with_headers(&url, &headers)
+            .map_err(|error| match error {
+                HttpError::Status { status: 404, .. } => {
+                    PypiError::PackageNotFound(spec.name.clone())
+                }
+                other => PypiError::Http(other.to_string()),
+            })?;
+        let index = crate::pypi_simple::parse(&body).map_err(PypiError::Decode)?;
+        let version = match &spec.version {
+            Some(version) => version.clone(),
+            None => index
+                .newest()
+                .map(str::to_string)
+                .ok_or_else(|| PypiError::PackageNotFound(spec.name.clone()))?,
+        };
+        let files = index.files_for(&spec.name, &version);
+        if files.is_empty() {
+            return Err(match spec.version {
+                Some(_) => PypiError::VersionNotFound {
+                    package: spec.name.clone(),
+                    version,
+                },
+                None => PypiError::PackageNotFound(spec.name.clone()),
+            });
+        }
+        let public = if route.probe_public {
+            self.probe_public(&spec.name)
+        } else {
+            PublicProbe::NotApplicable
+        };
+        Ok(PackageMeta {
+            public,
+            name: spec.name.clone(),
+            version,
+            first_published_at: index.first_upload(),
+            published_at: files.iter().filter_map(|file| file.upload_time).min(),
+            maintainers: Vec::new(),
+            publisher: None,
+            maintainers_known: false,
+            install_scripts: Vec::new(),
+            build_from_source: crate::pypi_simple::SimpleIndex::sdist_only(&files),
+            repository: None,
+            deprecated: crate::pypi_simple::SimpleIndex::all_yanked(&files)
+                .then(|| "this release is yanked".to_string()),
+            provenance: crate::model::Provenance::Unavailable,
+            attestation_subject_matches: None,
+            attestation: None,
+            registry_url: url,
+            review_url: None,
+            latest_version: index.newest().map(str::to_string),
+            candidate_weekly_downloads: None,
+            release: crate::registry::ReleaseHistory::default(),
+            scorecard: None,
+            license: None,
+        })
+    }
+
+    /// One public PyPI lookup for a routed name. A 404 is an answer; any other
+    /// failure is `Unchecked`, never "absent".
+    fn probe_public(&self, name: &str) -> crate::registry::PublicProbe {
+        use crate::registry::PublicProbe;
+        let url = format!("{}/pypi/{name}/json", self.base.trim_end_matches('/'));
+        match self.http.get(&url) {
+            Ok(body) => match serde_json::from_str::<Project>(&body) {
+                Ok(project) => PublicProbe::Known {
+                    latest: Some(project.info.version),
+                    versions: project.releases.keys().cloned().collect(),
+                },
+                Err(_) => PublicProbe::Unchecked,
+            },
+            Err(HttpError::Status { status: 404, .. }) => PublicProbe::Known {
+                latest: None,
+                versions: Vec::new(),
+            },
+            Err(_) => PublicProbe::Unchecked,
+        }
     }
 
     /// Requires-dist for this release and the previous one, only for releases

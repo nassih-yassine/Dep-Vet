@@ -87,6 +87,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/registries.rs` | private-registry routing config: match, url, auth trust boundary |
 | `src/registry.rs` | npm packument fetch + parsing, download counts, repo URL normalization |
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
+| `src/pypi_simple.rs` | PEP 691 simple-index JSON for routed names |
 | `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |
 | `src/graph.rs` | npm dependency graph from `package-lock.json`: nodes, edges, direct flags, tree renderer |
 | `src/plan.rs` | npm range resolver from packuments: nodes, typed edges, conflicts, unresolved bounds |

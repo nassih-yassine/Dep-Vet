@@ -287,7 +287,7 @@ fn confusion(public: crate::registry::PublicProbe) -> Option<Finding> {
     meta.name = "@acme/lib".to_string();
     meta.version = "1.0.0".to_string();
     meta.public = public;
-    confusion_finding(&meta)
+    confusion_finding(&meta, Ecosystem::Npm)
 }
 
 #[test]

@@ -175,11 +175,28 @@ impl HttpClient {
     /// URL stays the cache key, so the token never enters the cache, a report,
     /// or a redirect (ureq drops Authorization on any redirect by default).
     pub fn get_with_token(&self, url: &str, token: Option<&str>) -> Result<String, HttpError> {
-        let Some(token) = token else {
+        match token {
+            Some(token) => {
+                let authorization = format!("Bearer {token}");
+                self.get_with_headers(url, &[("Authorization", authorization.as_str())])
+            }
+            None => self.get(url),
+        }
+    }
+
+    /// GET with explicit request headers. The URL is still the cache key, so a
+    /// credential in a header never reaches the cache; ureq drops
+    /// `Authorization` on any redirect by default.
+    pub fn get_with_headers(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<String, HttpError> {
+        if headers.is_empty() {
             return self.get(url);
-        };
+        }
         self.guard()?;
-        self.cached(url, || self.fetch_get_with_token(url, token))
+        self.cached(url, || self.fetch_get_with_headers(url, headers))
             .map(|(body, _)| body)
     }
 
@@ -489,11 +506,15 @@ impl HttpClient {
         }
     }
 
-    fn fetch_get_with_token(&self, url: &str, token: &str) -> Result<String, HttpError> {
-        let request = self
-            .agent
-            .get(url)
-            .header("Authorization", format!("Bearer {token}"));
+    fn fetch_get_with_headers(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<String, HttpError> {
+        let mut request = self.agent.get(url);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         match request.call() {
             Ok(response) => read_response(response, url),
             Err(error) => Err(network_error(error, url)),

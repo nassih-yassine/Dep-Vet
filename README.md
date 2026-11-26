@@ -291,7 +291,18 @@ Route a scope or a name prefix to a company registry in `.depvet.toml`:
 ecosystem = "npm"
 match = "@acme"                  # a scope, or a name prefix like "acme-"
 url = "https://npm.acme.internal"
+
+[[registries]]
+ecosystem = "pypi"
+match = "internal-"              # a name prefix
+url = "https://pypi.acme.internal/simple"
 ```
+
+A PyPI entry points at the index root; dep-vet reads that project's PEP 691
+simple page (JSON), so verification works on the mirrors companies actually
+run instead of PyPI's JSON API. Versions, yank state, sdist-only and upload
+times come from that document; fields it cannot answer (maintainers, license,
+repository) are reported as `not checked`.
 
 `match` is matched against the package name; the first matching entry wins, and
 entries in the per-user file win over the repository's. Credentials are never
