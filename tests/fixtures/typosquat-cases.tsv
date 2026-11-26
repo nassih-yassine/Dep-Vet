@@ -10,6 +10,10 @@ npm	1odash	lodash	synthetic	digit-for-letter homoglyph
 npm	expresss	express	synthetic	appended character
 npm	axois	axios	synthetic	adjacent transposition
 npm	chalkk	chalk	synthetic	appended character
+npm	dom-react	react-dom	reordered	synthetic: same tokens, reversed order
+npm	@type/node	@types/node	scope	synthetic: missing scope character
+npm	@tyeps/node	@types/node	scope	synthetic: scope transposition
+npm	@types/node	-	legit	real package, exact seed match
 npm	webpak	webpack	synthetic	deleted character
 npm	eslnt	eslint	synthetic	deleted character
 npm	node-fetchh	node-fetch	synthetic	appended character
@@ -29,6 +33,8 @@ pypi	reqeusts	requests	synthetic	adjacent transposition
 pypi	numppy	numpy	synthetic	appended character
 pypi	pandaas	pandas	synthetic	appended character
 pypi	python-dateutils	python-dateutil	synthetic	appended character
+pypi	dateutil-python	python-dateutil	reordered	synthetic: same tokens, reversed order
+pypi	dateutil	-	legit	real package, a subset token of python-dateutil
 pypi	рandas	pandas	synthetic	Cyrillic lookalike
 pypi	torch	-	legit	real package, exact seed match
 pypi	tornado	-	legit	real package, distinct name
