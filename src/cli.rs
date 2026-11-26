@@ -34,6 +34,29 @@ pub struct Cli {
     /// Allow DEPVET_*_BASE overrides (development only)
     #[arg(long, global = true)]
     pub dev_registry: bool,
+
+    /// Lowest severity that fails the run (audit, lock, and single-package checks)
+    #[arg(long, global = true, value_enum, default_value = "warn")]
+    pub fail_on: FailOn,
+}
+
+/// The severity threshold behind `--fail-on`. `warn` is the historical
+/// behaviour: 0 clean, 1 warnings, 2 high risk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum FailOn {
+    Info,
+    Warn,
+    High,
+}
+
+impl FailOn {
+    pub fn threshold(self) -> crate::model::Severity {
+        match self {
+            Self::Info => crate::model::Severity::Info,
+            Self::Warn => crate::model::Severity::Warn,
+            Self::High => crate::model::Severity::High,
+        }
+    }
 }
 
 /// Report serialization. `--json` remains an alias for `--format json`.
@@ -366,6 +389,28 @@ pub enum Command {
 }
 
 impl Cli {
+    /// The commands whose exit code comes from findings. Everything else owns
+    /// its exit code (`guard` has the hook contract, `update` means "newer",
+    /// `plan`/`tree`/`sbom` report structure), so `--fail-on` is rejected
+    /// instead of silently ignored.
+    pub fn honours_fail_on(&self) -> bool {
+        matches!(
+            &self.command,
+            Command::Audit { .. }
+                | Command::Lock { .. }
+                | Command::Watch { .. }
+                | Command::Npm { .. }
+                | Command::Pypi { .. }
+                | Command::Crates { .. }
+                | Command::Go { .. }
+                | Command::Jsr { .. }
+                | Command::Gem { .. }
+                | Command::Nuget { .. }
+                | Command::Maven { .. }
+                | Command::Composer { .. }
+        )
+    }
+
     /// True when this invocation prints a human report a hint may follow.
     /// Machine formats, hooks, MCP, watch and update are excluded.
     pub fn human_report(&self) -> bool {

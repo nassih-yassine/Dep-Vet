@@ -106,6 +106,18 @@ called wrong". clap's own usage-error exit is `2`, which would read as "high
 risk", so parse failures are remapped to `3`; `--help` and `--version` still
 exit `0`.
 
+`--fail-on` moves the threshold that fails the run. The default, `warn`, is the
+table above. `--fail-on high` reports warnings but exits `0` unless a HIGH
+finding exists; `--fail-on info` fails on any finding, including an
+informational one (that exits `1`, never `2`). JSON and SARIF carry the same
+effective `exit_code`, so a script reading the field cannot disagree with the
+process. The flag applies to `audit`, `lock`, `watch`, and the single-package
+checks (`npm`, `pypi`, `crates`, `go`, `jsr`, `gem`, `nuget`, `maven`,
+`composer`). Commands that own their exit code (`guard`, `update`, `plan`,
+`tree`, `sbom`, `inspect`, `diff`, `workflows`, `mcp-config`, `mcp`) refuse it
+with exit `3` rather than ignoring it; `guard` in particular keeps the hook
+contract. `3` is never folded into `0`, `1`, or `2`.
+
 A reproducible run on a real project, with captured output and why one audit
 honestly exits `3`, lives in
 [`examples/nodegoat`](examples/nodegoat).

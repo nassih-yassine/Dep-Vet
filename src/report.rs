@@ -33,6 +33,14 @@ where
 }
 
 pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> {
+    render_json_with(report, Severity::Warn)
+}
+
+/// `render_json` under an explicit `--fail-on` threshold.
+pub fn render_json_with(
+    report: &PackageReport,
+    fail_on: Severity,
+) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
     struct JsonReport<'a> {
         #[serde(flatten)]
@@ -46,7 +54,7 @@ pub fn render_json(report: &PackageReport) -> Result<String, serde_json::Error> 
     serde_json::to_string_pretty(&JsonReport {
         package: report,
         verdict: report.verdict(),
-        exit_code: report.exit_code(),
+        exit_code: report.exit_code_with(fail_on),
         unofficial_registry: crate::netpolicy::insecure_active(),
     })
 }
@@ -60,6 +68,12 @@ fn unofficial_banner() -> &'static str {
 }
 
 pub fn render_human(report: &PackageReport, color: bool) -> String {
+    render_human_with(report, color, Severity::Warn)
+}
+
+/// `render_human` under an explicit `--fail-on` threshold. The verdict label
+/// still shows the worst finding; only the quoted exit code moves.
+pub fn render_human_with(report: &PackageReport, color: bool, fail_on: Severity) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "{}/{}{}\n\n",
@@ -79,7 +93,7 @@ pub fn render_human(report: &PackageReport, color: bool) -> String {
         &format!(
             "{} (exit {})",
             paint(verdict.label(), verdict_color(verdict), color),
-            report.exit_code()
+            report.exit_code_with(fail_on)
         ),
     );
     if let Some(date) = report.first_published_date() {
@@ -588,6 +602,14 @@ pub fn render_diff_human(report: &crate::inspect::DiffReport, color: bool) -> St
 }
 
 pub fn render_lock_json(report: &LockReport) -> Result<String, serde_json::Error> {
+    render_lock_json_with(report, Severity::Warn)
+}
+
+/// `render_lock_json` under an explicit `--fail-on` threshold.
+pub fn render_lock_json_with(
+    report: &LockReport,
+    fail_on: Severity,
+) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
     struct Json<'a> {
         #[serde(flatten)]
@@ -601,12 +623,17 @@ pub fn render_lock_json(report: &LockReport) -> Result<String, serde_json::Error
     serde_json::to_string_pretty(&Json {
         report,
         verdict: report.verdict(),
-        exit_code: report.exit_code(),
+        exit_code: report.exit_code_with(fail_on),
         unofficial_registry: crate::netpolicy::insecure_active(),
     })
 }
 
 pub fn render_lock_human(report: &LockReport, color: bool) -> String {
+    render_lock_human_with(report, color, Severity::Warn)
+}
+
+/// `render_lock_human` under an explicit `--fail-on` threshold.
+pub fn render_lock_human_with(report: &LockReport, color: bool, fail_on: Severity) -> String {
     render_tree(TreeView {
         header: format!("{} vs {}", report.lockfile, report.base),
         empty: "no new packages".to_string(),
@@ -616,12 +643,21 @@ pub fn render_lock_human(report: &LockReport, color: bool) -> String {
         errors: &report.errors,
         notes: &report.notes,
         verdict: report.verdict(),
-        exit_code: report.exit_code(),
+        exit_code: report.exit_code_with(fail_on),
+        fail_on,
         color,
     })
 }
 
 pub fn render_audit_json(report: &AuditReport) -> Result<String, serde_json::Error> {
+    render_audit_json_with(report, Severity::Warn)
+}
+
+/// `render_audit_json` under an explicit `--fail-on` threshold.
+pub fn render_audit_json_with(
+    report: &AuditReport,
+    fail_on: Severity,
+) -> Result<String, serde_json::Error> {
     #[derive(Serialize)]
     struct Json<'a> {
         #[serde(flatten)]
@@ -635,12 +671,17 @@ pub fn render_audit_json(report: &AuditReport) -> Result<String, serde_json::Err
     serde_json::to_string_pretty(&Json {
         report,
         verdict: report.verdict(),
-        exit_code: report.exit_code(),
+        exit_code: report.exit_code_with(fail_on),
         unofficial_registry: crate::netpolicy::insecure_active(),
     })
 }
 
 pub fn render_audit_human(report: &AuditReport, color: bool) -> String {
+    render_audit_human_with(report, color, Severity::Warn)
+}
+
+/// `render_audit_human` under an explicit `--fail-on` threshold.
+pub fn render_audit_human_with(report: &AuditReport, color: bool, fail_on: Severity) -> String {
     render_tree(TreeView {
         header: format!("{} (every installed package)", report.lockfile),
         empty: "lockfile has no packages".to_string(),
@@ -650,7 +691,8 @@ pub fn render_audit_human(report: &AuditReport, color: bool) -> String {
         errors: &report.errors,
         notes: &report.notes,
         verdict: report.verdict(),
-        exit_code: report.exit_code(),
+        exit_code: report.exit_code_with(fail_on),
+        fail_on,
         color,
     })
 }
@@ -665,6 +707,7 @@ struct TreeView<'a> {
     notes: &'a [String],
     verdict: Severity,
     exit_code: u8,
+    fail_on: Severity,
     color: bool,
 }
 
@@ -747,7 +790,7 @@ fn render_tree(view: TreeView<'_>) -> String {
                 || package.findings.iter().any(|finding| finding.allowed)
         }) {
             out.push('\n');
-            out.push_str(&render_human(package, view.color));
+            out.push_str(&render_human_with(package, view.color, view.fail_on));
         }
     }
 

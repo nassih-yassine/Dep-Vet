@@ -628,6 +628,23 @@ impl Profile {
 /// Exit code for "the check could not run", shared by every command.
 pub const TOOL_ERROR_EXIT_CODE: u8 = 3;
 
+/// One package's exit code under a `--fail-on` threshold. A finding below the
+/// threshold passes; a finding at or above it fails with its own severity's
+/// code, except that an INFO-only failure is still a non-zero `1`. Allowed
+/// findings are accepted and never fail a run.
+fn package_exit_code(package: &PackageReport, fail_on: Severity) -> u8 {
+    let verdict = package
+        .findings
+        .iter()
+        .filter(|finding| !finding.allowed)
+        .map(|finding| finding.severity)
+        .max();
+    match verdict {
+        Some(verdict) if verdict >= fail_on => verdict.exit_code().max(1),
+        _ => 0,
+    }
+}
+
 /// A lockfile diff: every package the change adds, plus anything that could
 /// not be checked.
 #[derive(Debug, Clone, Serialize)]
@@ -660,12 +677,20 @@ impl AuditReport {
             .unwrap_or(Severity::Info)
     }
 
-    pub fn exit_code(&self) -> u8 {
+    pub fn exit_code_with(&self, fail_on: Severity) -> u8 {
         if self.errors.is_empty() {
-            self.verdict().exit_code()
+            self.packages
+                .iter()
+                .map(|package| package_exit_code(package, fail_on))
+                .max()
+                .unwrap_or(0)
         } else {
             TOOL_ERROR_EXIT_CODE
         }
+    }
+
+    pub fn exit_code(&self) -> u8 {
+        self.exit_code_with(Severity::Warn)
     }
 }
 
@@ -685,12 +710,20 @@ impl LockReport {
     }
 
     /// An incomplete audit is a tool error, even when nothing risky was found.
-    pub fn exit_code(&self) -> u8 {
+    pub fn exit_code_with(&self, fail_on: Severity) -> u8 {
         if self.errors.is_empty() {
-            self.verdict().exit_code()
+            self.new_packages
+                .iter()
+                .map(|package| package_exit_code(package, fail_on))
+                .max()
+                .unwrap_or(0)
         } else {
             TOOL_ERROR_EXIT_CODE
         }
+    }
+
+    pub fn exit_code(&self) -> u8 {
+        self.exit_code_with(Severity::Warn)
     }
 }
 
@@ -899,7 +932,13 @@ impl PackageReport {
     }
 
     pub fn exit_code(&self) -> u8 {
-        self.verdict().exit_code()
+        package_exit_code(self, Severity::Warn)
+    }
+
+    /// The exit code under a `--fail-on` threshold. `exit_code` is this with
+    /// the default threshold, so existing callers are unchanged.
+    pub fn exit_code_with(&self, fail_on: Severity) -> u8 {
+        package_exit_code(self, fail_on)
     }
 
     pub fn first_published_date(&self) -> Option<String> {
@@ -1342,5 +1381,93 @@ mod tests {
         ]);
         assert_eq!(report.verdict(), Severity::Warn);
         assert_eq!(report.exit_code(), 1);
+    }
+
+    #[test]
+    fn fail_on_high_lets_warnings_pass() {
+        let package = report(vec![finding(Severity::Warn)]);
+        assert_eq!(package.exit_code_with(Severity::High), 0);
+        // A HIGH finding still fails at the same threshold.
+        let package = report(vec![finding(Severity::Warn), finding(Severity::High)]);
+        assert_eq!(package.exit_code_with(Severity::High), 2);
+    }
+
+    #[test]
+    fn fail_on_warn_is_the_default() {
+        let package = report(vec![finding(Severity::Warn)]);
+        assert_eq!(package.exit_code_with(Severity::Warn), 1);
+        assert_eq!(package.exit_code(), package.exit_code_with(Severity::Warn));
+    }
+
+    #[test]
+    fn fail_on_info_fails_on_a_lone_info_finding() {
+        let package = report(vec![finding(Severity::Info)]);
+        assert_eq!(package.exit_code(), 0);
+        assert_eq!(package.exit_code_with(Severity::Info), 1);
+    }
+
+    #[test]
+    fn a_clean_report_never_fails() {
+        for threshold in [Severity::Info, Severity::Warn, Severity::High] {
+            assert_eq!(report(vec![]).exit_code_with(threshold), 0);
+        }
+    }
+
+    #[test]
+    fn an_allowlisted_finding_does_not_fail_on_info() {
+        let mut allowed = finding(Severity::Warn);
+        allowed.allowed = true;
+        allowed.severity = Severity::Info;
+        let package = report(vec![allowed]);
+        assert_eq!(package.exit_code_with(Severity::Info), 0);
+    }
+
+    #[test]
+    fn audit_and_lock_keep_the_tool_error_code_at_every_threshold() {
+        let error = LockFetchError {
+            package: "x@1".into(),
+            message: "unreadable".into(),
+        };
+        let audit = AuditReport {
+            lockfile: "package-lock.json".into(),
+            packages: vec![report(vec![finding(Severity::Warn)])],
+            errors: vec![error.clone()],
+            notes: vec![],
+        };
+        let lock = LockReport {
+            lockfile: "package-lock.json".into(),
+            base: "main".into(),
+            new_packages: vec![report(vec![finding(Severity::Warn)])],
+            errors: vec![error],
+            notes: vec![],
+        };
+        assert_eq!(audit.exit_code_with(Severity::High), TOOL_ERROR_EXIT_CODE);
+        assert_eq!(lock.exit_code_with(Severity::High), TOOL_ERROR_EXIT_CODE);
+        assert_eq!(audit.exit_code(), TOOL_ERROR_EXIT_CODE);
+        assert_eq!(lock.exit_code(), TOOL_ERROR_EXIT_CODE);
+    }
+
+    #[test]
+    fn audit_and_lock_aggregate_packages_at_the_threshold() {
+        let audit = AuditReport {
+            lockfile: "package-lock.json".into(),
+            packages: vec![
+                report(vec![finding(Severity::Warn)]),
+                report(vec![finding(Severity::Info)]),
+            ],
+            errors: vec![],
+            notes: vec![],
+        };
+        assert_eq!(audit.exit_code(), 1);
+        assert_eq!(audit.exit_code_with(Severity::High), 0);
+
+        let lock = LockReport {
+            lockfile: "package-lock.json".into(),
+            base: "main".into(),
+            new_packages: vec![report(vec![finding(Severity::High)])],
+            errors: vec![],
+            notes: vec![],
+        };
+        assert_eq!(lock.exit_code_with(Severity::High), 2);
     }
 }

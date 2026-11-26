@@ -109,7 +109,11 @@ fn workflow_default_is_a_release_tag() {
     let default = workflow_default_ref();
     let rest = default.trim_start_matches('v');
     let parts: Vec<&str> = rest.split('.').collect();
-    assert_eq!(parts.len(), 3, "default {default} is not vMAJOR.MINOR.PATCH");
+    assert_eq!(
+        parts.len(),
+        3,
+        "default {default} is not vMAJOR.MINOR.PATCH"
+    );
     assert!(
         parts.iter().all(|part| part.parse::<u64>().is_ok()),
         "default {default} is not a numeric release tag"

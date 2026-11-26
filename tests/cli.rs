@@ -2408,6 +2408,111 @@ fn fresh_package_with_install_scripts_exits_two() {
 }
 
 #[test]
+fn fail_on_high_lets_a_warning_pass() {
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("warn-pkg", "1.0.0")]),
+    );
+    let package = PackageFixture {
+        scripts: r#"{"preinstall":"node before.js"}"#,
+        ..PackageFixture::clean("warn-pkg")
+    };
+    let registry = registry_with(&[package], None);
+
+    // The default threshold keeps the historical exit codes.
+    registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("WARN (exit 1)"));
+
+    // With --fail-on high the same warning passes, and the JSON envelope
+    // agrees with the process exit code instead of contradicting it.
+    let output = registry
+        .command()
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--json", "--fail-on", "high"])
+        .assert()
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["verdict"], "warn");
+    assert_eq!(value["exit_code"], 0);
+
+    // A single-package check honours the same flag in the human report.
+    registry
+        .command()
+        .args(["npm", "warn-pkg", "--fail-on", "high"])
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("WARN (exit 0)"));
+}
+
+#[test]
+fn fail_on_high_still_fails_on_a_high_finding() {
+    let package = PackageFixture {
+        created_days_ago: 1,
+        published_days_ago: 1,
+        scripts: r#"{"postinstall":"node setup.js"}"#,
+        publisher: "mallory",
+        maintainers: &["alice"],
+        ..PackageFixture::clean("high-pkg")
+    };
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args(["npm", "high-pkg", "--fail-on", "high"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("HIGH (exit 2)"));
+}
+
+#[test]
+fn fail_on_info_fails_a_lone_info_finding() {
+    let package = PackageFixture::clean("quiet-pkg");
+    let registry = registry_and_osv(&[package], None, 500, "{}", None);
+
+    // The advisory gap is an INFO finding, so the default threshold passes.
+    registry
+        .command()
+        .args(["npm", "quiet-pkg"])
+        .assert()
+        .code(0);
+
+    registry
+        .command()
+        .args(["npm", "quiet-pkg", "--fail-on", "info"])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn fail_on_is_rejected_where_it_cannot_change_the_exit_code() {
+    let package = PackageFixture::clean("guard-pkg");
+    let registry = registry_with(&[package], None);
+
+    registry
+        .command()
+        .args([
+            "guard",
+            "--fail-on",
+            "high",
+            "--check",
+            "--",
+            "npm i guard-pkg",
+        ])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("--fail-on applies to"));
+}
+
+#[test]
 fn json_output_is_machine_readable() {
     let package = PackageFixture {
         scripts: r#"{"preinstall":"node before.js"}"#,
