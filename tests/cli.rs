@@ -2851,6 +2851,89 @@ fn a_routed_name_that_exists_publicly_is_a_dependency_confusion_high() {
 }
 
 #[test]
+fn a_routed_pypi_name_is_read_from_the_simple_index_and_probed() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/internal-pkg/".to_string(),
+        (
+            200,
+            r#"{"meta":{"api-version":"1.1"},"name":"internal-pkg",
+                "versions":["0.9.0","1.0.0"],
+                "files":[
+                  {"filename":"internal_pkg-0.9.0-py3-none-any.whl","url":"https://index/0.whl"},
+                  {"filename":"internal_pkg-1.0.0.tar.gz","url":"https://index/1.tar.gz",
+                   "upload-time":"2025-06-01T00:00:00Z"}
+                ]}"#
+            .to_string(),
+        ),
+    );
+    let private = MockRegistry::start(routes);
+
+    let mut public_routes = HashMap::new();
+    public_routes.insert(
+        "/pypi/internal-pkg/json".to_string(),
+        (
+            200,
+            r#"{"info":{"name":"internal-pkg","version":"2.0.0"},"releases":{"1.0.0":[],"2.0.0":[]}}"#.to_string(),
+        ),
+    );
+    public_routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let public = MockRegistry::start(public_routes);
+
+    let repo = Repo::new();
+    repo.write(
+        ".depvet.toml",
+        &format!(
+            "[[registries]]\necosystem = \"pypi\"\nmatch = \"internal-\"\nurl = \"{}\"\n",
+            private.base
+        ),
+    );
+
+    let output = private
+        .command_with(&[
+            ("DEPVET_PYPI_BASE", public.base.as_str()),
+            ("DEPVET_OSV_BASE", public.base.as_str()),
+            // The simple index needs no insecure gate beyond the test's own.
+            ("DEPVET_ALLOW_INSECURE_BASES", "1"),
+        ])
+        .current_dir(repo.path())
+        .args(["pypi", "internal-pkg==1.0.0", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["version"], "1.0.0");
+    assert!(
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["id"] == "build-from-source"),
+        "an sdist-only release is reported"
+    );
+    assert_eq!(value["findings"][0]["id"], "dependency-confusion");
+    assert_eq!(value["findings"][0]["severity"], "high");
+
+    let index_request = private
+        .recorded()
+        .into_iter()
+        .find(|request| request.path == "/internal-pkg/")
+        .expect("the simple index was not read");
+    assert!(
+        index_request
+            .headers
+            .iter()
+            .any(|(name, value)| name == "accept" && value.contains("pypi.simple.v1+json")),
+        "the request did not ask for the JSON representation"
+    );
+}
+
+#[test]
 fn one_repository_gets_one_scorecard_lookup_per_run() {
     let repo = Repo::new();
     repo.write(

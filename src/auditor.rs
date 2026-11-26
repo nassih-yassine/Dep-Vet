@@ -56,7 +56,7 @@ impl Auditor {
     ) -> Self {
         Self {
             registry: RegistryClient::from_env(Arc::clone(http)).with_router(router.clone()),
-            pypi: PypiClient::from_env(Arc::clone(http)),
+            pypi: PypiClient::from_env(Arc::clone(http)).with_router(router.clone()),
             crates: CratesClient::from_env(Arc::clone(http)),
             go: GoClient::from_env(Arc::clone(http)),
             jsr: JsrClient::from_env(Arc::clone(http)),

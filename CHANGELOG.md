@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Private PyPI indexes.** `[[registries]]` with `ecosystem = "pypi"` routes
+  a name prefix to a PEP 691 simple index. Versions, yank state, sdist-only and
+  PEP 700 upload times come from that document; maintainers, license, and
+  repository are `not checked` rather than guessed. The same dependency
+  confusion probe applies, and a routed name never falls back to PyPI's JSON
+  API.
+
 - **Dependency confusion is detected for routed names.** After fetching a
   private package, dep-vet asks the public registry once whether the same name
   exists there. A public copy at the same or a higher version is HIGH, older

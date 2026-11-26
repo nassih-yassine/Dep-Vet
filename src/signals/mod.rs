@@ -80,7 +80,7 @@ pub fn report_with_policy(
             .is_some_and(|first| now - first >= ESTABLISHED_AGE_DAYS * date::SECONDS_PER_DAY);
     let established = outmatched || aged;
     let mut findings = assess(&meta, ecosystem, local, &profile, now);
-    if let Some(finding) = confusion_finding(&meta) {
+    if let Some(finding) = confusion_finding(&meta, ecosystem) {
         findings.push(finding);
     }
     if established {
@@ -191,7 +191,7 @@ pub fn report_with_policy(
 /// dependency-confusion target: an unpinned resolver takes the public copy.
 /// HIGH when that copy is the same or newer, WARN when only older versions
 /// exist, INFO when the probe could not run (never silence).
-fn confusion_finding(meta: &PackageMeta) -> Option<Finding> {
+fn confusion_finding(meta: &PackageMeta, ecosystem: Ecosystem) -> Option<Finding> {
     use crate::registry::PublicProbe;
     let (latest, versions) = match &meta.public {
         PublicProbe::NotApplicable => return None,
@@ -226,7 +226,7 @@ fn confusion_finding(meta: &PackageMeta) -> Option<Finding> {
                 .filter_map(|version| semver::Version::parse(version).ok())
                 .max()
         });
-    let public_url = format!("https://www.npmjs.com/package/{}", meta.name);
+    let public_url = ecosystem.package_url(&meta.name, &meta.version);
     let (severity, detail) = match (internal, public) {
         (Some(internal), Some(public)) if public >= internal => (
             Severity::High,

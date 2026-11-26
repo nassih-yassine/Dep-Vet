@@ -149,7 +149,7 @@ fn archive_suffix(rest: &str) -> bool {
 
 /// PEP 503 folding: lowercase, runs of `-`, `_`, `.` become one `-`. Filenames
 /// use `_` where a distribution name has `-`, so both sides are folded.
-fn fold(value: &str) -> String {
+pub(crate) fn fold(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut separator = false;
     for character in value.to_ascii_lowercase().chars() {
