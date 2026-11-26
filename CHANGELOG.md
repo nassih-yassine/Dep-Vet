@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **pip's index replaces PyPI for Python audits.** `PIP_INDEX_URL`,
+  `PIP_EXTRA_INDEX_URL`, and `pip.conf` are read the way pip reads them; the
+  primary index is used for every name and packages come from its PEP 691
+  simple API. `DEPVET_PYPI_BASE` still wins and `DEPVET_NO_PIP_CONFIG=1`
+  disables discovery. Extra indexes are parsed but not consulted yet, and the
+  dependency-confusion probe is skipped for a general index (it proxies public
+  names by design).
+
 - **`.npmrc` scope routes are discovered.** `@scope:registry` from the user and
   project `.npmrc` is used after explicit `[[registries]]` configuration, and a
   private `registry=` becomes the default npm registry only when no

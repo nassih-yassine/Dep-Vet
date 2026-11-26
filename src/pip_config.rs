@@ -33,6 +33,12 @@ pub fn indexes(config: &PipConfig, default: &str) -> Vec<String> {
     urls
 }
 
+/// Discovery can be turned off with `DEPVET_NO_PIP_CONFIG=1`; tests set it so
+/// a developer's own pip configuration cannot change a run.
+pub fn enabled() -> bool {
+    !std::env::var("DEPVET_NO_PIP_CONFIG").is_ok_and(|value| value == "1")
+}
+
 /// Reads the environment and the three pip.conf locations. A missing file or
 /// variable is normal; a malformed URL is `None` rather than a guess, so the
 /// caller can report it instead of querying the wrong host.

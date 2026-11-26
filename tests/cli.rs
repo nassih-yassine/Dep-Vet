@@ -233,6 +233,7 @@ impl MockRegistry {
             // A developer's own DEPVET_JOBS or npmrc must not change the suite.
             .env_remove("DEPVET_JOBS")
             .env("DEPVET_NO_NPMRC", "1")
+            .env("DEPVET_NO_PIP_CONFIG", "1")
             .env("NO_COLOR", "1");
         for (key, value) in extra {
             command.env(key, value);
@@ -2972,6 +2973,41 @@ fn an_npmrc_scope_route_is_honoured_after_explicit_config() {
             .iter()
             .flat_map(|request| request.headers.iter())
             .all(|(name, _)| name != "authorization")
+    );
+}
+
+#[test]
+fn pip_index_url_replaces_pypi_for_py_name_lookups() {
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/demo-pkg/".to_string(),
+        (
+            200,
+            r#"{"meta":{"api-version":"1.1"},"name":"demo-pkg","versions":["1.0.0"],
+                "files":[{"filename":"demo_pkg-1.0.0-py3-none-any.whl","url":"https://index/1.whl"}]}"#
+                .to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let index = MockRegistry::start(routes);
+
+    index
+        .command_with(&[
+            ("DEPVET_NO_PIP_CONFIG", "0"),
+            ("PIP_INDEX_URL", &format!("{}/", index.base)),
+        ])
+        // The override would hide the pip setting; drop it for this run.
+        .env_remove("DEPVET_PYPI_BASE")
+        .args(["pypi", "demo-pkg", "--json"])
+        .assert()
+        .code(0);
+
+    assert!(
+        index.requests().iter().any(|path| path == "/demo-pkg/"),
+        "pip's index was not used"
     );
 }
 

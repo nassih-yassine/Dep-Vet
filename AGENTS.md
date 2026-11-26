@@ -136,7 +136,9 @@ cache key, and never ask the public *downloads* API about a routed name. The
 dependency-confusion probe is the one deliberate public lookup of the name: it
 is unauthenticated, opt-out per entry, and a failed probe is INFO, never clean.
 `.npmrc` discovery adds scope routes after explicit config and never reads a
-token; `DEPVET_NO_NPMRC=1` disables it, and tests set it.
+token; `DEPVET_NO_NPMRC=1` disables it, and tests set it. pip's index replaces
+PyPI for every Python name (`DEPVET_NO_PIP_CONFIG=1` disables it), is read from
+the simple API, and is never probed for dependency confusion.
 
 The full inventory of 100+ traps lives in
 [`agent-docs/traps.md`](agent-docs/traps.md), in the order they were learned.
