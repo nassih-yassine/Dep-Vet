@@ -333,7 +333,7 @@ fn is_false(value: &bool) -> bool {
 
 /// Which package ecosystem a report describes. One variant today: add the next
 /// one when its source exists, not before.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Ecosystem {
     Npm,
