@@ -22,8 +22,8 @@ use dep_vet::osv::{AdvisoryList, OsvClient, OsvQuery};
 use dep_vet::pypi::{PypiClient, PypiError};
 use dep_vet::registry::{PackageMeta, RegistryClient, RegistryError};
 use dep_vet::report::{
-    render_audit_human, render_audit_json, render_human, render_json, render_lock_human,
-    render_lock_json,
+    render_audit_human_with, render_audit_json_with, render_human_with, render_lock_human_with,
+    render_lock_json_with,
 };
 use dep_vet::rubygems::{GemClient, GemError};
 use dep_vet::signals;
@@ -55,6 +55,14 @@ fn main() -> ExitCode {
         unsafe {
             std::env::set_var("DEPVET_ALLOW_INSECURE_BASES", "1");
         }
+    }
+    if cli.fail_on.is_some() && !cli.honours_fail_on() {
+        eprintln!(
+            "dep-vet: --fail-on applies to audit, lock, and the single-package checks; \
+             this command keeps its own exit codes"
+        );
+        eprintln!("dep-vet: nothing was checked (this is not a verdict, exit {TOOL_ERROR}).");
+        return ExitCode::from(TOOL_ERROR);
     }
     if let Err(error) = dep_vet::netpolicy::check_overrides_env() {
         eprintln!("dep-vet: {error}");
@@ -488,12 +496,13 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             json,
         } => {
             let report = diff_lockfile(&auditor, &allowlist, path, base, true)?;
+            let fail_on = cli.fail_threshold();
             let output = if *json {
-                render_lock_json(&report)?
+                render_lock_json_with(&report, fail_on)?
             } else {
-                render_lock_human(&report, use_color(cli))
+                render_lock_human_with(&report, use_color(cli), fail_on)
             };
-            emit(&output, report.exit_code())
+            emit(&output, report.exit_code_with(fail_on))
         }
     }
 }
@@ -1496,16 +1505,17 @@ fn run_audit(
         errors,
         notes: contents.notes,
     };
+    let fail_on = cli.fail_threshold();
     let output = match format {
-        OutputFormat::Human => render_audit_human(&report, use_color(cli)),
-        OutputFormat::Json => render_audit_json(&report)?,
-        OutputFormat::Sarif => dep_vet::sarif::render(&report)?,
+        OutputFormat::Human => render_audit_human_with(&report, use_color(cli), fail_on),
+        OutputFormat::Json => render_audit_json_with(&report, fail_on)?,
+        OutputFormat::Sarif => dep_vet::sarif::render_with(&report, fail_on)?,
     };
     if let Some(path) = destination {
         std::fs::write(path, format!("{output}\n"))?;
-        return Ok(report.exit_code());
+        return Ok(report.exit_code_with(fail_on));
     }
-    emit(&output, report.exit_code())
+    emit(&output, report.exit_code_with(fail_on))
 }
 
 /// Add the root-to-package chains the lockfile already encodes. A format with
@@ -1782,10 +1792,11 @@ fn audit_packages(
 }
 
 fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result<u8> {
+    let fail_on = cli.fail_threshold();
     let output = if json {
-        render_json(report)?
+        dep_vet::report::render_json_with(report, fail_on)?
     } else {
-        let mut report_text = render_human(report, use_color(cli));
+        let mut report_text = render_human_with(report, use_color(cli), fail_on);
         if dep_vet::netpolicy::insecure_active() {
             report_text = format!(
                 "UNOFFICIAL REGISTRY: a development override is active; results are not production registry data\n\n{report_text}"
@@ -1803,7 +1814,7 @@ fn emit_package(cli: &Cli, json: bool, report: &PackageReport) -> anyhow::Result
             report_text
         }
     };
-    emit(&output, report.exit_code())
+    emit(&output, report.exit_code_with(fail_on))
 }
 
 fn emit(output: &str, code: u8) -> anyhow::Result<u8> {

@@ -106,6 +106,18 @@ called wrong". clap's own usage-error exit is `2`, which would read as "high
 risk", so parse failures are remapped to `3`; `--help` and `--version` still
 exit `0`.
 
+`--fail-on` moves the threshold that fails the run. The default, `warn`, is the
+table above. `--fail-on high` reports warnings but exits `0` unless a HIGH
+finding exists; `--fail-on info` fails on any finding, including an
+informational one (that exits `1`, never `2`). JSON and SARIF carry the same
+effective `exit_code`, so a script reading the field cannot disagree with the
+process. The flag applies to `audit`, `lock`, and the single-package checks (`npm`,
+`pypi`, `crates`, `go`, `jsr`, `gem`, `nuget`, `maven`, `composer`). Commands
+that own their exit code (`guard`, `hook`, `update`, `plan`, `tree`, `sbom`,
+`watch`, `inspect`, `diff`, `workflows`, `mcp-config`, `mcp`) refuse it with
+exit `3` rather than ignoring it, including an explicit `--fail-on warn`;
+`guard` in particular keeps the hook contract. `3` is never folded into `0`, `1`, or `2`.
+
 A reproducible run on a real project, with captured output and why one audit
 honestly exits `3`, lives in
 [`examples/nodegoat`](examples/nodegoat).
@@ -285,10 +297,10 @@ permissions:
   pull-requests: write
 jobs:
   dep-vet:
-    uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@v0.16.0
+    uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@v0.16.1
     with:
       lockfile: package-lock.json
-      ref: v0.16.0
+      ref: v0.16.1
 ```
 
 The action also evaluates `.depvet.toml` from the **base** revision, so a pull
@@ -489,7 +501,7 @@ sha256sum -c dep-vet-x86_64-unknown-linux-musl.tar.xz.sha256
 gh attestation verify dep-vet-x86_64-unknown-linux-musl.tar.xz \
   --repo nassih-yassine/Dep-Vet \
   --signer-workflow nassih-yassine/Dep-Vet/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.16.0
+  --source-ref refs/tags/v0.16.1
 ```
 
 `inspect npm` verifies Sigstore bundles offline against the embedded PublicGood

@@ -44,6 +44,11 @@ fn artifact_uri(lockfile: &str) -> String {
 }
 
 pub fn render(report: &AuditReport) -> Result<String, serde_json::Error> {
+    render_with(report, Severity::Warn)
+}
+
+/// `render` under an explicit `--fail-on` threshold.
+pub fn render_with(report: &AuditReport, fail_on: Severity) -> Result<String, serde_json::Error> {
     let mut rules: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
     let mut results = Vec::new();
     let uri = artifact_uri(&report.lockfile);
@@ -121,7 +126,7 @@ pub fn render(report: &AuditReport) -> Result<String, serde_json::Error> {
 
     let mut invocation = json!({
         "executionSuccessful": report.errors.is_empty(),
-        "exitCode": report.exit_code(),
+        "exitCode": report.exit_code_with(fail_on),
     });
     if crate::netpolicy::insecure_active() {
         invocation["properties"] = json!({ "unofficial_registry": true });

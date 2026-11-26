@@ -22,4 +22,4 @@ jobs:
       # Defaults to the pull request base branch. Pin a ref for release branches.
       # base: origin/main
       # Pin the binary to a reviewed release tag, not a moving branch.
-      ref: v0.16.0
+      ref: v0.16.1
