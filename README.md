@@ -365,10 +365,10 @@ permissions:
   pull-requests: write
 jobs:
   dep-vet:
-    uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@v0.16.1
+    uses: nassih-yassine/Dep-Vet/.github/workflows/dep-vet.yml@v0.17.0
     with:
       lockfile: package-lock.json
-      ref: v0.16.1
+      ref: v0.17.0
 ```
 
 The action also evaluates `.depvet.toml` from the **base** revision, so a pull
@@ -578,7 +578,7 @@ sha256sum -c dep-vet-x86_64-unknown-linux-musl.tar.xz.sha256
 gh attestation verify dep-vet-x86_64-unknown-linux-musl.tar.xz \
   --repo nassih-yassine/Dep-Vet \
   --signer-workflow nassih-yassine/Dep-Vet/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.16.1
+  --source-ref refs/tags/v0.17.0
 ```
 
 `inspect npm` verifies Sigstore bundles offline against the embedded PublicGood
