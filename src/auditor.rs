@@ -49,9 +49,13 @@ pub struct Auditor {
 }
 
 impl Auditor {
-    pub fn new(http: &Arc<HttpClient>, policy: &Policy) -> Self {
+    pub fn new(
+        http: &Arc<HttpClient>,
+        policy: &Policy,
+        router: &crate::registries::Router,
+    ) -> Self {
         Self {
-            registry: RegistryClient::from_env(Arc::clone(http)),
+            registry: RegistryClient::from_env(Arc::clone(http)).with_router(router.clone()),
             pypi: PypiClient::from_env(Arc::clone(http)),
             crates: CratesClient::from_env(Arc::clone(http)),
             go: GoClient::from_env(Arc::clone(http)),

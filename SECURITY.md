@@ -34,6 +34,14 @@ Dep-Vet runs as one local binary. It makes these outbound requests:
   Opt out with `DEPVET_NO_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1`.
 - Archive and provenance URLs the registry declares, after the outbound URL
   policy validates them.
+- Private registries you configure with `[[registries]]`: only the exact host
+  and port you named, and only for packages whose scope or prefix matches. The
+  bearer token is read from the environment variable that the per-user file
+  names (`~/.config/dep-vet/registries.toml`); a repository file may route but
+  never carry a credential. The token is not written to the cache or a report
+  and is not sent to any other host (ureq drops `Authorization` on redirects).
+  A routed package's name is never sent to the public registry, not even for a
+  download count.
 
 That is the whole list. There is no account, no API key, no analytics, no crash
 reporting, and no upload of lockfile paths, source, reports, or findings.

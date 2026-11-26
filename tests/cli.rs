@@ -239,6 +239,11 @@ impl MockRegistry {
         command
     }
 
+    /// Full requests, for tests that assert on headers as well as paths.
+    fn recorded(&self) -> Vec<RecordedRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+
     fn requests(&self) -> Vec<String> {
         self.requests
             .lock()
@@ -2692,6 +2697,87 @@ fn one_job_still_audits_and_keeps_lockfile_order() {
         .map(|package| package["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, ["first-pkg", "second-pkg"]);
+}
+
+#[test]
+fn a_routed_scope_uses_the_private_registry_and_never_the_public_one() {
+    let private = registry_with(&[PackageFixture::clean("@acme/lib")], None);
+    let public = registry_with(&[PackageFixture::clean("plain-pkg")], None);
+
+    let repo = Repo::new();
+    repo.write(
+        "package-lock.json",
+        &lockfile_json(&[("@acme/lib", "1.0.0"), ("plain-pkg", "1.0.0")]),
+    );
+    repo.write(
+        ".depvet.toml",
+        &format!(
+            "[[registries]]\necosystem = \"npm\"\nmatch = \"@acme\"\nurl = \"{}\"\n",
+            private.base
+        ),
+    );
+    // The token lives in the per-user file, never in the repository.
+    let home = tempfile::tempdir().unwrap();
+    let config_dir = home.path().join(".config").join("dep-vet");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("registries.toml"),
+        format!(
+            "[[registries]]\necosystem = \"npm\"\nmatch = \"@acme\"\nurl = \"{}\"\nauth = \"env:DEPVET_TEST_TOKEN\"\n",
+            private.base
+        ),
+    )
+    .unwrap();
+
+    private
+        .command_with(&[
+            ("DEPVET_REGISTRY_BASE", public.base.as_str()),
+            (
+                "DEPVET_DOWNLOADS_BASE",
+                &format!("{}/downloads", public.base),
+            ),
+            ("HOME", home.path().to_str().unwrap()),
+            ("DEPVET_TEST_TOKEN", "s3cret"),
+        ])
+        .current_dir(repo.path())
+        .args(["audit", "package-lock.json", "--json", "--jobs", "1"])
+        .assert()
+        .code(0);
+
+    let routed: Vec<RecordedRequest> = private
+        .recorded()
+        .into_iter()
+        .filter(|request| request.path.contains("@acme"))
+        .collect();
+    assert_eq!(routed.len(), 1, "the packument came from the wrong host");
+    let authorization = routed[0]
+        .headers
+        .iter()
+        .find(|(name, _)| name == "authorization")
+        .map(|(_, value)| value.as_str());
+    assert_eq!(authorization, Some("Bearer s3cret"));
+
+    // The public registry must not learn the private name, not even for a
+    // download count the private package cannot have.
+    let leaked: Vec<String> = public.requests();
+    assert!(
+        leaked.iter().all(|path| !path.contains("acme")),
+        "a routed name reached the public registry: {leaked:?}"
+    );
+
+    // A public package in the same run carries no token.
+    let public_packument = public
+        .recorded()
+        .into_iter()
+        .find(|request| request.path.contains("plain-pkg"))
+        .expect("the public package was not fetched");
+    assert!(
+        public_packument
+            .headers
+            .iter()
+            .all(|(name, _)| name != "authorization"),
+        "the private token was sent to the public registry"
+    );
 }
 
 #[test]

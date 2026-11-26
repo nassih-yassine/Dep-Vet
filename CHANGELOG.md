@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Private npm registries.** `[[registries]]` in `.depvet.toml` routes a
+  scope or name prefix to a company registry; `auth = "env:VAR"` is only read
+  from `~/.config/dep-vet/registries.toml`, so a repository can route but never
+  attach a token. A routed name never reaches the public registry, not even for
+  a download count. The token is not cached, not reported, and dropped on
+  redirects. Only the exact configured host may resolve to a private address.
+
 - **`--jobs N` (or `DEPVET_JOBS`) sets how many packages are audited at
   once.** The default is the machine's cores capped at 8, `0` or a value above
   32 is exit `3`, and `--jobs` wins over the environment. A work queue replaces
