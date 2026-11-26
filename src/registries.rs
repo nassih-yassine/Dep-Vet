@@ -242,6 +242,25 @@ impl Router {
         }
     }
 
+    /// Append discovered routes (npmrc) after the explicit ones: a repository
+    /// or user entry always wins over what a file happened to suggest.
+    pub fn extend_discovered(mut self, entries: &[RegistryEntry]) -> Self {
+        self.routes.extend(entries.iter().map(|entry| {
+            Route {
+                ecosystem: entry.ecosystem,
+                pattern: entry.r#match.trim().to_string(),
+                base: entry.url.trim_end_matches('/').to_string(),
+                auth_env: entry
+                    .auth
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix("env:"))
+                    .map(str::to_string),
+                probe_public: entry.probe_public,
+            }
+        }));
+        self
+    }
+
     /// First matching route, or `None` for the public registry.
     pub fn route(&self, ecosystem: Ecosystem, name: &str) -> Option<&Route> {
         let name = name.to_ascii_lowercase();

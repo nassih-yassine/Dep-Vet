@@ -218,6 +218,20 @@ fn unique_names(names: &[String]) -> Vec<String> {
 }
 
 impl RegistryClient {
+    /// `DEPVET_REGISTRY_BASE` wins, then a `.npmrc`-discovered default, then
+    /// the public registry. The discovered value only ever applies when no
+    /// environment override exists.
+    pub fn from_env_with_default(http: Arc<HttpClient>, discovered: Option<String>) -> Self {
+        let registry = if std::env::var_os("DEPVET_REGISTRY_BASE").is_some() {
+            std::env::var("DEPVET_REGISTRY_BASE").unwrap_or_else(|_| DEFAULT_REGISTRY.to_string())
+        } else {
+            discovered.unwrap_or_else(|| DEFAULT_REGISTRY.to_string())
+        };
+        let downloads = std::env::var("DEPVET_DOWNLOADS_BASE")
+            .unwrap_or_else(|_| DEFAULT_DOWNLOADS.to_string());
+        Self::new(http, registry, downloads)
+    }
+
     pub fn from_env(http: Arc<HttpClient>) -> Self {
         let registry =
             std::env::var("DEPVET_REGISTRY_BASE").unwrap_or_else(|_| DEFAULT_REGISTRY.to_string());

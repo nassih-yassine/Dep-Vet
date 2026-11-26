@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **`.npmrc` scope routes are discovered.** `@scope:registry` from the user and
+  project `.npmrc` is used after explicit `[[registries]]` configuration, and a
+  private `registry=` becomes the default npm registry only when no
+  `DEPVET_REGISTRY_BASE` exists. Tokens in `.npmrc` are never read; keep
+  `auth = "env:VAR"` in `~/.config/dep-vet/registries.toml`. Disable with
+  `DEPVET_NO_NPMRC=1`.
+
 - **Private PyPI indexes.** `[[registries]]` with `ecosystem = "pypi"` routes
   a name prefix to a PEP 691 simple index. Versions, yank state, sdist-only and
   PEP 700 upload times come from that document; maintainers, license, and

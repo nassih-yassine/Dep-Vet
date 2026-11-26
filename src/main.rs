@@ -114,7 +114,34 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     // own file. The router is built once and shared by every client.
     let user_registries =
         dep_vet::registries::load_user_config().map_err(|error| anyhow::anyhow!(error))?;
-    let router = dep_vet::registries::Router::new(allowlist.registries(), &user_registries);
+    let mut npm_default: Option<String> = None;
+    let mut router = dep_vet::registries::Router::new(allowlist.registries(), &user_registries);
+    if dep_vet::npmrc::enabled() {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let cwd = std::env::current_dir().ok();
+        let discovered = dep_vet::npmrc::discover(home.as_deref(), cwd.as_deref(), |key| {
+            std::env::var(key).ok()
+        });
+        let entries =
+            dep_vet::npmrc::as_entries(&discovered).map_err(|error| anyhow::anyhow!(error))?;
+        router = router.extend_discovered(&entries);
+        if let Some(base) = discovered.default_registry.clone() {
+            let probe = dep_vet::registries::RegistryEntry {
+                ecosystem: dep_vet::model::Ecosystem::Npm,
+                r#match: "@npmrc-default".to_string(),
+                url: base.clone(),
+                auth: None,
+                probe_public: true,
+            };
+            dep_vet::registries::validate(
+                std::slice::from_ref(&probe),
+                std::env::var("DEPVET_ALLOW_INSECURE_BASES").is_ok_and(|value| value == "1"),
+                true,
+            )
+            .map_err(|error| anyhow::anyhow!("npmrc: {error}"))?;
+            npm_default = Some(base);
+        }
+    }
     let registry_bases: Vec<String> = allowlist
         .registries()
         .iter()
@@ -125,7 +152,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         cli.no_cache,
         &registry_bases,
     ));
-    let mut auditor = Auditor::new(&http, allowlist.policy(), &router);
+    let mut auditor = Auditor::new(&http, allowlist.policy(), &router, npm_default);
 
     match &cli.command {
         Command::Hook { .. } => unreachable!("handled before config and network"),

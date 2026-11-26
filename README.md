@@ -313,6 +313,12 @@ read from a repository file: put the same entry in
 auth = "env:ACME_NPM_TOKEN"
 ```
 
+Scope routes are also discovered, after the explicit entries above, from
+`~/.npmrc` and the project's `.npmrc` (`@acme:registry=...`). Tokens in an
+`.npmrc` are never read: keep `auth = "env:..."` in the per-user file. A
+private `registry=` there becomes the default npm registry only when
+`DEPVET_REGISTRY_BASE` is unset. `DEPVET_NO_NPMRC=1` turns discovery off.
+
 The token is sent as a bearer header to that host only. It never enters the
 cache, a report, or a redirect, and the public download API never sees a routed
 name. Unless the entry sets `probe_public = false`, dep-vet also asks the public
