@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::model::Confidence;
 use crate::model::InstallScript;
