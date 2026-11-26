@@ -54,14 +54,14 @@ impl Auditor {
         policy: &Policy,
         router: &crate::registries::Router,
         npm_default: Option<String>,
-        pypi_simple: Option<String>,
+        pypi_simple: Vec<String>,
     ) -> Self {
         Self {
             registry: RegistryClient::from_env_with_default(Arc::clone(http), npm_default)
                 .with_router(router.clone()),
             pypi: PypiClient::from_env(Arc::clone(http))
                 .with_router(router.clone())
-                .with_simple_base(pypi_simple),
+                .with_simple_bases(pypi_simple),
             crates: CratesClient::from_env(Arc::clone(http)),
             go: GoClient::from_env(Arc::clone(http)),
             jsr: JsrClient::from_env(Arc::clone(http)),

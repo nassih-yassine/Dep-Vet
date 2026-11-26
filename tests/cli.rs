@@ -3012,6 +3012,49 @@ fn pip_index_url_replaces_pypi_for_py_name_lookups() {
 }
 
 #[test]
+fn every_pip_index_is_tried_in_order() {
+    let missing = MockRegistry::start(HashMap::from([(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    )]));
+    let mut routes = HashMap::new();
+    routes.insert(
+        "/demo-pkg/".to_string(),
+        (
+            200,
+            r#"{"meta":{"api-version":"1.1"},"name":"demo-pkg","versions":["1.0.0"],
+                "files":[{"filename":"demo_pkg-1.0.0-py3-none-any.whl","url":"https://index/1.whl"}]}"#
+                .to_string(),
+        ),
+    );
+    routes.insert(
+        "/v1/querybatch".to_string(),
+        (200, NO_ADVISORIES.to_string()),
+    );
+    let found = MockRegistry::start(routes);
+
+    found
+        .command_with(&[
+            ("DEPVET_NO_PIP_CONFIG", "0"),
+            ("PIP_INDEX_URL", format!("{}/", missing.base).as_str()),
+            ("PIP_EXTRA_INDEX_URL", format!("{}/", found.base).as_str()),
+        ])
+        .env_remove("DEPVET_PYPI_BASE")
+        .args(["pypi", "demo-pkg", "--json"])
+        .assert()
+        .code(0);
+
+    assert!(
+        found.requests().iter().any(|path| path == "/demo-pkg/"),
+        "the extra index was not consulted"
+    );
+    assert!(
+        missing.requests().iter().any(|path| path == "/demo-pkg/"),
+        "the primary index was skipped"
+    );
+}
+
+#[test]
 fn one_repository_gets_one_scorecard_lookup_per_run() {
     let repo = Repo::new();
     repo.write(

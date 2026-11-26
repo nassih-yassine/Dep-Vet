@@ -30,9 +30,10 @@ pub struct PypiClient {
     base: String,
     /// Names routed to a private index, by the same configuration npm uses.
     router: Option<crate::registries::Router>,
-    /// pip's configured index. It replaces PyPI for every name, which is what
-    /// `pip install` does with the same setting.
-    simple: Option<String>,
+    /// pip's configured indexes, in order. The first one replaces PyPI; the
+    /// extras are tried when a name is not on it, which is the closest honest
+    /// reading of pip's multi-index install.
+    simple: Vec<String>,
 }
 
 impl PypiClient {
@@ -47,7 +48,7 @@ impl PypiClient {
             http,
             base: base.into(),
             router: None,
-            simple: None,
+            simple: Vec::new(),
         }
     }
 
@@ -59,8 +60,8 @@ impl PypiClient {
     }
 
     /// pip's index, used for every name that has no explicit route.
-    pub fn with_simple_base(mut self, base: Option<String>) -> Self {
-        self.simple = base;
+    pub fn with_simple_bases(mut self, bases: Vec<String>) -> Self {
+        self.simple = bases;
         self
     }
 
@@ -79,10 +80,22 @@ impl PypiClient {
             let token = crate::registries::token(route).map_err(PypiError::Http)?;
             return self.fetch_simple_at(spec, &route.base, token.as_deref(), route.probe_public);
         }
-        if let Some(base) = self.simple.clone() {
+        if !self.simple.is_empty() {
             // A general index proxies public names too, so a public copy is
             // expected rather than suspicious: no confusion probe here.
-            return self.fetch_simple_at(spec, &base, None, false);
+            let mut last = None;
+            for base in &self.simple {
+                match self.fetch_simple_at(spec, base, None, false) {
+                    Ok(meta) => return Ok(meta),
+                    // Not on this index: the next configured one decides.
+                    Err(PypiError::PackageNotFound(_)) => continue,
+                    Err(error) => {
+                        last = Some(error);
+                        break;
+                    }
+                }
+            }
+            return Err(last.unwrap_or_else(|| PypiError::PackageNotFound(spec.name.clone())));
         }
         let url = self.project_url(&spec.name);
         let body = match self.http.get(&url) {

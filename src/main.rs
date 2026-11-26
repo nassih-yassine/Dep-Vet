@@ -115,7 +115,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
     let user_registries =
         dep_vet::registries::load_user_config().map_err(|error| anyhow::anyhow!(error))?;
     let mut npm_default: Option<String> = None;
-    let mut pypi_simple: Option<String> = None;
+    let mut pypi_simple: Vec<String> = Vec::new();
     // pip's index replaces PyPI, the same way `pip install` uses it. Only read
     // when no DEPVET_PYPI_BASE override exists.
     if dep_vet::pip_config::enabled() && std::env::var_os("DEPVET_PYPI_BASE").is_none() {
@@ -124,28 +124,33 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             dep_vet::pip_config::discover(|key| std::env::var(key).ok(), home.as_deref())
                 .map_err(|error| anyhow::anyhow!(error))?;
         let default = "https://pypi.org/simple";
-        if let Some(base) = dep_vet::pip_config::indexes(&discovery, default)
+        let bases: Vec<String> = dep_vet::pip_config::indexes(&discovery, default)
             .into_iter()
-            .next()
             .filter(|base| base != default)
-        {
-            let probe = dep_vet::registries::RegistryEntry {
-                ecosystem: dep_vet::model::Ecosystem::Pypi,
-                r#match: "@pip-default".to_string(),
-                url: base.clone(),
-                auth: None,
-                probe_public: true,
-            };
+            .collect();
+        if !bases.is_empty() {
+            let probes: Vec<dep_vet::registries::RegistryEntry> = bases
+                .iter()
+                .enumerate()
+                .map(|(index, url)| dep_vet::registries::RegistryEntry {
+                    ecosystem: dep_vet::model::Ecosystem::Pypi,
+                    r#match: format!("@pip-default-{index}"),
+                    url: url.clone(),
+                    auth: None,
+                    probe_public: true,
+                })
+                .collect();
             dep_vet::registries::validate(
-                std::slice::from_ref(&probe),
+                &probes,
                 std::env::var("DEPVET_ALLOW_INSECURE_BASES").is_ok_and(|value| value == "1"),
                 true,
             )
             .map_err(|error| anyhow::anyhow!("pip config: {error}"))?;
-            pypi_simple = Some(base);
+            pypi_simple = bases;
         }
     }
     let mut router = dep_vet::registries::Router::new(allowlist.registries(), &user_registries);
+    let mut npmrc_entries: Vec<dep_vet::registries::RegistryEntry> = Vec::new();
     if dep_vet::npmrc::enabled() {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let cwd = std::env::current_dir().ok();
@@ -154,6 +159,7 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         });
         let entries =
             dep_vet::npmrc::as_entries(&discovered).map_err(|error| anyhow::anyhow!(error))?;
+        npmrc_entries = entries.clone();
         router = router.extend_discovered(&entries);
         if let Some(base) = discovered.default_registry.clone() {
             let probe = dep_vet::registries::RegistryEntry {
@@ -172,12 +178,19 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
             npm_default = Some(base);
         }
     }
-    let registry_bases: Vec<String> = allowlist
+    // Every host a route or discovered index may use, so netpolicy permits
+    // exactly those and nothing else.
+    let mut registry_bases: Vec<String> = allowlist
         .registries()
         .iter()
         .chain(user_registries.iter())
+        .chain(npmrc_entries.iter())
         .map(|entry| entry.url.clone())
         .collect();
+    registry_bases.extend(pypi_simple.iter().cloned());
+    if let Some(base) = &npm_default {
+        registry_bases.push(base.clone());
+    }
     let http = Arc::new(HttpClient::from_env_with_registries(
         cli.no_cache,
         &registry_bases,

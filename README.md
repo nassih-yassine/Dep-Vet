@@ -322,8 +322,8 @@ private `registry=` there becomes the default npm registry only when
 For Python, dep-vet also reads pip's own configuration (`PIP_INDEX_URL`,
 `PIP_EXTRA_INDEX_URL`, and `pip.conf`). A configured index replaces PyPI for
 every name, exactly as it does for `pip install`, and packages are read from
-that index's simple API. Only the primary index is used today; extra indexes
-are parsed but not consulted. `DEPVET_PYPI_BASE` still wins, and
+that index's simple API. Extra indexes are tried in order when a name is
+missing from the primary. `DEPVET_PYPI_BASE` still wins, and
 `DEPVET_NO_PIP_CONFIG=1` turns discovery off.
 
 The token is sent as a bearer header to that host only. It never enters the
@@ -597,6 +597,12 @@ root; audits never claim cryptographic verification.
 - **Maven has no lockfile.** Trees come from `mvn dependency:tree`, or from
   `plan maven` resolving POMs; profiles and multi-module local parents are not
   approximated.
+- **Private-registry support is npm and PyPI.** Routing is by scope or name
+  prefix; a routed name never falls back to the public registry, and a
+  dependency-confusion probe is one unauthenticated lookup. Registries that
+  expose only an HTML simple index are refused rather than scraped, and
+  metadata a simple index cannot answer (maintainers, license, repository) is
+  reported as `not checked`.
 
 ## Development
 
