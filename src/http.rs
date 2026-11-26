@@ -88,12 +88,18 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn from_env(no_cache: bool) -> Self {
+        Self::from_env_with_registries(no_cache, &[])
+    }
+
+    /// As `from_env`, plus the registry hosts configuration declared. Only
+    /// those exact host:port pairs may resolve outside the public internet.
+    pub fn from_env_with_registries(no_cache: bool, registries: &[String]) -> Self {
         let cache = if no_cache {
             None
         } else {
             Cache::open_default()
         };
-        Self::with_cache(cache)
+        Self::with_cache_and_base_and_registries(cache, advisory_base_from_env(), registries)
     }
 
     pub fn with_cache(cache: Option<Cache>) -> Self {
@@ -101,6 +107,14 @@ impl HttpClient {
     }
 
     pub fn with_cache_and_base(cache: Option<Cache>, advisory_base: String) -> Self {
+        Self::with_cache_and_base_and_registries(cache, advisory_base, &[])
+    }
+
+    pub fn with_cache_and_base_and_registries(
+        cache: Option<Cache>,
+        advisory_base: String,
+        registries: &[String],
+    ) -> Self {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(20)))
             // Statuses are data here: 404, 429, and 5xx carry meaning and
@@ -117,7 +131,8 @@ impl HttpClient {
         // Both agents use a resolver that filters every DNS answer before the
         // connector sees it, closing the resolve-then-rebind window. Read the
         // override set once; DNS lookups must not re-parse the environment.
-        let overrides = crate::netpolicy::Overrides::from_env();
+        let mut overrides = crate::netpolicy::Overrides::from_env();
+        overrides.configured = registries.to_vec();
         let agent = ureq::Agent::with_parts(
             config,
             DefaultConnector::new(),
@@ -154,6 +169,18 @@ impl HttpClient {
 
     pub fn get(&self, url: &str) -> Result<String, HttpError> {
         self.get_with_source(url).map(|(body, _)| body)
+    }
+
+    /// GET with a bearer token. Only routed registry requests use this: the
+    /// URL stays the cache key, so the token never enters the cache, a report,
+    /// or a redirect (ureq drops Authorization on any redirect by default).
+    pub fn get_with_token(&self, url: &str, token: Option<&str>) -> Result<String, HttpError> {
+        let Some(token) = token else {
+            return self.get(url);
+        };
+        self.guard()?;
+        self.cached(url, || self.fetch_get_with_token(url, token))
+            .map(|(body, _)| body)
     }
 
     /// Validate and fetch a URL that registry data selected (archives,
@@ -457,6 +484,17 @@ impl HttpClient {
 
     fn fetch_get(&self, url: &str) -> Result<String, HttpError> {
         match self.agent.get(url).call() {
+            Ok(response) => read_response(response, url),
+            Err(error) => Err(network_error(error, url)),
+        }
+    }
+
+    fn fetch_get_with_token(&self, url: &str, token: &str) -> Result<String, HttpError> {
+        let request = self
+            .agent
+            .get(url)
+            .header("Authorization", format!("Bearer {token}"));
+        match request.call() {
             Ok(response) => read_response(response, url),
             Err(error) => Err(network_error(error, url)),
         }

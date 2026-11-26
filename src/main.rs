@@ -109,9 +109,23 @@ fn execute(cli: &Cli) -> anyhow::Result<u8> {
         .unwrap_or(1);
     let jobs = dep_vet::jobs::resolve(cli.jobs, requested.as_deref(), available)
         .map_err(|error| anyhow::anyhow!(error))?;
-    let http = Arc::new(HttpClient::from_env(cli.no_cache));
     let allowlist = dep_vet::allowlist::Allowlist::load(cli.config.as_deref())?;
-    let mut auditor = Auditor::new(&http, allowlist.policy());
+    // Routing may come from the repository; credentials only from the user's
+    // own file. The router is built once and shared by every client.
+    let user_registries =
+        dep_vet::registries::load_user_config().map_err(|error| anyhow::anyhow!(error))?;
+    let router = dep_vet::registries::Router::new(allowlist.registries(), &user_registries);
+    let registry_bases: Vec<String> = allowlist
+        .registries()
+        .iter()
+        .chain(user_registries.iter())
+        .map(|entry| entry.url.clone())
+        .collect();
+    let http = Arc::new(HttpClient::from_env_with_registries(
+        cli.no_cache,
+        &registry_bases,
+    ));
+    let mut auditor = Auditor::new(&http, allowlist.policy(), &router);
 
     match &cli.command {
         Command::Hook { .. } => unreachable!("handled before config and network"),

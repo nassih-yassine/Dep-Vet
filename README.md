@@ -282,6 +282,34 @@ A missing age, download figure, provenance signal, or license is reported as
 `not checked`, never as passing. Caps are validated at parse time; an oversized
 number is an error, not a wrapped limit.
 
+### Private registries
+
+Route a scope or a name prefix to a company registry in `.depvet.toml`:
+
+```toml
+[[registries]]
+ecosystem = "npm"
+match = "@acme"                  # a scope, or a name prefix like "acme-"
+url = "https://npm.acme.internal"
+```
+
+`match` is matched against the package name; the first matching entry wins, and
+entries in the per-user file win over the repository's. Credentials are never
+read from a repository file: put the same entry in
+`~/.config/dep-vet/registries.toml` and add
+
+```toml
+auth = "env:ACME_NPM_TOKEN"
+```
+
+The token is sent as a bearer header to that host only. It never enters the
+cache, a report, or a redirect, and the public registry never sees a routed
+name (not even a download count). `https` is required; `http` only works under
+`DEPVET_ALLOW_INSECURE_BASES=1` for a local mirror. The reusable CI workflow
+uses the base revision's `.depvet.toml`, so a pull request cannot add a route.
+Each routed request is still exit `3` when the host cannot be read: an
+unreachable private registry is not a clean package.
+
 ## CI/CD Integration (GitHub Actions)
 
 Copy [`examples/github-action.yml`](examples/github-action.yml) into

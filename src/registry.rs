@@ -12,7 +12,8 @@ use serde::Deserialize;
 
 use crate::date;
 use crate::http::{HttpClient, HttpError};
-use crate::model::{InstallScript, PackageSpec};
+use crate::model::{Ecosystem, InstallScript, PackageSpec};
+use crate::registries::{Route, Router};
 
 const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
 const DEFAULT_DOWNLOADS: &str = "https://api.npmjs.org/downloads/point";
@@ -184,6 +185,8 @@ pub struct RegistryClient {
     http: Arc<HttpClient>,
     registry_base: String,
     downloads_base: String,
+    /// Private routes for names that must not reach the public registry.
+    router: Option<Router>,
 }
 
 /// Names in first-seen order with duplicates removed.
@@ -214,20 +217,46 @@ impl RegistryClient {
             http,
             registry_base: registry_base.into(),
             downloads_base: downloads_base.into(),
+            router: None,
         }
     }
 
+    /// Route some names to a private registry. A routed name never falls back
+    /// to the public registry: a missing package there is an error, not a
+    /// prompt to look elsewhere.
+    pub fn with_router(mut self, router: Router) -> Self {
+        self.router = Some(router);
+        self
+    }
+
+    fn route(&self, name: &str) -> Option<&Route> {
+        self.router
+            .as_ref()
+            .and_then(|router| router.route(Ecosystem::Npm, name))
+    }
+
+    fn base_for(&self, name: &str) -> &str {
+        self.route(name)
+            .map(|route| route.base.as_str())
+            .unwrap_or_else(|| self.registry_base.trim_end_matches('/'))
+    }
+
     pub fn package_url(&self, name: &str) -> String {
-        format!(
-            "{}/{}",
-            self.registry_base.trim_end_matches('/'),
-            encode_name(name)
-        )
+        format!("{}/{}", self.base_for(name), encode_name(name))
+    }
+
+    /// The token for a routed name, or an error naming the missing variable.
+    fn token_for(&self, name: &str) -> Result<Option<String>, RegistryError> {
+        match self.route(name) {
+            Some(route) => crate::registries::token(route).map_err(RegistryError::Http),
+            None => Ok(None),
+        }
     }
 
     pub fn fetch(&self, spec: &PackageSpec) -> Result<PackageMeta, RegistryError> {
         let url = self.package_url(&spec.name);
-        let body = match self.http.get(&url) {
+        let token = self.token_for(&spec.name)?;
+        let body = match self.http.get_with_token(&url, token.as_deref()) {
             Ok(body) => body,
             Err(HttpError::Status {
                 status: 404 | 403, ..
@@ -244,7 +273,8 @@ impl RegistryClient {
     /// and retry policy apply unchanged.
     pub fn plan_packument(&self, name: &str) -> Result<PlanPackument, RegistryError> {
         let url = self.package_url(name);
-        let body = match self.http.get(&url) {
+        let token = self.token_for(name)?;
+        let body = match self.http.get_with_token(&url, token.as_deref()) {
             Ok(body) => body,
             Err(HttpError::Status {
                 status: 404 | 403, ..
@@ -285,8 +315,12 @@ impl RegistryClient {
         names: &[String],
     ) -> std::collections::HashMap<String, u64> {
         // A tree pins several versions of the same package; one count answers
-        // all of them, and the bulk endpoint charges per name.
-        let names = unique_names(names);
+        // all of them, and the bulk endpoint charges per name. A routed name is
+        // not on the public registry at all: asking would leak the name.
+        let names: Vec<String> = unique_names(names)
+            .into_iter()
+            .filter(|name| self.route(name).is_none())
+            .collect();
         let mut downloads = std::collections::HashMap::new();
         // npm's bulk endpoint rejects scoped packages ("not currently
         // supported in bulk lookups"), so those go one at a time.
