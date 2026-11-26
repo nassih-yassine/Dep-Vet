@@ -230,8 +230,9 @@ impl MockRegistry {
             .env("DEPVET_SCORECARD_BASE", &self.base)
             .env("DEPVET_NO_CACHE", "1")
             .env("DEPVET_HOOK_TEST_BASE", &self.base)
-            // A developer's own DEPVET_JOBS must not change the suite.
+            // A developer's own DEPVET_JOBS or npmrc must not change the suite.
             .env_remove("DEPVET_JOBS")
+            .env("DEPVET_NO_NPMRC", "1")
             .env("NO_COLOR", "1");
         for (key, value) in extra {
             command.env(key, value);
@@ -2930,6 +2931,47 @@ fn a_routed_pypi_name_is_read_from_the_simple_index_and_probed() {
             .iter()
             .any(|(name, value)| name == "accept" && value.contains("pypi.simple.v1+json")),
         "the request did not ask for the JSON representation"
+    );
+}
+
+#[test]
+fn an_npmrc_scope_route_is_honoured_after_explicit_config() {
+    let private = registry_with(&[PackageFixture::clean("@acme/lib")], None);
+    let public = registry_with(&[], None);
+    let home = tempfile::tempdir().unwrap();
+
+    let repo = Repo::new();
+    repo.write(
+        ".npmrc",
+        &format!("@acme:registry={}\n//x/:_authToken=ignored\n", private.base),
+    );
+
+    private
+        .command_with(&[
+            ("DEPVET_NO_NPMRC", "0"),
+            ("HOME", home.path().to_str().unwrap()),
+            ("DEPVET_REGISTRY_BASE", public.base.as_str()),
+            (
+                "DEPVET_DOWNLOADS_BASE",
+                &format!("{}/downloads", public.base),
+            ),
+        ])
+        .current_dir(repo.path())
+        .args(["npm", "@acme/lib", "--json"])
+        .assert()
+        .code(0);
+
+    assert!(
+        private.requests().iter().any(|path| path.contains("@acme")),
+        "the npmrc scope route was not used"
+    );
+    // The token in npmrc is never read, so no request carries one.
+    assert!(
+        private
+            .recorded()
+            .iter()
+            .flat_map(|request| request.headers.iter())
+            .all(|(name, _)| name != "authorization")
     );
 }
 

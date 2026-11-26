@@ -135,6 +135,8 @@ Never send a token to a host the route did not name, never put it in a URL or
 cache key, and never ask the public *downloads* API about a routed name. The
 dependency-confusion probe is the one deliberate public lookup of the name: it
 is unauthenticated, opt-out per entry, and a failed probe is INFO, never clean.
+`.npmrc` discovery adds scope routes after explicit config and never reads a
+token; `DEPVET_NO_NPMRC=1` disables it, and tests set it.
 
 The full inventory of 100+ traps lives in
 [`agent-docs/traps.md`](agent-docs/traps.md), in the order they were learned.

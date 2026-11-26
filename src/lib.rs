@@ -28,6 +28,7 @@ pub mod mcp_config;
 pub mod memo;
 pub mod model;
 pub mod netpolicy;
+pub mod npmrc;
 pub mod nuget;
 pub mod osv;
 pub mod pip_config;
