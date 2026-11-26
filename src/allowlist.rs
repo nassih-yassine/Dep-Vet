@@ -62,6 +62,10 @@ pub struct Allowlist {
     trusted_publishers: TrustedPublishersConfig,
     #[serde(default)]
     policy: Policy,
+    /// Private-registry routing. Credentials are only read from the per-user
+    /// file, so an `auth` here is a configuration error, not a silent ignore.
+    #[serde(default)]
+    registries: Vec<crate::registries::RegistryEntry>,
 }
 
 /// Thresholds for the install policy. Every field is off by default, so adding
@@ -205,9 +209,16 @@ pub enum AllowError {
     EmptyPolicyValue { path: String, field: String },
     #[error("{path}: '{license}' is both allowed and denied")]
     PolicyLicenseConflict { path: String, license: String },
+    #[error("{path}: {message}")]
+    Registry { path: String, message: String },
 }
 
 impl Allowlist {
+    /// Private-registry routing declared by this file, in priority order.
+    pub fn registries(&self) -> &[crate::registries::RegistryEntry] {
+        &self.registries
+    }
+
     /// Explicit path wins; otherwise the nearest `.depvet.toml` walking up.
     pub fn load(explicit: Option<&Path>) -> Result<Self, AllowError> {
         let path = match explicit {
@@ -228,6 +239,15 @@ impl Allowlist {
         let list: Allowlist = toml::from_str(body).map_err(|error| AllowError::Toml {
             path: path.display().to_string(),
             message: error.to_string(),
+        })?;
+
+        let allow_insecure =
+            std::env::var("DEPVET_ALLOW_INSECURE_BASES").is_ok_and(|value| value == "1");
+        crate::registries::validate(&list.registries, allow_insecure, false).map_err(|error| {
+            AllowError::Registry {
+                path: path.display().to_string(),
+                message: error.to_string(),
+            }
         })?;
 
         for entry in &list.allow {
@@ -454,6 +474,35 @@ mod tests {
 
     fn allowlist(body: &str) -> Allowlist {
         Allowlist::parse(Path::new(".depvet.toml"), body).unwrap()
+    }
+
+    #[test]
+    fn registry_routing_is_read_from_the_project_file() {
+        let config = allowlist(
+            "[[registries]]\n\
+             ecosystem = \"npm\"\n\
+             match = \"@deliverect\"\n\
+             url = \"https://npm.internal.example/\"\n",
+        );
+        let entries = config.registries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].r#match, "@deliverect");
+        assert_eq!(entries[0].url, "https://npm.internal.example/");
+    }
+
+    #[test]
+    fn a_project_file_cannot_attach_a_token() {
+        let error = Allowlist::parse(
+            Path::new(".depvet.toml"),
+            "[[registries]]\n\
+             ecosystem = \"npm\"\n\
+             match = \"@deliverect\"\n\
+             url = \"https://npm.internal.example/\"\n\
+             auth = \"env:NPM_TOKEN\"\n",
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("registries.toml"), "{message}");
     }
 
     #[test]

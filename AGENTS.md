@@ -84,6 +84,7 @@ Do not use `--no-verify` to get past a failure; fix the failure.
 | `src/model.rs` | `PackageSpec` parsing/validation, `Severity`, `Finding`, `PackageReport` |
 | `src/allowlist.rs` | `.depvet.toml` parsing, validation, finding downgrades |
 | `src/lockfile.rs` | npm/PyPI/Cargo/Go lockfile parsing, flat diff against a git ref |
+| `src/registries.rs` | private-registry routing config: match, url, auth trust boundary |
 | `src/registry.rs` | npm packument fetch + parsing, download counts, repo URL normalization |
 | `src/pypi.rs` | PyPI JSON API, version resolution, sdist-only detection, yanked releases |
 | `src/crates.rs` | crates.io API, owner list, publisher, yanked releases |

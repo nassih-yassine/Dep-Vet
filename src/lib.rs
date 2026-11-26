@@ -35,6 +35,7 @@ pub mod pool;
 pub mod progress;
 pub mod provenance;
 pub mod pypi;
+pub mod registries;
 pub mod registry;
 pub mod report;
 pub mod rubygems;
