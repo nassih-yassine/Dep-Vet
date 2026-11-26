@@ -406,11 +406,21 @@ Do not use `--no-verify` to get past a failure; fix the failure.
   `data/popular-npm.txt` comes from `scripts/refresh-popular-npm.py` (downloads
   ranking, unioned with the previous seed). `popular_npm()` loads it once via
   `include_str!` + `OnceLock`. Tests require `cross-env`, `preact`, and `moment`
-  to stay present, so refresh with the script, never by deleting lines. PyPI,
-  crates.io, and Go lists are still curated constants.
+  to stay present, so refresh with the script, never by deleting lines. Go,
+  JSR, RubyGems, Maven, and Composer lists are still curated constants.
+- **crates, NuGet, and PyPI seeds are generated too.**
+  `scripts/refresh-popular-seeds.py` writes
+  `data/popular-{crates,nuget,pypi}.txt` from keyless rankings (crates.io
+  all-time downloads, NuGet `totalDownloads`, hugovk's 30-day PyPI packages).
+  RubyGems, Composer, Maven, Go, and JSR stay curated: RubyGems removed
+  `downloads/top`, Packagist publishes totals only, and the rest have no
+  ranking that matches a dependency name. Previous names are unioned back, so
+  a curated entry never silently disappears, and the workflow checks each
+  file's anchors and 200-line diff cap. Do not hand-edit these files.
+
 - **Refresh is automated.** `.github/workflows/refresh-popular.yml` runs weekly
   (Monday 04:00 UTC) or by dispatch: validates the data with `cargo test`,
-  pushes `bot/refresh-popular-npm`, opens or updates a PR, enables auto-merge,
+  pushes `bot/refresh-popular`, opens or updates a PR, enables auto-merge,
   then approves the bot PR's parked `pull_request` run. `ci.yml` skips that job
   for bot-authored PRs, and GitHub counts a SKIPPED check as satisfied.
   Do not replace approval with `gh workflow run`: a dispatched check does not

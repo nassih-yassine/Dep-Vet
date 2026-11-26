@@ -710,12 +710,12 @@ pub fn typosquat_candidate(name: &str, ecosystem: Ecosystem, local: &[String]) -
 fn seed_for(ecosystem: Ecosystem) -> &'static [&'static str] {
     match ecosystem {
         Ecosystem::Npm => typosquat::popular_npm(),
-        Ecosystem::Pypi => typosquat::POPULAR_PYPI,
-        Ecosystem::CratesIo => typosquat::POPULAR_CRATES,
+        Ecosystem::Pypi => typosquat::popular_pypi(),
+        Ecosystem::CratesIo => typosquat::popular_crates(),
         Ecosystem::Go => typosquat::POPULAR_GO,
         Ecosystem::Jsr => typosquat::POPULAR_JSR,
         Ecosystem::RubyGems => typosquat::POPULAR_RUBYGEMS,
-        Ecosystem::NuGet => typosquat::POPULAR_NUGET,
+        Ecosystem::NuGet => typosquat::popular_nuget(),
         Ecosystem::Maven => typosquat::POPULAR_MAVEN,
         Ecosystem::Composer => typosquat::POPULAR_COMPOSER,
     }
