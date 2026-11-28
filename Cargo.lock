@@ -433,6 +433,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "curve25519-dalek"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "curve25519-dalek-derive",
+ "fiat-crypto",
+ "rustc_version",
+ "subtle",
+]
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "deflate64"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -458,8 +483,8 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
- "sigstore-trust-root",
- "sigstore-types",
+ "sigstore-trust-root 0.17.0",
+ "sigstore-types 0.16.0",
  "sigstore-verify",
  "tar",
  "tempfile",
@@ -578,6 +603,12 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
+name = "fiat-crypto"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
 name = "filetime"
@@ -1971,7 +2002,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98819125d96663ca27bc1b4fa06673da03de760f6b4d24596efd175e66ac3857"
 dependencies = [
  "jiff",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
 ]
 
@@ -1987,7 +2018,25 @@ dependencies = [
  "futures-io",
  "jiff",
  "rustls-pki-types",
- "sigstore-types",
+ "sigstore-types 0.16.0",
+ "spki",
+ "thiserror",
+ "x509-cert",
+]
+
+[[package]]
+name = "sigstore-crypto"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b3876f3dcd98b7ce983e017e3c2dea6392fefdc2f076d61df4a045e38f53054"
+dependencies = [
+ "const-oid 0.9.6",
+ "curve25519-dalek",
+ "der",
+ "futures-io",
+ "jiff",
+ "rustls-pki-types",
+ "sigstore-types 0.17.0",
  "spki",
  "thiserror",
  "x509-cert",
@@ -1999,8 +2048,8 @@ version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90821ce3bed8dec1862a4283848b724aba892b5af02155f1c0d8052c925726e1"
 dependencies = [
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.16.0",
+ "sigstore-types 0.16.0",
  "thiserror",
 ]
 
@@ -2016,7 +2065,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-merkle",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
 ]
 
@@ -2029,9 +2078,23 @@ dependencies = [
  "jiff",
  "serde",
  "serde_json",
- "sigstore-crypto",
+ "sigstore-crypto 0.16.0",
  "sigstore-tuf",
- "sigstore-types",
+ "sigstore-types 0.16.0",
+ "thiserror",
+]
+
+[[package]]
+name = "sigstore-trust-root"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2be7d164a8d5137fce8915e76d2b5d67d1db0e2308ad4555f0a9921bc5479b67"
+dependencies = [
+ "jiff",
+ "serde",
+ "serde_json",
+ "sigstore-crypto 0.17.0",
+ "sigstore-types 0.17.0",
  "thiserror",
 ]
 
@@ -2048,8 +2111,8 @@ dependencies = [
  "jiff",
  "rustls-pki-types",
  "rustls-webpki",
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.16.0",
+ "sigstore-types 0.16.0",
  "thiserror",
  "tracing",
  "x509-cert",
@@ -2067,8 +2130,8 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sigstore-crypto",
- "sigstore-types",
+ "sigstore-crypto 0.16.0",
+ "sigstore-types 0.16.0",
  "tempfile",
  "thiserror",
  "tracing",
@@ -2080,6 +2143,21 @@ name = "sigstore-types"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4f0e9a87bcaf654b5d3b8540eaf78040cae72eb59157bb1765f56684fb0e3e9"
+dependencies = [
+ "base64",
+ "hex",
+ "jiff",
+ "pem",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "sigstore-types"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b7f9226a4d3c1c187ccdc874536a0e581e009427837659519148f57869bb9be"
 dependencies = [
  "base64",
  "hex",
@@ -2107,12 +2185,12 @@ dependencies = [
  "serde_json",
  "serde_json_canonicalizer",
  "sigstore-bundle",
- "sigstore-crypto",
+ "sigstore-crypto 0.16.0",
  "sigstore-merkle",
  "sigstore-rekor",
- "sigstore-trust-root",
+ "sigstore-trust-root 0.16.0",
  "sigstore-tsa",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
  "tls_codec",
  "tracing",
