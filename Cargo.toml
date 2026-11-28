@@ -25,7 +25,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 semver = "1.0"
 serde_json = "1.0.154"
 sigstore-trust-root = { version = "0.16.0", default-features = false }
-sigstore-types = "0.16.0"
+sigstore-types = "0.17.0"
 sigstore-verify = "0.16.0"
 sha1 = "0.11.0"
 sha2 = "0.11.1"

@@ -459,7 +459,7 @@ dependencies = [
  "sha1",
  "sha2",
  "sigstore-trust-root",
- "sigstore-types",
+ "sigstore-types 0.17.0",
  "sigstore-verify",
  "tar",
  "tempfile",
@@ -1971,7 +1971,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98819125d96663ca27bc1b4fa06673da03de760f6b4d24596efd175e66ac3857"
 dependencies = [
  "jiff",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
 ]
 
@@ -1987,7 +1987,7 @@ dependencies = [
  "futures-io",
  "jiff",
  "rustls-pki-types",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "spki",
  "thiserror",
  "x509-cert",
@@ -2000,7 +2000,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90821ce3bed8dec1862a4283848b724aba892b5af02155f1c0d8052c925726e1"
 dependencies = [
  "sigstore-crypto",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
 ]
 
@@ -2016,7 +2016,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-merkle",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
 ]
 
@@ -2031,7 +2031,7 @@ dependencies = [
  "serde_json",
  "sigstore-crypto",
  "sigstore-tuf",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
 ]
 
@@ -2049,7 +2049,7 @@ dependencies = [
  "rustls-pki-types",
  "rustls-webpki",
  "sigstore-crypto",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
  "tracing",
  "x509-cert",
@@ -2068,7 +2068,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-crypto",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "tempfile",
  "thiserror",
  "tracing",
@@ -2080,6 +2080,21 @@ name = "sigstore-types"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4f0e9a87bcaf654b5d3b8540eaf78040cae72eb59157bb1765f56684fb0e3e9"
+dependencies = [
+ "base64",
+ "hex",
+ "jiff",
+ "pem",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "sigstore-types"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b7f9226a4d3c1c187ccdc874536a0e581e009427837659519148f57869bb9be"
 dependencies = [
  "base64",
  "hex",
@@ -2112,7 +2127,7 @@ dependencies = [
  "sigstore-rekor",
  "sigstore-trust-root",
  "sigstore-tsa",
- "sigstore-types",
+ "sigstore-types 0.16.0",
  "thiserror",
  "tls_codec",
  "tracing",
